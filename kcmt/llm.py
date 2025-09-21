@@ -53,7 +53,9 @@ class LLMClient:
         if not diff.strip() or len(diff.strip()) < 10:
             return self._generate_minimal_commit_message(context, style)
         
-        prompt = self._build_prompt(diff, context, style)
+        # Clean up diff for better XAI compatibility
+        cleaned_diff = self._clean_diff_for_llm(diff)
+        prompt = self._build_prompt(cleaned_diff, context, style)
 
         if self._mode == "openai":
             message = self._call_openai(prompt)
@@ -215,6 +217,22 @@ class LLMClient:
             if 'GIT binary patch' in line:
                 return True
         return False
+
+    def _clean_diff_for_llm(self, diff: str) -> str:
+        """Clean up diff to improve XAI API compatibility."""
+        lines = diff.strip().split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            # Skip problematic /dev/null references that XAI seems to dislike
+            if '--- /dev/null' in line:
+                cleaned_lines.append('--- (new file)')
+            elif '+++ /dev/null' in line:
+                cleaned_lines.append('+++ (deleted)')
+            else:
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
 
     def _generate_binary_commit_message(
         self, diff: str, context: str, style: str
