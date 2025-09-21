@@ -247,3 +247,28 @@ Security notes
 ## License
 
 MIT (see repository license)
+
+
+## Strict testing and CI quick reference
+
+Environment
+- uv venv && source .venv/bin/activate
+- uv sync --group dev
+- uv pip install -e .
+
+Lint/format/type-check
+- uv run ruff check kcmt tests
+- uv run black --check kcmt tests
+- uv run isort --check-only kcmt tests
+- uv run mypy kcmt
+
+Run tests
+- Basic: uv run pytest -ra -vv tests
+- Strict CI-like run (parallel, warnings as errors, coverage):
+  uv run pytest -n auto -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers --cov=kcmt --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=85 tests
+
+Make targets
+- make test
+- make test-verbose
+- make test-strict
+- make check     # lint + typecheck + strict tests
