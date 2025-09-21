@@ -79,7 +79,7 @@ class LLMClient:
             response = self._client.chat.completions.create(
                 messages=self._build_messages(prompt),
                 model=self.model,
-                max_completion_tokens=256,
+                max_completion_tokens=512,
             )
             content = response.choices[0].message.content or ""
         except Exception as e:
@@ -95,7 +95,7 @@ class LLMClient:
         }
         payload = {
             "model": self.model,
-            "max_output_tokens": 300,
+            "max_output_tokens": 512,
             "messages": [
                 {
                     "role": "user",
