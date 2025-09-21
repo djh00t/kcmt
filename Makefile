@@ -63,11 +63,19 @@ test:
 test-verbose:
 	$(PYTEST) -v
 
+test-strict:
+	$(PYTEST) -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers -o addopts='' tests
+
 coverage:
 	$(PYTEST) --cov=$(PACKAGE_NAME) --cov-report=html --cov-report=term
 
+# Type checking
+typecheck:
+	@echo "Type checking with mypy..."
+	$(UV) run mypy ./$(PACKAGE_NAME)
+
 # All checks
-check: lint test
+check: lint typecheck test-strict
 	@echo "All checks passed!"
 
 # Cleaning
