@@ -206,9 +206,15 @@ class LLMClient:
 
     def _is_binary_diff(self, diff: str) -> bool:
         """Check if the diff represents binary file changes."""
-        return (
-            "Binary files" in diff and "differ" in diff
-        ) or diff.strip().startswith("Binary files")
+        # More specific check for binary file indicators
+        lines = diff.strip().split('\n')
+        for line in lines:
+            if line.startswith('Binary files') and ' differ' in line:
+                return True
+            # Git also uses this pattern for binary files
+            if 'GIT binary patch' in line:
+                return True
+        return False
 
     def _generate_binary_commit_message(
         self, diff: str, context: str, style: str
