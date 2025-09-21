@@ -14,7 +14,10 @@ from .exceptions import LLMError
 class LLMClient:
     """Provider-aware client for generating commit messages."""
 
-    def __init__(self, config: Optional[Config] = None) -> None:
+    def __init__(
+        self, config: Optional[Config] = None, debug: bool = False
+    ) -> None:
+        self.debug = debug
         self.config = config or get_active_config()
         self.provider = self.config.provider
         self.model = self.config.model
@@ -80,12 +83,28 @@ class LLMClient:
     # ------------------------------------------------------------------
     def _call_openai(self, prompt: str) -> str:
         try:
+            messages = self._build_messages(prompt)
+            if self.debug:
+                print("DEBUG: XAI API Request:")
+                print(f"  Model: {self.model}")
+                print(f"  Messages: {messages}")
+                print("  Max tokens: 512")
+                print()
+                
             response = self._client.chat.completions.create(
-                messages=self._build_messages(prompt),
+                messages=messages,
                 model=self.model,
                 max_completion_tokens=512,
             )
             content = response.choices[0].message.content or ""
+            
+            if self.debug:
+                print("DEBUG: XAI API Response:")
+                print(f"  Length: {len(content)} characters")
+                print(f"  Content: '{content}'")
+                print()
+                
+            return content
         except Exception as e:
             raise LLMError(f"OpenAI client error: {e}") from e
         return content
