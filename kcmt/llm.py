@@ -18,6 +18,8 @@ class LLMClient:
         self, config: Optional[Config] = None, debug: bool = False
     ) -> None:
         self.debug = debug
+        if debug:
+            print(f"DEBUG: LLMClient initialized with debug={debug}")
         self.config = config or get_active_config()
         self.provider = self.config.provider
         self.model = self.config.model
@@ -48,20 +50,35 @@ class LLMClient:
         context: str = "",
         style: str = "conventional",
     ) -> str:
+        if self.debug:
+            print("DEBUG: generate_commit_message called")
+            print(f"  Diff length: {len(diff)} characters")
+            print(f"  Context: {context}")
+            print(f"  Provider: {self.provider}")
+        
         # Handle binary files
         if self._is_binary_diff(diff):
+            if self.debug:
+                print("DEBUG: Detected binary file, using binary commit message")
             return self._generate_binary_commit_message(diff, context, style)
         
         # Handle empty or minimal diffs
         if not diff.strip() or len(diff.strip()) < 10:
+            if self.debug:
+                print("DEBUG: Minimal diff detected, using minimal commit message")
             return self._generate_minimal_commit_message(context, style)
         
         # Handle very large diffs that might overwhelm the API
         if len(diff) > 8000:  # Rough threshold for very large diffs
+            if self.debug:
+                print("DEBUG: Large diff detected, using large file commit message")
             return self._generate_large_file_commit_message(diff, context, style)
         
         # Clean up diff for better XAI compatibility
         cleaned_diff = self._clean_diff_for_llm(diff)
+        if self.debug:
+            print(f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters")
+        
         prompt = self._build_prompt(cleaned_diff, context, style)
 
         if self._mode == "openai":
