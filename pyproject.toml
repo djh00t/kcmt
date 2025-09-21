@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling>=1.21.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kcmt"
+dynamic = ["version"]
+description = "AI-powered atomic Git staging and committing tool with LLM-generated conventional commits"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [{ name = "David Hooton", email = "david@hooton.org" }]
+keywords = ["git", "commit", "conventional commits", "LLM", "OpenAI", "developer-tools", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Environment :: Console",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Topic :: Software Development :: Build Tools",
+  "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+  "openai>=1.108.1",
+  "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=24.0.0",
+  "isort>=5.12.0",
+  "iniconfig>=2.1.0",
+  "ruff>=0.1.0",
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "pytest-xdist>=3.6.1",
+  "twine>=4.0.0",
+  "build>=0.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/djh00t/kcmt"
+Repository = "https://github.com/djh00t/kcmt"
+Issues = "https://github.com/djh00t/kcmt/issues"
+
+[project.scripts]
+kcmt = "kcmt.main:main"
+commit = "kcmt.main:main"
+kc = "kcmt.main:main"
+
+[tool.hatch.version]
+path = "kcmt/__init__.py"
+pattern = "__version__\\s*=\\s*[\"'](?P<version>[^\"']+)[\"']"
+[tool.hatch.build.targets.wheel]
+packages = ["kcmt"]
+include = ["LICENSE"]
+
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "kcmt",
+  "README.md",
+  "LICENSE",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "iniconfig>=2.1.0",
+    "mypy>=1.18.2",
+    "pytest>=8.4.2",
+    "pytest-bdd>=8.1.0",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.6.1",
+]
+
+
+[tool.uv]
+dev-dependencies = [
+  "black",
+  "pytest-xdist",
+]
+
+[tool.isort]
+profile = "black"
