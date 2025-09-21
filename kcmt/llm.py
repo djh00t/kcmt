@@ -53,6 +53,10 @@ class LLMClient:
         if not diff.strip() or len(diff.strip()) < 10:
             return self._generate_minimal_commit_message(context, style)
         
+        # Handle very large diffs that might overwhelm the API
+        if len(diff) > 8000:  # Rough threshold for very large diffs
+            return self._generate_large_file_commit_message(diff, context, style)
+        
         # Clean up diff for better XAI compatibility
         cleaned_diff = self._clean_diff_for_llm(diff)
         prompt = self._build_prompt(cleaned_diff, context, style)
@@ -233,6 +237,39 @@ class LLMClient:
                 cleaned_lines.append(line)
         
         return '\n'.join(cleaned_lines)
+
+    def _generate_large_file_commit_message(
+        self, diff: str, context: str, style: str
+    ) -> str:
+        """Generate commit message for very large files."""
+        # Extract file path from context
+        file_path = ""
+        if context and "File:" in context:
+            file_path = context.split("File:", 1)[1].strip()
+        
+        # Determine appropriate commit message based on file type and size
+        if file_path:
+            if file_path.endswith(('.py', '.java', '.cpp', '.c', '.js', '.ts')):
+                filename = file_path.split('/')[-1]
+                return f"feat(core): add {filename} implementation"
+            elif file_path.endswith(('.json', '.yaml', '.yml', '.toml')):
+                filename = file_path.split('/')[-1]
+                return f"chore(config): add {filename} configuration"
+            elif file_path.endswith(('.md', '.rst', '.txt')):
+                filename = file_path.split('/')[-1]
+                return f"docs: add {filename}"
+            elif file_path.endswith(('.html', '.css', '.scss')):
+                filename = file_path.split('/')[-1]
+                return f"feat(ui): add {filename} styles"
+            else:
+                filename = file_path.split('/')[-1]
+                return f"feat: add {filename}"
+        
+        # Check if it's a new file vs modification
+        if "new file mode" in diff:
+            return "feat(core): add new implementation file"
+        else:
+            return "refactor(core): major code restructuring"
 
     def _generate_binary_commit_message(
         self, diff: str, context: str, style: str
