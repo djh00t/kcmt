@@ -27,7 +27,9 @@ class LLMClient:
 
         if not self.api_key:
             raise LLMError(
-                f"Environment variable '{self.config.api_key_env}' is not set or empty."
+                "Environment variable '"
+                f"{self.config.api_key_env}"
+                "' is not set or empty."
             )
 
         if self.provider in {"openai", "github", "xai"}:
@@ -59,25 +61,37 @@ class LLMClient:
         # Handle binary files
         if self._is_binary_diff(diff):
             if self.debug:
-                print("DEBUG: Detected binary file, using binary commit message")
+                print(
+                    "DEBUG: Detected binary file, using binary commit message"
+                )
             return self._generate_binary_commit_message(diff, context, style)
         
         # Handle empty or minimal diffs
         if not diff.strip() or len(diff.strip()) < 10:
             if self.debug:
-                print("DEBUG: Minimal diff detected, using minimal commit message")
+                print(
+                    "DEBUG: Minimal diff detected, using minimal commit"
+                    " message"
+                )
             return self._generate_minimal_commit_message(context, style)
         
         # Handle very large diffs that might overwhelm the API
         if len(diff) > 8000:  # Rough threshold for very large diffs
             if self.debug:
-                print("DEBUG: Large diff detected, using large file commit message")
-            return self._generate_large_file_commit_message(diff, context, style)
+                print(
+                    "DEBUG: Large diff detected, using large file commit"
+                    " message"
+                )
+            return self._generate_large_file_commit_message(
+                diff, context, style
+            )
         
         # Clean up diff for better XAI compatibility
         cleaned_diff = self._clean_diff_for_llm(diff)
         if self.debug:
-            print(f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters")
+            print(
+                f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters"
+            )
         
         prompt = self._build_prompt(cleaned_diff, context, style)
 
@@ -88,12 +102,32 @@ class LLMClient:
 
         if not message:
             raise LLMError("Empty response from LLM")
+        raw_message = message.strip()
 
-        message = message.strip()
-        max_len = self.config.max_commit_length
-        if len(message) > max_len:
-            message = message[: max_len - 3] + "..."
-        return message
+    # Post-process: enforce subject line length only, do not truncate body.
+        processed = self._enforce_subject_length(raw_message)
+        processed = self._wrap_body(processed)
+
+        if self.debug:
+            print("DEBUG: Commit message post-processing:")
+            print(f"  Raw length: {len(raw_message)}")
+            print(f"  Final length: {len(processed)}")
+            if raw_message != processed:
+                print(
+                    (
+                        "  Differences were applied (subject enforcement /"
+                        " wrapping)."
+                    )
+                )
+            else:
+                print("  No changes applied to raw model output.")
+            print("  --- RAW MESSAGE START ---")
+            print(raw_message)
+            print("  --- RAW MESSAGE END ---")
+            print("  --- FINAL MESSAGE START ---")
+            print(processed)
+            print("  --- FINAL MESSAGE END ---")
+        return processed
 
     # ------------------------------------------------------------------
     # Provider calls
@@ -143,8 +177,12 @@ class LLMClient:
                         {
                             "type": "text",
                             "text": (
-                                "Generate a conventional commit message following strict rules "
-                                "for the provided diff.\n" + prompt
+                                "Generate a conventional commit message "
+                                (
+                                    "following strict rules for the provided"
+                                    " diff.\n"
+                                )
+                                + prompt
                             ),
                         }
                     ],
@@ -157,7 +195,9 @@ class LLMClient:
         }
 
         try:
-            response = httpx.post(url, headers=headers, json=payload, timeout=60.0)
+            response = httpx.post(
+                url, headers=headers, json=payload, timeout=60.0
+            )
         except Exception as e:
             raise LLMError(f"Anthropic request failed: {e}") from e
 
@@ -168,53 +208,35 @@ class LLMClient:
 
         data = response.json()
         content = data.get("content") or []
-        texts = [chunk.get("text", "") for chunk in content if chunk.get("type") == "text"]
+        texts = []
+        for chunk in content:
+            if chunk.get("type") == "text":
+                texts.append(chunk.get("text", ""))
         return "\n".join(filter(None, texts))
 
     # ------------------------------------------------------------------
     # Prompt helpers
     # ------------------------------------------------------------------
     def _build_messages(self, prompt: str) -> List[Dict[str, str]]:
+        system_lines = [
+            "You are a strict conventional commit message generator.",
+            "Output ONLY: type(scope): description",
+            "",  # blank line
+            "Rules:",
+            "- types: feat fix docs style refactor perf test build ci chore",
+            "  revert",
+            "- scope REQUIRED (api ui auth db config tests deps build core)",
+            "- subject <= 50 chars, no trailing period",
+            "- add body if >5 changed lines",
+            "- wrap body at 72 chars",
+            "- body explains WHAT and WHY",
+            "",  # blank line
+            "Return only the commit message.",
+        ]
+        system_content = "\n".join(system_lines)
         return [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict conventional commit message generator. "
-                    "You MUST follow the EXACT format: type(scope): description\\n\\n"
-                    "MANDATORY REQUIREMENTS:\\n"
-                    "- Type MUST be one of: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert\\n"
-                    "- Scope is MANDATORY and must be specific (e.g., api, ui, auth, db, config, tests, deps, build)\\n"
-                    "- Description MUST start with lowercase verb in imperative mood\\n"
-                    "- First line MUST be ≤50 characters total\\n"
-                    "- NO period at end of subject line\\n"
-                    "- If changes are substantial, add a body separated by blank line\\n"
-                    "- Body lines should be wrapped at 72 characters\\n"
-                    "- Body should explain what and why, not how\\n\\n"
-                    "SCOPE GUIDELINES:\\n"
-                    "- api: API endpoints, routes, request/response handling\\n"
-                    "- ui: User interface components, styling, layouts\\n"
-                    "- auth: Authentication, authorization, security\\n"
-                    "- db: Database models, migrations, queries\\n"
-                    "- config: Configuration files, environment setup\\n"
-                    "- tests: Test files, test utilities, coverage\\n"
-                    "- docs: Documentation, README, comments\\n"
-                    "- build: Build scripts, dependencies, packaging\\n"
-                    "- ci: Continuous integration, workflows, deployment\\n"
-                    "- core: Core business logic, main algorithms\\n\\n"
-                    "EXAMPLES:\\n"
-                    "feat(auth): add JWT token validation middleware\\n\\n"
-                    "Implement JWT token validation for protected routes.\\n"
-                    "Validates token signature and expiration time.\\n\\n"
-                    "fix(api): handle null response in user endpoint\\n\\n"
-                    "Add null checks for user data before processing.\\n"
-                    "Prevents 500 errors when user data is missing.\\n\\n"
-                    "Return ONLY the commit message, no explanation or markdown."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
         ]
 
     def _build_prompt(self, diff: str, context: str, style: str) -> str:
@@ -234,16 +256,20 @@ class LLMClient:
                     "",
                     "STRICT REQUIREMENTS:",
                     "- MUST use format: type(scope): description",
-                    "- Scope is MANDATORY (api, ui, auth, db, config, tests, etc.)",
+                    "- Scope REQUIRED (api ui auth db config tests etc.)",
                     "- If diff shows substantial changes (>5 lines), add body",
                     "- Body should explain what changed and why",
                     "- Keep subject line under 50 characters",
                 ]
             )
         elif style == "simple":
-            prompt_parts.extend(["", "Keep it simple but include mandatory scope."])
+            prompt_parts.extend(
+                ["", "Keep it simple but include mandatory scope."]
+            )
 
-        prompt_parts.extend(["", "Analyze the changes carefully and be specific."])
+        prompt_parts.extend(
+            ["", "Analyze the changes carefully and be specific."]
+        )
         return "\n".join(prompt_parts)
 
     def _is_binary_diff(self, diff: str) -> bool:
@@ -274,6 +300,72 @@ class LLMClient:
         
         return '\n'.join(cleaned_lines)
 
+    # ------------------------------------------------------------------
+    # Post-processing helpers
+    # ------------------------------------------------------------------
+    def _enforce_subject_length(self, message: str) -> str:
+        """Ensure the first line (subject) does not exceed configured length.
+        We DO NOT truncate the entire message; only adjust the subject line
+        if it exceeds the max length. We prefer attempting a smart cut at a
+        word boundary. If cutting, we append '…' to indicate the subject was
+        shortened while preserving the full body content.
+        """
+        max_len = self.config.max_commit_length
+        lines = message.splitlines()
+        if not lines:
+            return message
+        subject = lines[0].strip()
+        if len(subject) <= max_len:
+            return message
+        # Find last space before limit to avoid mid-word cut
+        cutoff = subject.rfind(' ', 0, max_len)
+        # fall back to hard cut if no good space
+        if cutoff == -1 or cutoff < max_len * 0.6:
+            cutoff = max_len - 1
+        shortened = subject[:cutoff].rstrip() + '…'
+        lines[0] = shortened
+        return '\n'.join(lines)
+
+    def _wrap_body(self, message: str, width: int = 72) -> str:
+        """Wrap body lines (after the first blank separator) to given width.
+        We keep pre-existing wrapping if already within limits; we do not
+        merge lines.
+        """
+        import textwrap
+
+        lines = message.splitlines()
+        if not lines:
+            return message
+        # Identify body start: first blank line after subject
+        body_start = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '':
+                body_start = i + 1
+                break
+        if body_start is None or body_start >= len(lines):
+            return message  # no body
+        body = lines[body_start:]
+        wrapped_body: list[str] = []
+        for paragraph in '\n'.join(body).split('\n\n'):
+            if not paragraph.strip():
+                wrapped_body.append('')
+                continue
+            # Skip wrapping code blocks or diff-like fenced blocks
+            if paragraph.strip().startswith('```'):
+                wrapped_body.append(paragraph)
+                continue
+            # Wrap only lines that exceed width
+            for wrapped_line in textwrap.wrap(
+                paragraph, width=width, drop_whitespace=True
+            ):
+                wrapped_body.append(wrapped_line)
+            wrapped_body.append('')  # preserve paragraph break
+        # Remove trailing blank introduced
+        if wrapped_body and wrapped_body[-1] == '':
+            wrapped_body.pop()
+        new_lines = lines[:body_start] + wrapped_body
+        return '\n'.join(new_lines)
+
     def _generate_large_file_commit_message(
         self, diff: str, context: str, style: str
     ) -> str:
@@ -285,7 +377,9 @@ class LLMClient:
         
         # Determine appropriate commit message based on file type and size
         if file_path:
-            if file_path.endswith(('.py', '.java', '.cpp', '.c', '.js', '.ts')):
+            if file_path.endswith(
+                ('.py', '.java', '.cpp', '.c', '.js', '.ts')
+            ):
                 filename = file_path.split('/')[-1]
                 return f"feat(core): add {filename} implementation"
             elif file_path.endswith(('.json', '.yaml', '.yml', '.toml')):
@@ -320,13 +414,17 @@ class LLMClient:
         if file_path:
             if file_path.endswith(('.coverage', '.cov')):
                 return "test(coverage): update test coverage data"
-            elif file_path.endswith(('.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg')):
+            elif file_path.endswith(
+                ('.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg')
+            ):
                 filename = file_path.split('/')[-1]
                 return f"feat(assets): add {filename} image file"
             elif file_path.endswith(('.pdf', '.doc', '.docx')):
                 filename = file_path.split('/')[-1]
                 return f"docs(assets): add {filename} document"
-            elif file_path.endswith(('.zip', '.tar.gz', '.tar', '.gz', '.tgz')):
+            elif file_path.endswith(
+                ('.zip', '.tar.gz', '.tar', '.gz', '.tgz')
+            ):
                 filename = file_path.split('/')[-1]
                 return f"build(deps): add {filename} archive"
             elif file_path.endswith(('.woff', '.woff2', '.ttf', '.eot')):
@@ -361,13 +459,17 @@ class LLMClient:
                 return f"test(core): update {filename}"
             elif file_path.endswith(('.md', '.txt', '.rst')):
                 return f"docs(content): update {filename}"
-            elif file_path.endswith(('.json', '.yaml', '.yml', '.toml', '.ini')):
+            elif file_path.endswith(
+                ('.json', '.yaml', '.yml', '.toml', '.ini')
+            ):
                 return f"config(setup): update {filename}"
             elif file_path.endswith(('.css', '.scss', '.sass', '.less')):
                 return f"style(ui): update {filename}"
             elif file_path.endswith(('.js', '.ts', '.jsx', '.tsx')):
                 return f"refactor(core): update {filename}"
-            elif file_path.endswith(('.py', '.java', '.cpp', '.c', '.go', '.rs')):
+            elif file_path.endswith(
+                ('.py', '.java', '.cpp', '.c', '.go', '.rs')
+            ):
                 return f"refactor(core): update {filename}"
             else:
                 return f"chore(misc): update {filename}"
