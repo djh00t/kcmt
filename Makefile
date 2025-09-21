@@ -1,0 +1,156 @@
+.PHONY: help clean clean-build clean-cache clean-pyc cle# Formatting and linting
+# Default target
+help:
+	@echo "Available targets:"
+	@echo "  help          Show this help message"
+	@echo ""
+	@echo "Development:"
+	@echo "  install       Install package for development"
+	@echo "  install-dev   Install package and development dependencies"
+	@echo "  format        Format code with black and isort"
+	@echo "  lint          Lint code with ruff"
+	@echo "  test          Run tests"
+	@echo "  test-verbose  Run tests with verbose output"
+	@echo "  coverage      Run tests with coverage report"
+	@echo "  check         Run all checks (format, lint, test)"
+	@echo ""
+	@echo "Build and Release:"
+	@echo "  clean         Clean all build artifacts"
+	@echo "  build         Build distribution packages"
+	@echo "  version       Show current version"
+	@echo "  bump-patch    Bump patch version (0.0.X)"
+	@echo "  bump-minor    Bump minor version (0.X.0)"
+	@echo "  bump-major    Bump major version (X.0.0)"
+	@echo "  release-test  Upload to TestPyPI"
+	@echo "  release       Upload to PyPI"
+
+# Variables
+PACKAGE_NAME = kcmt
+PYTHON = python3
+UV = uv
+PYTEST = uv run pytest
+
+# Get current version
+VERSION := $(shell python -c "import kcmt; print(kcmt.__version__)")
+
+# Installation targets
+install:
+	$(UV) pip install -e .
+
+install-dev:
+	$(UV) pip install -e ".[dev]"
+	$(UV) pip install black isort ruff pytest pytest-cov twine build
+
+# Formatting and linting
+format:
+	@echo "Sorting imports with isort..."
+	isort ./$(PACKAGE_NAME) tests
+	@echo "Formatting code with black..."
+	black ./$(PACKAGE_NAME) tests
+
+lint:
+	@echo "Linting with ruff..."
+	ruff check ./$(PACKAGE_NAME) tests
+	@echo "Checking import order with isort..."
+	isort --check-only ./$(PACKAGE_NAME) tests
+	@echo "Checking format with black..."
+	black --check ./$(PACKAGE_NAME) tests
+
+# Testing
+test:
+	$(PYTEST)
+
+test-verbose:
+	$(PYTEST) -v
+
+coverage:
+	$(PYTEST) --cov=$(PACKAGE_NAME) --cov-report=html --cov-report=term
+
+# All checks
+check: lint test
+	@echo "All checks passed!"
+
+# Cleaning
+clean: clean-build clean-cache clean-pyc clean-test
+	@echo "Cleaned all artifacts"
+
+clean-build:
+	rm -rf build/
+	rm -rf dist/
+	rm -rf *.egg-info/
+
+clean-cache:
+	rm -rf .pytest_cache/
+	rm -rf __pycache__/
+	rm -rf */__pycache__/
+	rm -rf .*_cache/
+
+clean-pyc:
+	find . -name '*.pyc' -delete
+	find . -name '*.pyo' -delete
+	find . -name '*~' -delete
+	find . -name '__pycache__' -exec rm -rf {} +
+
+clean-test:
+	rm -rf .coverage
+	rm -rf htmlcov/
+	rm -rf .pytest_cache/
+
+# Version management
+version:
+	@echo "Current version: $(VERSION)"
+
+bump-patch:
+	@echo "Bumping patch version..."
+	@current_version=$$(python -c "import kcmt; print(kcmt.__version__)"); \
+	new_version=$$(echo $$current_version | awk -F. '{print $$1"."$$2"."$$3+1}'); \
+	sed -i '' "s/__version__ = \"$$current_version\"/__version__ = \"$$new_version\"/" $(PACKAGE_NAME)/__init__.py; \
+	echo "Version bumped from $$current_version to $$new_version"
+
+bump-minor:
+	@echo "Bumping minor version..."
+	@current_version=$$(python -c "import kcmt; print(kcmt.__version__)"); \
+	new_version=$$(echo $$current_version | awk -F. '{print $$1"."$$2+1".0"}'); \
+	sed -i '' "s/__version__ = \"$$current_version\"/__version__ = \"$$new_version\"/" $(PACKAGE_NAME)/__init__.py; \
+	echo "Version bumped from $$current_version to $$new_version"
+
+bump-major:
+	@echo "Bumping major version..."
+	@current_version=$$(python -c "import kcmt; print(kcmt.__version__)"); \
+	new_version=$$(echo $$current_version | awk -F. '{print $$1+1".0.0"}'); \
+	sed -i '' "s/__version__ = \"$$current_version\"/__version__ = \"$$new_version\"/" $(PACKAGE_NAME)/__init__.py; \
+	echo "Version bumped from $$current_version to $$new_version"
+
+# Build
+build: clean
+	@echo "Building distribution packages..."
+	$(PYTHON) -m build
+
+# Release
+release-test: build
+	@echo "Uploading to TestPyPI..."
+	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for TestPyPI"
+	twine upload --repository testpypi dist/*
+
+release: build
+	@echo "Uploading to PyPI..."
+	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for PyPI"
+	@read -p "Are you sure you want to release version $(VERSION) to PyPI? (y/N) " confirm && \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		twine upload dist/*; \
+		echo "Released version $(VERSION) to PyPI"; \
+	else \
+		echo "Release cancelled"; \
+	fi
+
+# Development workflow shortcuts
+dev-setup: install-dev
+	@echo "Development environment setup complete!"
+
+dev-check: format lint test
+	@echo "Development checks complete - ready to commit!"
+
+# Quick release workflow
+quick-patch: bump-patch build release
+quick-minor: bump-minor build release
+quick-major: bump-major build release
