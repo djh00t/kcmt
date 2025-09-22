@@ -311,18 +311,12 @@ class KlingonCMTWorkflow:
                 context=f"File: {change.file_path}",
                 style="conventional",
             )
-            if not commit_message or not commit_message.strip():
-                # Fallback heuristic if LLM returned empty unexpectedly
-                commit_message = generator._heuristic_message(  # type: ignore[attr-defined]
-                    change.diff_content, f"File: {change.file_path}"
-                )
             validated = generator.validate_and_fix_commit_message(
                 commit_message
             )
-
             self._print_commit_generated(change.file_path, validated)
             return PreparedCommit(change=change, message=validated)
-        except ValidationError as exc:
+        except (ValidationError, LLMError) as exc:
             return PreparedCommit(
                 change=change,
                 message=None,
@@ -331,21 +325,24 @@ class KlingonCMTWorkflow:
                     f"{change.file_path}: {exc}"
                 ),
             )
-        except Exception as exc:  # noqa: BLE001
-            # Attempt last‑ditch heuristic fallback on LLMError / empty cases
-            if "Empty response from LLM" in str(exc):
-                try:
-                    heuristic = generator._heuristic_message(  # type: ignore[attr-defined]
-                        change.diff_content, f"File: {change.file_path}"
-                    )
-                    self._print_commit_generated(change.file_path, heuristic)
-                    return PreparedCommit(change=change, message=heuristic)
-                except Exception:  # noqa: BLE001
-                    pass
+        except KlingonCMTError as exc:  # pragma: no cover
             return PreparedCommit(
                 change=change,
                 message=None,
-                error=f"Error preparing commit for {change.file_path}: {exc}",
+                error=(
+                    "Internal kcmt error preparing commit for "
+                    f"{change.file_path}: {exc}"
+                ),
+            )
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            # Wrap truly unexpected exceptions
+            return PreparedCommit(
+                change=change,
+                message=None,
+                error=(
+                    "Unexpected non-kcmt error preparing commit for "
+                    f"{change.file_path}: {exc}"
+                ),
             )
 
     def _print_progress(self, stage: str) -> None:
