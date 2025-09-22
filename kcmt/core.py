@@ -208,6 +208,15 @@ class KlingonCMTWorkflow:
         non_deletion_files = [
             entry for entry in all_changed_files if "D" not in entry[0]
         ]
+
+        # Skip control/meta files that shouldn't usually receive their own
+        # atomic commits to avoid surprising commits (e.g. tests expecting
+        # .gitignore to be ignored). These can still be committed manually
+        # via --file if desired.
+        META_SKIP = {".gitignore", ".gitattributes", ".gitmodules"}
+        non_deletion_files = [
+            e for e in non_deletion_files if e[1] not in META_SKIP
+        ]
         
         if not non_deletion_files:
             return results
