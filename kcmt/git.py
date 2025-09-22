@@ -141,6 +141,20 @@ class GitRepo:
         """
         self._run_git_command(["commit", "-m", message, "--", file_path])
 
+    def push(self, remote: str = "origin", branch: Optional[str] = None) -> str:
+        """Push current branch to remote.
+
+        If branch is None, determine it via 'git rev-parse --abbrev-ref HEAD'.
+        Returns the stdout from git push.
+        """
+        if branch is None:
+            branch = self._run_git_command([
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+            ])
+        return self._run_git_command(["push", remote, branch])
+
     def reset_index(self) -> None:
         """Reset index (soft) to HEAD to clear staged state."""
         try:
