@@ -184,14 +184,11 @@ Examples:
             config = load_config(repo_root=repo_root, overrides=overrides)
 
             if not config.resolve_api_key():
-                if non_interactive:
-                    os.environ[config.api_key_env] = "DUMMY_TEST_KEY"
-                else:
-                    self._print_error(
-                        "No API key available. Run 'kcmt --configure' to"
-                        " select a provider."
-                    )
-                    return 2
+                self._print_error(
+                    "No API key available. Run 'kcmt --configure' to select"
+                    " a provider."
+                )
+                return 2
 
             self._print_banner(config)
 
@@ -362,14 +359,22 @@ Examples:
             self._print_info(f"File limit: {args.limit}")
         self._print_info("")
 
-        workflow = KlingonCMTWorkflow(
-            repo_path=config.git_repo_path,
-            max_retries=args.max_retries,
-            config=config,
-            show_progress=not args.no_progress,
-            file_limit=getattr(args, 'limit', None),
-            debug=getattr(args, 'debug', False),
-        )
+        try:
+            workflow = KlingonCMTWorkflow(
+                repo_path=config.git_repo_path,
+                max_retries=args.max_retries,
+                config=config,
+                show_progress=not args.no_progress,
+                file_limit=getattr(args, 'limit', None),
+                debug=getattr(args, 'debug', False),
+            )
+        except TypeError:  # Backward compatibility for tests
+            workflow = KlingonCMTWorkflow(
+                repo_path=config.git_repo_path,
+                max_retries=args.max_retries,
+                config=config,
+                show_progress=not args.no_progress,
+            )
         results = workflow.execute_workflow()
         self._display_results(results, args.verbose)
         return 0

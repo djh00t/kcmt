@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .commit import CommitGenerator
 from .config import Config, get_active_config
-from .exceptions import GitError, KlingonCMTError, ValidationError, LLMError
+from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
 from .git import GitRepo
 
 
