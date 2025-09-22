@@ -137,6 +137,14 @@ Examples:
                 "attempts fail or produce invalid format"
             ),
         )
+        parser.add_argument(
+            "--auto-push",
+            action="store_true",
+            help=(
+                "Automatically git push after successful workflow "
+                "(or set KLINGON_CMT_AUTO_PUSH=1)"
+            ),
+        )
 
         return parser
 
@@ -199,7 +207,8 @@ Examples:
                     and getattr(parsed_args, "api_key_env", None)
                 ):
                     self._print_warning(
-                        "Proceeding without API key (test mode, explicit api-key-env provided)."
+                        "Proceeding without API key (test mode, explicit "
+                        "api-key-env provided)."
                     )
                 else:
                     self._print_error(
@@ -258,6 +267,8 @@ Examples:
             overrides["repo_path"] = args.repo_path
         if getattr(args, "allow_fallback", False):
             overrides["allow_fallback"] = "1"
+        if getattr(args, "auto_push", False):
+            overrides["auto_push"] = "1"
         return overrides
 
     def _run_configuration(
