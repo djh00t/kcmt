@@ -199,6 +199,32 @@ Examples:
             overrides = self._collect_overrides(parsed_args)
             config = load_config(repo_root=repo_root, overrides=overrides)
 
+            # Persist updated boolean feature flags so subsequent plain runs
+            # (without explicit flags) retain user preference. This mirrors
+            # typical CLI tooling that records config after feature toggles.
+            persisted_cfg = load_persisted_config(repo_root)
+            # Persist when flags explicitly overridden OR when env enabled a
+            # feature not yet persisted (so subsequent plain runs inherit it)
+            should_persist = False
+            if any(k in overrides for k in ("auto_push", "allow_fallback")):
+                should_persist = True
+            else:
+                if (
+                    config.auto_push
+                    and (not persisted_cfg or not getattr(persisted_cfg, "auto_push", False))
+                ):
+                    should_persist = True
+                if (
+                    config.allow_fallback
+                    and (not persisted_cfg or not getattr(persisted_cfg, "allow_fallback", False))
+                ):
+                    should_persist = True
+            if should_persist:
+                try:  # pragma: no cover - trivial persistence path
+                    save_config(config, repo_root)
+                except OSError:  # Narrowed from broad Exception
+                    pass
+
             if not config.resolve_api_key():
                 # Allow tests that explicitly pass --api-key-env but don't
                 # exercise LLM paths (monkeypatched workflow) to proceed.
