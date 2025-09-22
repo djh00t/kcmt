@@ -108,27 +108,32 @@ class CommitGenerator:
             raise ValidationError("Diff content cannot be empty.")
 
         try:
-            msg = self.llm_client.generate_commit_message(diff, context, style)
-            if msg and msg.strip():
-                return msg
-        except LLMError:
-            # Fall through to heuristic
-            pass
-        # Heuristic fallback if LLM failed or returned empty
-        return self._heuristic_message(diff, context)
+            msg = self.llm_client.generate_commit_message(
+                diff, context, style
+            )
+            if not msg or not msg.strip():
+                raise LLMError("LLM returned empty response")
+            return msg
+        except LLMError as e:
+            # Explicitly propagate so the workflow marks this file as failed
+            raise LLMError(
+                "LLM unavailable or produced no output; commit aborted"
+            ) from e
 
     # ------------------------------------------------------------------
     # Fallback heuristics
     # ------------------------------------------------------------------
-    def _heuristic_message(self, diff: str, context: str) -> str:
+    def heuristic_message(
+        self, diff: str, context: str
+    ) -> str:  # pragma: no cover
         """Create a conventional commit message without the LLM.
 
     Rules (simple & deterministic):
-                - type: feat for new file; refactor for code; docs/config/style/test
-                    inferred by extension
-                - scope: inferred from path (tests, docs, config, ui, core default)
-                - subject: 'add <file>' if new else 'update <file>'
-                - body: include counts if >5 changed lines
+        - type: feat (new file) / refactor (code) / docs / chore (config) /
+          style (ui) / test (tests)
+        - scope inferred from path (tests, docs, config, ui, core default)
+        - subject 'add <file>' if new else 'update <file>'
+        - body with counts if >5 changed lines
         """
         file_path = None
         if context.startswith("File:"):
@@ -234,7 +239,8 @@ class CommitGenerator:
             )
             if self.validate_conventional_commit(fixed_message):
                 return fixed_message
-        except Exception:  # noqa: BLE001
+        except LLMError:
+            # Upstream LLM failure; fall through to validation error
             pass
 
         raise ValidationError(
