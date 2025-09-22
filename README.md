@@ -265,6 +265,9 @@ Security notes
 
 ## Changelog
 
+- 0.1.2 — Update default OpenAI model to `gpt-5-mini-2025-08-07` (automatic
+  migration from legacy `gpt-5-mini`), test helper env var
+  `KCMT_TEST_DISABLE_OPENAI` to bypass real API calls in isolated tests.
 - 0.1.1 — Auto-push option, heuristic fallback flag, improved retries, subject-only length enforcement.
 - 0.1.0 — Initial release: CLI + atomic workflow + LLM commit generation.
 
