@@ -197,29 +197,43 @@ class KlingonCMTWorkflow:
         # Apply file limit if specified
         if self.file_limit and self.file_limit > 0:
             non_deletion_files = non_deletion_files[:self.file_limit]
-
-        # Auto-stage all files we're going to process
-        file_paths = [entry[1] for entry in non_deletion_files]
-        for file_path in file_paths:
+        # Build per-file diffs WITHOUT staging all files at once. This avoids
+        # the previous behaviour where the first commit would include every
+        # file that had been pre-staged. We stage each file temporarily just
+        # to capture its diff (so new/untracked files produce a diff), then
+        # immediately unstage it. Commit generation later will re-stage only
+        # that file for its own atomic commit.
+        file_changes: List[FileChange] = []
+        for _status, file_path in non_deletion_files:
             try:
+                # Stage the file to obtain a reliable diff (untracked files
+                # won't appear in plain working diff output otherwise)
                 self.git_repo.stage_file(file_path)
+                single_diff = self.git_repo.get_file_diff(
+                    file_path, staged=True
+                )
+                # Unstage so subsequent commits are atomic
+                try:
+                    self.git_repo.unstage(file_path)
+                except GitError:
+                    # Non-fatal; if unstage fails we still proceed
+                    pass
+                if not single_diff.strip():
+                    continue
+                parsed = self._parse_git_diff(single_diff)
+                if parsed:
+                    # _parse_git_diff returns a list; for a single-file diff
+                    # we take the first element.
+                    file_changes.append(parsed[0])
             except GitError as e:
-                results.append(CommitResult(
-                    success=False,
-                    error=f"Failed to stage {file_path}: {e}",
-                    file_path=file_path
-                ))
+                results.append(
+                    CommitResult(
+                        success=False,
+                        error=f"Failed to capture diff for {file_path}: {e}",
+                        file_path=file_path,
+                    )
+                )
                 continue
-
-        # Now get the staged diff to create FileChange objects
-        staged_diff = self.git_repo.get_staged_diff()
-        if not staged_diff.strip():
-            return results
-
-        file_changes = [
-            change for change in self._parse_git_diff(staged_diff)
-            if change.change_type != "D"
-        ]
 
         if not file_changes:
             return results
@@ -448,7 +462,10 @@ class KlingonCMTWorkflow:
         self, change: FileChange, prepared_message: Optional[str] = None
     ) -> CommitResult:
         """Commit a single file change."""
+        # Reset any stray staging (defensive) then stage ONLY this file
         try:
+            # Use a soft reset of index (ignore errors; if clean it is cheap)
+            self.git_repo.reset_index()
             self.git_repo.stage_file(change.file_path)
         except GitError as e:
             return CommitResult(
@@ -508,7 +525,11 @@ class KlingonCMTWorkflow:
 
         for attempt in range(max_retries + 1):
             try:
-                self.git_repo.commit(message)
+                if file_path:
+                    # Atomic per-file commit: only target file pathspec
+                    self.git_repo.commit_file(message, file_path)
+                else:
+                    self.git_repo.commit(message)
                 recent_commits = self.git_repo.get_recent_commits(1)
                 commit_hash = (
                     recent_commits[0].split()[0] if recent_commits else None
