@@ -129,6 +129,14 @@ Examples:
             action="store_true",
             help="Show detailed LLM API requests and responses",
         )
+        parser.add_argument(
+            "--allow-fallback",
+            action="store_true",
+            help=(
+                "Allow local heuristic commit message fallback after all LLM "
+                "attempts fail or produce invalid format"
+            ),
+        )
 
         return parser
 
@@ -247,6 +255,8 @@ Examples:
             overrides["max_commit_length"] = str(args.max_commit_length)
         if args.repo_path:
             overrides["repo_path"] = args.repo_path
+        if getattr(args, "allow_fallback", False):
+            overrides["allow_fallback"] = True
         return overrides
 
     def _run_configuration(self, args: argparse.Namespace, repo_root: Path) -> int:
