@@ -1,4 +1,4 @@
-from kcmt.config import load_config, clear_active_config
+from kcmt.config import clear_active_config, load_config
 
 
 def test_config_auto_detect_prefers_openai(monkeypatch, tmp_path):
