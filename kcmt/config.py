@@ -53,6 +53,7 @@ class Config:
     git_repo_path: str = "."
     max_commit_length: int = 72
     allow_fallback: bool = False
+    auto_push: bool = False
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -90,6 +91,8 @@ def load_persisted_config(
     data = json.loads(cfg_path.read_text())
     if "allow_fallback" not in data:  # backward compat
         data["allow_fallback"] = False
+    if "auto_push" not in data:  # backward compat
+        data["auto_push"] = False
     return Config(**data)
 
 
@@ -182,9 +185,29 @@ def load_config(
     elif persisted is not None:
         allow_fallback = persisted.allow_fallback
     elif allow_fallback_env:
-        allow_fallback = allow_fallback_env.lower() in {"1", "true", "yes", "on"}
+        allow_fallback = allow_fallback_env.lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
     else:
         allow_fallback = False
+
+    auto_push_env = os.environ.get("KLINGON_CMT_AUTO_PUSH")
+    if overrides.get("auto_push") is not None:
+        auto_push = str(overrides["auto_push"]).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    elif persisted is not None and hasattr(persisted, "auto_push"):
+        auto_push = bool(getattr(persisted, "auto_push"))
+    elif auto_push_env:
+        auto_push = auto_push_env.lower() in {"1", "true", "yes", "on"}
+    else:
+        auto_push = False
 
     config = Config(
         provider=provider,
@@ -194,6 +217,7 @@ def load_config(
         git_repo_path=git_repo_path,
         max_commit_length=max_commit_length,
         allow_fallback=bool(allow_fallback),
+        auto_push=bool(auto_push),
     )
 
     set_active_config(config)
