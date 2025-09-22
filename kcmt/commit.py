@@ -107,18 +107,36 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
-        try:
-            msg = self.llm_client.generate_commit_message(
-                diff, context, style
-            )
-            if not msg or not msg.strip():
-                raise LLMError("LLM returned empty response")
-            return msg
-        except LLMError as e:
-            # Explicitly propagate so the workflow marks this file as failed
-            raise LLMError(
-                "LLM unavailable or produced no output; commit aborted"
-            ) from e
+        last_error: Exception | None = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                msg = self.llm_client.generate_commit_message(
+                    diff, context, style
+                )
+                if not msg or not msg.strip():
+                    raise LLMError("LLM returned empty response")
+                # Validate format; if invalid, try again (unless final)
+                if not self.validate_conventional_commit(msg):
+                    if attempt < max_attempts:
+                        continue
+                    raise LLMError(
+                        (
+                            "LLM produced invalid commit message after {} "
+                            "attempts"
+                        ).format(max_attempts)
+                    )
+                return msg
+            except LLMError as e:
+                last_error = e
+                if attempt < max_attempts:
+                    continue
+        raise LLMError(
+            (
+                "LLM unavailable or invalid output after {} attempts; "
+                "commit aborted"
+            ).format(max_attempts)
+        ) from last_error
 
     # ------------------------------------------------------------------
     # Fallback heuristics
