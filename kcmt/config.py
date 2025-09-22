@@ -52,6 +52,7 @@ class Config:
     api_key_env: str
     git_repo_path: str = "."
     max_commit_length: int = 72
+    allow_fallback: bool = False
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -85,6 +86,9 @@ def load_persisted_config(repo_root: Optional[Path] = None) -> Optional[Config]:
     if not cfg_path.exists():
         return None
     data = json.loads(cfg_path.read_text())
+    # Backward compatibility for newly added fields
+    if "allow_fallback" not in data:
+        data["allow_fallback"] = False
     return Config(**data)
 
 
@@ -164,6 +168,21 @@ def load_config(
         or (persisted.max_commit_length if persisted else 72)
     )
 
+    allow_fallback_env = os.environ.get("KLINGON_CMT_ALLOW_FALLBACK")
+    allow_fallback = (
+        overrides.get("allow_fallback")
+        if overrides.get("allow_fallback") is not None
+        else (
+            persisted.allow_fallback
+            if persisted is not None
+            else (
+                allow_fallback_env.lower() in {"1", "true", "yes"}
+                if allow_fallback_env
+                else False
+            )
+        )
+    )
+
     config = Config(
         provider=provider,
         model=model,
@@ -171,6 +190,7 @@ def load_config(
         api_key_env=api_key_env or DEFAULT_MODELS[provider]["api_key_env"],
         git_repo_path=git_repo_path,
         max_commit_length=max_commit_length,
+        allow_fallback=bool(allow_fallback),
     )
 
     set_active_config(config)
