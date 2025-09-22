@@ -29,6 +29,7 @@ class CommitGenerator:
         self._config = config or get_active_config()
         self.git_repo = GitRepo(repo_path, self._config)
         self.llm_client = LLMClient(self._config, debug=debug)
+        self.debug = debug
 
     def generate_from_staged(
         self, context: str = "", style: str = "conventional"
@@ -46,7 +47,9 @@ class CommitGenerator:
             ValidationError: If no staged changes are found.
         """
         if not self.git_repo.has_staged_changes():
-            raise ValidationError("No staged changes found. Stage your changes first.")
+            raise ValidationError(
+                "No staged changes found. Stage your changes first."
+            )
 
         diff = self.git_repo.get_staged_diff()
         return self.llm_client.generate_commit_message(diff, context, style)
@@ -110,6 +113,15 @@ class CommitGenerator:
         last_error: Exception | None = None
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
+            if self.debug:
+                truncated_ctx = (
+                    context[:120] + '…' if len(context) > 120 else context
+                )
+                print(
+                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
+                        attempt, len(diff), truncated_ctx
+                    )
+                )
             try:
                 msg = self.llm_client.generate_commit_message(
                     diff, context, style
@@ -118,6 +130,14 @@ class CommitGenerator:
                     raise LLMError("LLM returned empty response")
                 # Validate format; if invalid, try again (unless final)
                 if not self.validate_conventional_commit(msg):
+                    if self.debug:
+                        invalid_header = msg.splitlines()[0][:120]
+                        print(
+                            (
+                                "DEBUG: commit.invalid_format attempt={} "
+                                "msg='{}'"
+                            ).format(attempt, invalid_header)
+                        )
                     if attempt < max_attempts:
                         continue
                     raise LLMError(
@@ -126,17 +146,37 @@ class CommitGenerator:
                             "attempts"
                         ).format(max_attempts)
                     )
+                if self.debug:
+                    print(
+                        "DEBUG: commit.valid attempt={} header='{}'".format(
+                            attempt, msg.splitlines()[0]
+                        )
+                    )
                 return msg
             except LLMError as e:
                 last_error = e
+                if self.debug:
+                    print(
+                        "DEBUG: commit.error attempt={} error='{}'".format(
+                            attempt, str(e)[:200]
+                        )
+                    )
                 if attempt < max_attempts:
                     continue
         # Final failure: optionally fallback heuristically if allowed
         if self._config.allow_fallback:
+            if self.debug:
+                print("DEBUG: commit.fallback engaged after retries exhausted")
             heuristic = self.heuristic_message(diff, context)
             # Ensure heuristic conforms; if not, wrap in generic safe header
             if not self.validate_conventional_commit(heuristic):
                 heuristic = "chore(core): update"
+            if self.debug:
+                print(
+                    "DEBUG: commit.fallback.result header='{}'".format(
+                        heuristic
+                    )
+                )
             return heuristic
         raise LLMError(
             (
