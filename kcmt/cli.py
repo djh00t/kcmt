@@ -51,7 +51,7 @@ Examples:
   kcmt --oneshot                        # commit a single candidate file automatically
   kcmt --file README.md                 # commit only README.md
   kcmt --configure                      # interactive provider & model setup
-  kcmt --provider openai --model gpt-5-mini
+    kcmt --provider openai --model gpt-5-mini-2025-08-07
             """,
         )
 
@@ -170,11 +170,19 @@ Examples:
             # Check if this is the first time running kcmt in this repo
             if not load_persisted_config(repo_root):
                 if parsed_args.provider and non_interactive:
-                    # Ephemeral config using defaults (test / CI friendly)
+                    # Ephemeral config using defaults (test / CI friendly).
+                    # Include env-driven feature flags on first-run so they
+                    # persist (previously they were lost until a second run).
                     provider = parsed_args.provider
                     meta = DEFAULT_MODELS.get(
                         provider, DEFAULT_MODELS["openai"]
                     )
+                    env_allow = os.environ.get(
+                        "KLINGON_CMT_ALLOW_FALLBACK", ""
+                    ).lower() in {"1", "true", "yes", "on"}
+                    env_push = os.environ.get(
+                        "KLINGON_CMT_AUTO_PUSH", ""
+                    ).lower() in {"1", "true", "yes", "on"}
                     cfg = Config(
                         provider=provider,
                         model=parsed_args.model or meta["model"],
@@ -183,6 +191,10 @@ Examples:
                         api_key_env=parsed_args.api_key_env
                         or meta["api_key_env"],
                         git_repo_path=str(repo_root),
+                        allow_fallback=env_allow
+                        or getattr(parsed_args, "allow_fallback", False),
+                        auto_push=env_push
+                        or getattr(parsed_args, "auto_push", False),
                     )
                     save_config(cfg, repo_root)
                 else:
@@ -209,14 +221,14 @@ Examples:
             if any(k in overrides for k in ("auto_push", "allow_fallback")):
                 should_persist = True
             else:
-                if (
-                    config.auto_push
-                    and (not persisted_cfg or not getattr(persisted_cfg, "auto_push", False))
+                if config.auto_push and (
+                    not persisted_cfg
+                    or not getattr(persisted_cfg, "auto_push", False)
                 ):
                     should_persist = True
-                if (
-                    config.allow_fallback
-                    and (not persisted_cfg or not getattr(persisted_cfg, "allow_fallback", False))
+                if config.allow_fallback and (
+                    not persisted_cfg
+                    or not getattr(persisted_cfg, "allow_fallback", False)
                 ):
                     should_persist = True
             if should_persist:
@@ -536,6 +548,7 @@ Examples:
         deletions = results.get("deletions_committed", [])
         file_commits = results.get("file_commits", [])
         errors = results.get("errors", [])
+        pushed = results.get("pushed")
 
         if deletions:
             successful_deletions = [r for r in deletions if r.success]
@@ -575,6 +588,9 @@ Examples:
             self._print_warning("Encountered errors:")
             for error in errors:
                 self._print_error(f"  - {error}")
+
+        if pushed:
+            self._print_success("Pushed commits to remote (auto-push)")
 
     # Success/failure counts already shown above; omit extra summary.
 
