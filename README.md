@@ -56,7 +56,7 @@ Run `kcmt --configure` inside a repository to launch a colourful wizard that:
 
 | Provider  | Default model             | Default endpoint                         |
 |-----------|---------------------------|------------------------------------------|
-| OpenAI    | `gpt-5-mini`              | `https://api.openai.com/v1`              |
+| OpenAI    | `gpt-5-mini-2025-08-07`   | `https://api.openai.com/v1`              |
 | Anthropic | `claude-3-5-haiku-latest` | `https://api.anthropic.com`             |
 | xAI       | `grok-code-fast`          | `https://api.x.ai/v1`                   |
 | GitHub    | `openai/gpt-4.1-mini`     | `https://models.github.ai/inference`    |
@@ -64,7 +64,7 @@ Run `kcmt --configure` inside a repository to launch a colourful wizard that:
 You can still override values at runtime:
 
 ```
-kcmt --provider openai --model gpt-5-mini --endpoint https://api.openai.com/v1 \
+kcmt --provider openai --model gpt-5-mini-2025-08-07 --endpoint https://api.openai.com/v1 \
      --api-key-env OPENAI_API_KEY --repo-path .
 ```
 
