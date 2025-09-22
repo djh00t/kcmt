@@ -170,10 +170,10 @@ Examples:
                     cfg = Config(
                         provider=provider,
                         model=parsed_args.model or meta["model"],
-                        llm_endpoint=
-                        parsed_args.endpoint or meta["endpoint"],
-                        api_key_env=
-                        parsed_args.api_key_env or meta["api_key_env"],
+                        llm_endpoint=parsed_args.endpoint
+                        or meta["endpoint"],
+                        api_key_env=parsed_args.api_key_env
+                        or meta["api_key_env"],
                         git_repo_path=str(repo_root),
                     )
                     save_config(cfg, repo_root)
@@ -192,7 +192,7 @@ Examples:
             config = load_config(repo_root=repo_root, overrides=overrides)
 
             if not config.resolve_api_key():
-                # Allow tests that explicitly pass --api-key-env but don't actually
+                # Allow tests that explicitly pass --api-key-env but don't
                 # exercise LLM paths (monkeypatched workflow) to proceed.
                 if (
                     os.environ.get("PYTEST_CURRENT_TEST")
@@ -203,8 +203,8 @@ Examples:
                     )
                 else:
                     self._print_error(
-                        "No API key available. Run 'kcmt --configure' to select"
-                        " a provider."
+                        "No API key available. Run 'kcmt --configure' to "
+                        "select a provider."
                     )
                     return 2
 
@@ -230,9 +230,10 @@ Examples:
             return 1
         except SystemExit as exc:  # argparse
             return int(exc.code) if isinstance(exc.code, int) else 0
-        except Exception as err:  # pragma: no cover - defensive
+        except Exception as err:  # pragma: no cover noqa: BLE001
             self._print_error(f"Unexpected error: {err}")
-            if "parsed_args" in locals() and getattr(parsed_args, "verbose", False):
+            _pa = locals().get("parsed_args")
+            if _pa is not None and getattr(_pa, "verbose", False):
                 import traceback
 
                 traceback.print_exc()
@@ -256,10 +257,12 @@ Examples:
         if args.repo_path:
             overrides["repo_path"] = args.repo_path
         if getattr(args, "allow_fallback", False):
-            overrides["allow_fallback"] = True
+            overrides["allow_fallback"] = "1"
         return overrides
 
-    def _run_configuration(self, args: argparse.Namespace, repo_root: Path) -> int:
+    def _run_configuration(
+        self, args: argparse.Namespace, repo_root: Path
+    ) -> int:
         detected = detect_available_providers()
         provider = (args.provider or self._prompt_provider(detected))
 
@@ -293,7 +296,11 @@ Examples:
     def _prompt_provider(self, detected: Dict[str, List[str]]) -> str:
         self._print_heading("Select provider")
         for idx, name in enumerate(sorted(DEFAULT_MODELS.keys()), start=1):
-            badge = GREEN + "●" + RESET if detected.get(name) else YELLOW + "○" + RESET
+            badge = (
+                GREEN + "●" + RESET
+                if detected.get(name)
+                else YELLOW + "○" + RESET
+            )
             print(
                 f"  {idx}. {badge} {describe_provider(name)}"
             )
@@ -336,14 +343,22 @@ Examples:
         matches = detected.get(provider, [])
         if not matches:
             default_env = DEFAULT_MODELS[provider]["api_key_env"]
-            response = input(
-                f"{MAGENTA}Environment variable with API key{RESET} [{default_env}]: "
-            ).strip()
+            prompt = (
+                f"{MAGENTA}Environment variable with API key{RESET} "
+                f"[{default_env}]: "
+            )
+            response = input(prompt).strip()
             return response or default_env
 
-        self._print_heading("Select API key environment variable")
+        self._print_heading(
+            "Select API key environment variable"
+        )
         for idx, env_key in enumerate(matches, start=1):
-            marker = GREEN + "●" + RESET if env_key in os.environ else RED + "●" + RESET
+            marker = (
+                GREEN + "●" + RESET
+                if env_key in os.environ
+                else RED + "●" + RESET
+            )
             suffix = " (missing)" if env_key not in os.environ else ""
             print(f"  {idx}. {marker} {env_key}{suffix}")
         print(f"  {len(matches) + 1}. {CYAN}Enter a different variable{RESET}")
@@ -370,7 +385,9 @@ Examples:
     # ------------------------------------------------------------------
     # Execution modes
     # ------------------------------------------------------------------
-    def _execute_workflow(self, args: argparse.Namespace, config: Config) -> int:
+    def _execute_workflow(
+        self, args: argparse.Namespace, config: Config
+    ) -> int:
         self._print_info(f"Provider: {config.provider}")
         self._print_info(f"Model: {config.model}")
         self._print_info(f"Endpoint: {config.llm_endpoint}")
@@ -399,7 +416,9 @@ Examples:
         self._display_results(results, args.verbose)
         return 0
 
-    def _execute_oneshot(self, args: argparse.Namespace, config: Config) -> int:
+    def _execute_oneshot(
+        self, args: argparse.Namespace, config: Config
+    ) -> int:
         repo = GitRepo(config.git_repo_path, config)
         entries = repo.list_changed_files()
 
@@ -414,7 +433,9 @@ Examples:
         args.single_file = target_path
         return self._execute_single_file(args, config)
 
-    def _execute_single_file(self, args: argparse.Namespace, config: Config) -> int:
+    def _execute_single_file(
+        self, args: argparse.Namespace, config: Config
+    ) -> int:
         file_path = args.single_file
         repo = GitRepo(config.git_repo_path, config)
 
@@ -453,9 +474,11 @@ Examples:
     # ------------------------------------------------------------------
     def _print_banner(self, config: Config) -> None:
         repo = Path(config.git_repo_path).resolve()
-        print(
-            f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo {repo}{RESET}"
+        banner = (
+            f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo "
+            f"{repo}{RESET}"
         )
+        print(banner)
 
     def _print_heading(self, title: str) -> None:
         print(f"\n{BOLD}{CYAN}{title}{RESET}")
@@ -505,7 +528,9 @@ Examples:
                 )
                 for result in failed_commits:
                     if hasattr(result, 'file_path') and result.file_path:
-                        self._print_error(f"  {result.file_path}: {result.error}")
+                        self._print_error(
+                            f"  {result.file_path}: {result.error}"
+                        )
                     else:
                         self._print_error(f"  {result.error}")
 
@@ -514,7 +539,7 @@ Examples:
             for error in errors:
                 self._print_error(f"  - {error}")
 
-        # Remove the redundant summary since we already show the success/failure counts above
+    # Success/failure counts already shown above; omit extra summary.
 
 
 def main(argv: Optional[List[str]] = None) -> int:
