@@ -471,7 +471,8 @@ class LLMClient:
             elif file_path.endswith(
                 ('.json', '.yaml', '.yml', '.toml', '.ini')
             ):
-                return f"config(setup): update {filename}"
+                # Use allowed conventional commit type 'chore'
+                return f"chore(config): update {filename}"
             elif file_path.endswith(('.css', '.scss', '.sass', '.less')):
                 return f"style(ui): update {filename}"
             elif file_path.endswith(('.js', '.ts', '.jsx', '.tsx')):
