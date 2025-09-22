@@ -4,7 +4,7 @@ import re
 from typing import Optional
 
 from .config import Config, get_active_config
-from .exceptions import ValidationError
+from .exceptions import LLMError, ValidationError
 from .git import GitRepo
 from .llm import LLMClient
 
@@ -107,7 +107,92 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
-        return self.llm_client.generate_commit_message(diff, context, style)
+        try:
+            msg = self.llm_client.generate_commit_message(diff, context, style)
+            if msg and msg.strip():
+                return msg
+        except LLMError:
+            # Fall through to heuristic
+            pass
+        # Heuristic fallback if LLM failed or returned empty
+        return self._heuristic_message(diff, context)
+
+    # ------------------------------------------------------------------
+    # Fallback heuristics
+    # ------------------------------------------------------------------
+    def _heuristic_message(self, diff: str, context: str) -> str:
+        """Create a conventional commit message without the LLM.
+
+    Rules (simple & deterministic):
+                - type: feat for new file; refactor for code; docs/config/style/test
+                    inferred by extension
+                - scope: inferred from path (tests, docs, config, ui, core default)
+                - subject: 'add <file>' if new else 'update <file>'
+                - body: include counts if >5 changed lines
+        """
+        file_path = None
+        if context.startswith("File:"):
+            file_path = context.split("File:", 1)[1].strip() or None
+        elif "File:" in context:
+            file_path = context.split("File:", 1)[1].strip() or None
+
+        basename = None
+        if file_path:
+            basename = file_path.split("/")[-1]
+        else:
+            basename = "changes"
+
+        lines = diff.splitlines()
+        added = sum(
+            1 for line in lines
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        removed = sum(
+            1 for line in lines
+            if line.startswith("-") and not line.startswith("---")
+        )
+        is_new = any(
+            ("new file mode" in line) or line.startswith("--- /dev/null")
+            for line in lines
+        )
+
+        # Infer scope from path
+        scope = "core"
+        if file_path:
+            lower = file_path.lower()
+            if "test" in lower:
+                scope = "tests"
+            elif lower.endswith(('.md', '.rst', '.txt')):
+                scope = "docs"
+            elif lower.endswith(('.json', '.yml', '.yaml', '.toml', '.ini')):
+                scope = "config"
+            elif lower.endswith(('.css', '.scss', '.sass', '.less')):
+                scope = "ui"
+
+        # Infer type
+        msg_type = "feat" if is_new else "refactor"
+        if scope == "tests":
+            msg_type = "test"
+        elif scope == "docs":
+            msg_type = "docs"
+        elif scope == "config":
+            msg_type = "chore"
+        elif scope == "ui" and not is_new:
+            msg_type = "style"
+
+        verb = "add" if is_new else "update"
+        subject = f"{verb} {basename}" if basename else "update files"
+        header = f"{msg_type}({scope}): {subject}"
+
+        # Body if enough churn
+        total_changed = added + removed
+        if total_changed > 5:
+            body_lines = [
+                f"{added} additions, {removed} deletions.",
+                "Heuristic commit message fallback (LLM unavailable).",
+            ]
+            return header + "\n\n" + "\n".join(body_lines)
+        return header
 
     def validate_conventional_commit(self, message: str) -> bool:
         """Validate if a commit message follows conventional commit format.
@@ -116,11 +201,14 @@ class CommitGenerator:
             message: The commit message to validate.
 
         Returns:
-            True if the message follows conventional commit format, False otherwise.
+            True if the message follows conventional format, else False.
         """
         # Conventional commit pattern: type(scope): description
         # Types: feat, fix, docs, style, refactor, test, chore, etc.
-        pattern = r"^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\([a-zA-Z0-9_-]+\))?: .+"
+        pattern = (
+            r"^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)"
+            r"(\([a-zA-Z0-9_-]+\))?: .+"
+        )
         return bool(re.match(pattern, message.strip()))
 
     def validate_and_fix_commit_message(self, message: str) -> str:
@@ -146,9 +234,10 @@ class CommitGenerator:
             )
             if self.validate_conventional_commit(fixed_message):
                 return fixed_message
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
 
         raise ValidationError(
-            f"Commit message does not follow conventional commit format: {message}"
+            "Commit message does not follow conventional commit format: "
+            f"{message}"
         )
