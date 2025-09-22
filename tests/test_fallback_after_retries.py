@@ -1,6 +1,6 @@
 import subprocess
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def _add_repo_to_sys_path(repo_root: Path):
@@ -30,9 +30,9 @@ def test_heuristic_fallback_after_invalid_llm(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     _add_repo_to_sys_path(Path.cwd())
+    from kcmt import commit as commit_module  # type: ignore
     from kcmt.config import Config, set_active_config  # type: ignore
     from kcmt.core import KlingonCMTWorkflow  # type: ignore
-    from kcmt import commit as commit_module  # type: ignore
 
     # Sequence of invalid responses (will be retried) -> fallback
     responses = ["feat", "refactor(core):", ""]
