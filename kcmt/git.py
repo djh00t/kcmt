@@ -84,7 +84,14 @@ class GitRepo:
 
     def get_recent_commits(self, count: int = 5) -> list[str]:
         """Get recent commit messages."""
-        output = self._run_git_command(["log", f"-{count}", "--oneline", "--format=%s"])
+        # Use a custom pretty format that always includes abbreviated hash
+        # followed by a single space and the subject line. Avoid combining
+        # --oneline with --format which discards the hash.
+        output = self._run_git_command([
+            "log",
+            f"-{count}",
+            "--pretty=%h %s",
+        ])
         return output.split("\n") if output else []
 
     def stage_file(self, file_path: str) -> None:
@@ -98,6 +105,23 @@ class GitRepo:
     def commit(self, message: str) -> None:
         """Create a commit with the given message."""
         self._run_git_command(["commit", "-m", message])
+
+    def commit_file(self, message: str, file_path: str) -> None:
+        """Create a commit including ONLY the specified file.
+
+        This uses a pathspec after the message so that even if other files
+        are staged (intentionally or accidentally) they are not part of this
+        commit. Ensures true per-file atomic commits.
+        """
+        self._run_git_command(["commit", "-m", message, "--", file_path])
+
+    def reset_index(self) -> None:
+        """Reset index (soft) to HEAD to clear staged state."""
+        try:
+            self._run_git_command(["reset"])
+        except GitError:
+            # Non-fatal; proceed even if reset fails
+            pass
 
     def unstage(self, file_path: str) -> None:
         """Unstage a specific file."""
@@ -114,7 +138,9 @@ class GitRepo:
             status = line[:2]
             if "D" not in status:
                 continue
-            raw_path = line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+            raw_path = (
+                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+            )
             file_path = raw_path.strip()
             if not file_path:
                 continue
@@ -132,7 +158,9 @@ class GitRepo:
             if not line:
                 continue
             status = line[:2]
-            raw_path = line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+            raw_path = (
+                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+            )
             path = raw_path.strip()
             if not path:
                 continue
