@@ -13,7 +13,7 @@ CONFIG_FILE_NAME = "config.json"
 
 DEFAULT_MODELS = {
     "openai": {
-        "model": "gpt-5-mini",
+        "model": "gpt-5-mini-2025-08-07",
         "endpoint": "https://api.openai.com/v1",
         "api_key_env": "OPENAI_API_KEY",
     },
@@ -144,6 +144,12 @@ def load_config(
         or os.environ.get("KLINGON_CMT_LLM_MODEL")
         or defaults["model"]
     )
+
+    # Backward compatibility / migration: transparently upgrade the old
+    # short OpenAI model alias to the new dated default if user has not
+    # explicitly overridden it this run (so persisted configs keep working).
+    if provider == "openai" and model == "gpt-5-mini":
+        model = defaults["model"]
 
     endpoint = (
         overrides.get("endpoint")
