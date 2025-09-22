@@ -131,6 +131,13 @@ class CommitGenerator:
                 last_error = e
                 if attempt < max_attempts:
                     continue
+        # Final failure: optionally fallback heuristically if allowed
+        if self._config.allow_fallback:
+            heuristic = self.heuristic_message(diff, context)
+            # Ensure heuristic conforms; if not, wrap in generic safe header
+            if not self.validate_conventional_commit(heuristic):
+                heuristic = "chore(core): update"
+            return heuristic
         raise LLMError(
             (
                 "LLM unavailable or invalid output after {} attempts; "
@@ -207,14 +214,7 @@ class CommitGenerator:
         subject = f"{verb} {basename}" if basename else "update files"
         header = f"{msg_type}({scope}): {subject}"
 
-        # Body if enough churn
-        total_changed = added + removed
-        if total_changed > 5:
-            body_lines = [
-                f"{added} additions, {removed} deletions.",
-                "Heuristic commit message fallback (LLM unavailable).",
-            ]
-            return header + "\n\n" + "\n".join(body_lines)
+        # We deliberately omit body lines to avoid generic fallback phrasing
         return header
 
     def validate_conventional_commit(self, message: str) -> bool:
