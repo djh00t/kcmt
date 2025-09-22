@@ -138,6 +138,23 @@ class KlingonCMTWorkflow:
         finally:
             self._finalize_progress()
 
+        # Auto-push if enabled and we actually committed something
+        any_success = (
+            any(r.success for r in results.get("file_commits", []))
+            or any(
+                r.success
+                for r in results.get("deletions_committed", [])
+            )
+        )
+        if any_success and getattr(self._config, "auto_push", False):
+            try:
+                self.git_repo.push()
+                results["pushed"] = True
+            except GitError as e:  # pragma: no cover - network dependent
+                results.setdefault("errors", []).append(
+                    f"Auto-push failed: {e}"
+                )
+
         return results
 
     def _process_deletions_first(self) -> List[CommitResult]:
@@ -171,6 +188,7 @@ class KlingonCMTWorkflow:
         )
         results.append(result)
         return results
+
     def _generate_deletion_commit_message(
         self, deleted_files: List[str]
     ) -> str:
@@ -286,6 +304,8 @@ class KlingonCMTWorkflow:
                 idx = future_map[future]
                 try:
                     prepared_commit = future.result(timeout=30.0)
+                # Broad catch: worker may raise unexpected provider/parsing
+                # errors; convert to PreparedCommit error without crashing.
                 except Exception as exc:  # noqa: BLE001
                     prepared_commit = PreparedCommit(
                         change=file_changes[idx],
@@ -334,8 +354,9 @@ class KlingonCMTWorkflow:
                     f"{change.file_path}: {exc}"
                 ),
             )
+        # Defensive: unexpected exceptions outside kcmt domain should not
+        # crash the entire preparation; convert to generic error.
         except Exception as exc:  # pragma: no cover  # noqa: BLE001
-            # Wrap truly unexpected exceptions
             return PreparedCommit(
                 change=change,
                 message=None,
