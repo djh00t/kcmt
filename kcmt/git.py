@@ -1,5 +1,6 @@
 """Git operations for kcmt."""
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -43,9 +44,14 @@ class GitRepo:
             )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
-            raise GitError(f"Git command failed: {' '.join(args)}\n{e.stderr}") from e
-        except FileNotFoundError:
-            raise GitError("Git command not found. Please install Git.")
+            cmd = " ".join(args)
+            raise GitError(
+                f"Git command failed: {cmd}\n{e.stderr}"
+            ) from e
+        except FileNotFoundError as exc:
+            raise GitError(
+                "Git command not found. Please install Git."
+            ) from exc
 
     def get_staged_diff(self) -> str:
         """Get the diff of staged changes."""
@@ -80,7 +86,9 @@ class GitRepo:
 
     def get_commit_diff(self, commit_hash: str) -> str:
         """Get the diff for a specific commit."""
-        return self._run_git_command(["show", "--no-patch", "--format=", commit_hash])
+        return self._run_git_command(
+            ["show", "--no-patch", "--format=", commit_hash]
+        )
 
     def get_recent_commits(self, count: int = 5) -> list[str]:
         """Get recent commit messages."""
@@ -168,7 +176,18 @@ class GitRepo:
                 path = path.split(" -> ", 1)[1].strip()
             if path.startswith('"') and path.endswith('"') and len(path) >= 2:
                 path = path[1:-1]
-            if path.endswith("/"):
+            # Expand untracked directories (Git collapses them in porcelain)
+            if path.endswith("/") and status.startswith("??"):
+                dir_rel = path.rstrip("/")
+                dir_full = self.repo_path / dir_rel
+                if dir_full.is_dir():
+                    for root, _dirs, files in os.walk(dir_full):
+                        for f in files:
+                            full_path = Path(root) / f
+                            rel_path = str(
+                                full_path.relative_to(self.repo_path)
+                            )
+                            entries.append((status, rel_path))
                 continue
             entries.append((status, path))
 
