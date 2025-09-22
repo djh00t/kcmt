@@ -311,13 +311,16 @@ class KlingonCMTWorkflow:
                 context=f"File: {change.file_path}",
                 style="conventional",
             )
+            if not commit_message or not commit_message.strip():
+                # Fallback heuristic if LLM returned empty unexpectedly
+                commit_message = generator._heuristic_message(  # type: ignore[attr-defined]
+                    change.diff_content, f"File: {change.file_path}"
+                )
             validated = generator.validate_and_fix_commit_message(
                 commit_message
             )
-            
-            # Display the generated commit message immediately
+
             self._print_commit_generated(change.file_path, validated)
-            
             return PreparedCommit(change=change, message=validated)
         except ValidationError as exc:
             return PreparedCommit(
@@ -329,6 +332,16 @@ class KlingonCMTWorkflow:
                 ),
             )
         except Exception as exc:  # noqa: BLE001
+            # Attempt last‑ditch heuristic fallback on LLMError / empty cases
+            if "Empty response from LLM" in str(exc):
+                try:
+                    heuristic = generator._heuristic_message(  # type: ignore[attr-defined]
+                        change.diff_content, f"File: {change.file_path}"
+                    )
+                    self._print_commit_generated(change.file_path, heuristic)
+                    return PreparedCommit(change=change, message=heuristic)
+                except Exception:  # noqa: BLE001
+                    pass
             return PreparedCommit(
                 change=change,
                 message=None,
