@@ -173,14 +173,8 @@ class CommitGenerator:
             basename = "changes"
 
         lines = diff.splitlines()
-        added = sum(
-            1 for line in lines
-            if line.startswith("+") and not line.startswith("+++")
-        )
-        removed = sum(
-            1 for line in lines
-            if line.startswith("-") and not line.startswith("---")
-        )
+        # Removed previous additions/deletions counting (not needed when
+        # fallback body lines are disabled).
         is_new = any(
             ("new file mode" in line) or line.startswith("--- /dev/null")
             for line in lines
