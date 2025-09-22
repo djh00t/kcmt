@@ -142,9 +142,17 @@ def load_config(
         or defaults["endpoint"]
     )
 
-    api_key_env = overrides.get("api_key_env") or (
-        persisted.api_key_env if persisted else None
-    ) or _select_env_var_for_provider(provider)
+    # If provider is overridden and differs from persisted configuration,
+    # do NOT reuse the old provider's api_key_env (e.g. ANTHROPIC_API_KEY when switching to openai).
+    persisted_api_key_env = None
+    if persisted and persisted.provider == provider:
+        persisted_api_key_env = persisted.api_key_env
+
+    api_key_env = (
+        overrides.get("api_key_env")
+        or persisted_api_key_env
+        or _select_env_var_for_provider(provider)
+    )
 
     git_repo_path = overrides.get("repo_path") or os.environ.get(
         "KLINGON_CMT_GIT_REPO_PATH"
