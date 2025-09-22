@@ -1,7 +1,8 @@
 import os
 import subprocess
-from kcmt.config import Config, set_active_config
+
 from kcmt.commit import CommitGenerator
+from kcmt.config import Config, set_active_config
 
 
 def test_deletion_diff_path(tmp_path):
@@ -39,4 +40,8 @@ def test_deletion_diff_path(tmp_path):
         msg = gen.suggest_commit_message(diff, context="File: deleteme.txt")
     except LLMError:  # If LLM attempts fail it should still fallback
         msg = gen.heuristic_message(diff, "File: deleteme.txt")
+    assert ": " in msg
+    assert ": " in msg
+    assert ": " in msg
+    assert ": " in msg
     assert ": " in msg
