@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 CONFIG_DIR_NAME = ".kcmt"
 CONFIG_FILE_NAME = "config.json"
@@ -63,7 +63,7 @@ class Config:
         return asdict(self)
 
 
-_ACTIVE_CONFIG: Optional[Config] = None
+_CONFIG_STATE: Dict[str, Optional[Config]] = {"active": None}
 
 
 def _config_dir(repo_root: Optional[Path] = None) -> Path:
@@ -81,36 +81,36 @@ def save_config(config: Config, repo_root: Optional[Path] = None) -> None:
     cfg_path.write_text(json.dumps(config.to_dict(), indent=2))
 
 
-def load_persisted_config(repo_root: Optional[Path] = None) -> Optional[Config]:
+def load_persisted_config(
+    repo_root: Optional[Path] = None,
+) -> Optional[Config]:
     cfg_path = _config_file(repo_root)
     if not cfg_path.exists():
         return None
     data = json.loads(cfg_path.read_text())
-    # Backward compatibility for newly added fields
-    if "allow_fallback" not in data:
+    if "allow_fallback" not in data:  # backward compat
         data["allow_fallback"] = False
     return Config(**data)
 
 
-def detect_available_providers(env: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
+def detect_available_providers(
+    env: Optional[Dict[str, str]] = None,
+) -> Dict[str, List[str]]:
     """Return mapping of provider -> matching env vars found."""
-    env = env or os.environ
+    env_dict: Dict[str, str] = dict(env or os.environ)
     detected: Dict[str, List[str]] = {p: [] for p in DEFAULT_MODELS}
-
     for provider, defaults in DEFAULT_MODELS.items():
         key_name = defaults["api_key_env"]
-        if key_name in env:
+        if key_name in env_dict:
             detected[provider].append(key_name)
-
         hints = _FUZZY_ENV_HINTS.get(provider, [])
-        for env_key in env:
+        for env_key in env_dict:
             if env_key in detected[provider]:
                 continue
             for hint in hints:
                 if hint.lower() in env_key.lower():
                     detected[provider].append(env_key)
                     break
-
     return detected
 
 
@@ -135,9 +135,12 @@ def load_config(
 
     defaults = DEFAULT_MODELS[provider]
 
-    model = overrides.get("model") or (persisted.model if persisted else None) or os.environ.get(
-        "KLINGON_CMT_LLM_MODEL"
-    ) or defaults["model"]
+    model = (
+        overrides.get("model")
+        or (persisted.model if persisted else None)
+        or os.environ.get("KLINGON_CMT_LLM_MODEL")
+        or defaults["model"]
+    )
 
     endpoint = (
         overrides.get("endpoint")
@@ -146,8 +149,7 @@ def load_config(
         or defaults["endpoint"]
     )
 
-    # If provider is overridden and differs from persisted configuration,
-    # do NOT reuse the old provider's api_key_env (e.g. ANTHROPIC_API_KEY when switching to openai).
+    # If provider changed, do not reuse previous provider's api_key_env.
     persisted_api_key_env = None
     if persisted and persisted.provider == provider:
         persisted_api_key_env = persisted.api_key_env
@@ -169,19 +171,20 @@ def load_config(
     )
 
     allow_fallback_env = os.environ.get("KLINGON_CMT_ALLOW_FALLBACK")
-    allow_fallback = (
-        overrides.get("allow_fallback")
-        if overrides.get("allow_fallback") is not None
-        else (
-            persisted.allow_fallback
-            if persisted is not None
-            else (
-                allow_fallback_env.lower() in {"1", "true", "yes"}
-                if allow_fallback_env
-                else False
-            )
-        )
-    )
+    allow_fallback: bool
+    if overrides.get("allow_fallback") is not None:
+        allow_fallback = str(overrides["allow_fallback"]).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    elif persisted is not None:
+        allow_fallback = persisted.allow_fallback
+    elif allow_fallback_env:
+        allow_fallback = allow_fallback_env.lower() in {"1", "true", "yes", "on"}
+    else:
+        allow_fallback = False
 
     config = Config(
         provider=provider,
@@ -214,20 +217,18 @@ def _auto_select_provider() -> str:
 
 
 def set_active_config(config: Config) -> None:
-    global _ACTIVE_CONFIG
-    _ACTIVE_CONFIG = config
+    _CONFIG_STATE["active"] = config
 
 
 def get_active_config() -> Config:
-    global _ACTIVE_CONFIG
-    if _ACTIVE_CONFIG is None:
+    active = _CONFIG_STATE.get("active")
+    if active is None:
         return load_config()
-    return _ACTIVE_CONFIG
+    return active
 
 
 def clear_active_config() -> None:
-    global _ACTIVE_CONFIG
-    _ACTIVE_CONFIG = None
+    _CONFIG_STATE["active"] = None
 
 
 def describe_provider(provider: str) -> str:
