@@ -53,6 +53,24 @@ class GitRepo:
                 "Git command not found. Please install Git."
             ) from exc
 
+    def is_ignored(self, rel_path: str) -> bool:
+        """Return True if path is ignored by gitignore.
+
+        Uses 'git check-ignore -q'. A zero exit status means ignored; 1 means
+        not ignored. We treat other return codes as not ignored to avoid
+        masking legitimate files.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore", "-q", rel_path],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return False
+        return result.returncode == 0
+    
     def get_staged_diff(self) -> str:
         """Get the diff of staged changes."""
         return self._run_git_command(["diff", "--cached"])
@@ -187,8 +205,14 @@ class GitRepo:
                             rel_path = str(
                                 full_path.relative_to(self.repo_path)
                             )
+                            if self.is_ignored(rel_path):
+                                continue
                             entries.append((status, rel_path))
+                continue
+            # Skip ignored standalone paths
+            if self.is_ignored(path):
                 continue
             entries.append((status, path))
 
         return entries
+
