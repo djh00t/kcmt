@@ -13,7 +13,7 @@ Key features
 
 - Atomic workflow: stage and commit per-file, with deletions handled first.
 - LLM-assisted messages: conventional commit style with validation, retries, and auto-fixes.
-- Optional heuristic fallback (disabled by default) after repeated invalid/empty LLM responses.
+- Strict failure on repeated invalid/empty LLM responses (no heuristic commit synthesis).
 - Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
 - Parallel preparation: generate per-file commit messages concurrently with live stats.
 - Optional automatic push (`--auto-push`) after a successful run.
@@ -74,7 +74,18 @@ Additional environment tweaks remain available:
 - `KLINGON_CMT_LLM_ENDPOINT`
 - `KLINGON_CMT_GIT_REPO_PATH`
 - `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
-- `KLINGON_CMT_ALLOW_FALLBACK=1` (enable heuristic subject fallback)
+Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
+fallback subject after repeated LLM failures. This path has been removed;
+kcmt now fails fast with an explicit LLMError so you never get an invented
+message. The variable is ignored if set.
+  
+Additional LLM behaviour environment variables:
+
+- `KCMT_LLM_REQUEST_TIMEOUT` – per-request HTTP timeout (seconds, default 60)
+- `KCMT_PREPARE_PER_FILE_TIMEOUT` – per-file generation timeout in atomic workflow
+- `KCMT_OPENAI_DISABLE_REASONING` – disable reasoning / chain-of-thought (default on)
+- `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
+- `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
 - `KLINGON_CMT_AUTO_PUSH=1` (enable automatic `git push` after success)
 
 ## Quick start (CLI)
@@ -101,7 +112,8 @@ Exit codes
 - `--provider`, `--model`, `--endpoint`, `--api-key-env` – override saved provider details.
 - `--repo-path PATH` – target repository (defaults to current working directory).
 - `--max-commit-length INT` – validate (not hard truncate) the subject line length (default 72 for legacy compatibility; body is preserved).
-- `--allow-fallback` – enable a deterministic heuristic subject if the LLM fails repeatedly.
+Removed flag: `--allow-fallback` is retained for backward compatibility but
+no longer performs heuristic commit generation.
 - `--auto-push` – push the current branch after successful commits (or set `KLINGON_CMT_AUTO_PUSH=1`).
 - `--max-retries INT` – retries when Git rejects (default 3).
 - `--oneshot` – stage all changes, pick one file, and commit it once.
@@ -223,7 +235,8 @@ Notes on behavior
 - Deletions are grouped and committed first with a generated message.
 - Then remaining file changes are parsed from git diff and committed per-file.
 - Commit messages are validated and may be LLM-fixed on failure; retries are applied.
-- If `--allow-fallback` is set (or env var), after exhausting LLM retries an internal heuristic constructs a minimal valid conventional header; bodies are not synthesised.
+- Enrichment pass: for substantial diffs (>=10 changed lines) a second LLM call may add a concise multi-line body explaining what and why while preserving the original header.
+- Fast fail: after retry exhaustion (currently 3 attempts) kcmt raises an `LLMError`; no heuristic commit message is generated.
 - If `--auto-push` is enabled and at least one commit succeeds, kcmt attempts `git push origin <current-branch>` and records the result (`results['pushed']=True`).
 
 ## Development
