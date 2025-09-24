@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -303,28 +303,75 @@ class KlingonCMTWorkflow:
             )
         )
 
+        per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
+        try:
+            per_file_timeout = (
+                float(per_file_timeout_env)
+                if per_file_timeout_env
+                else 45.0
+            )
+        except ValueError:
+            per_file_timeout = 45.0
+
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_map = {
                 executor.submit(self._prepare_single_change, change): idx
                 for idx, change in enumerate(file_changes)
             }
 
-            for future in as_completed(future_map, timeout=30.0):
-                idx = future_map[future]
-                try:
-                    prepared_commit = future.result(timeout=30.0)
-                # Broad catch: worker may raise unexpected provider/parsing
-                # errors; convert to PreparedCommit error without crashing.
-                except Exception as exc:  # noqa: BLE001
-                    prepared_commit = PreparedCommit(
-                        change=file_changes[idx],
-                        message=None,
-                        error=f"Timeout or error: {exc}",
-                    )
+            # Track start times for each future so we can enforce a wall-clock
+            # timeout per submitted job without a brittle global timeout.
+            start_times = {f: time.time() for f in future_map}
+            remaining = set(future_map.keys())
 
-                prepared.append((idx, prepared_commit))
-                self._stats.mark_prepared()
-                self._print_progress(stage="prepare")
+            # Poll until all futures handled (either completed or timed out)
+            while remaining:
+                done, not_done = wait(
+                    remaining, timeout=0.05, return_when=FIRST_COMPLETED
+                )
+
+                # Process any newly completed futures
+                for fut in done:
+                    idx = future_map[fut]
+                    try:
+                        prepared_commit = fut.result()
+                    # Broad catch: ensure a single file failure does not
+                    # abort the entire workflow.
+                    except Exception as exc:  # noqa: BLE001
+                        prepared_commit = PreparedCommit(
+                            change=file_changes[idx],
+                            message=None,
+                            error=(
+                                "Error preparing "
+                                f"{file_changes[idx].file_path}: {exc}"
+                            ),
+                        )
+                    prepared.append((idx, prepared_commit))
+                    self._stats.mark_prepared()
+                    self._print_progress(stage="prepare")
+                    remaining.discard(fut)
+
+                # Check for per-file timeout on still running futures
+                now = time.time()
+                for fut in list(not_done):
+                    if now - start_times[fut] > per_file_timeout:
+                        idx = future_map[fut]
+                        # Attempt to cancel; if it's already running this will
+                        # return False, but we still record a timeout result.
+                        fut.cancel()
+                        prepared_commit = PreparedCommit(
+                            change=file_changes[idx],
+                            message=None,
+                            error=(
+                                "Timeout after "
+                                f"{per_file_timeout:.1f}s waiting for "
+                                f"{file_changes[idx].file_path}"
+                            ),
+                        )
+                        prepared.append((idx, prepared_commit))
+                        self._stats.mark_prepared()
+                        self._print_progress(stage="prepare")
+                        remaining.discard(fut)
 
         return prepared
 
@@ -332,7 +379,21 @@ class KlingonCMTWorkflow:
         generator = CommitGenerator(
             repo_path=str(self.git_repo.repo_path),
             config=self._config,
+            debug=self.debug,
         )
+        if self.debug:
+            snippet = change.diff_content.splitlines()[:20]
+            preview = "\n".join(snippet)
+            print(
+                (
+                    "DEBUG: prepare.file path={} change_type={} "
+                    "diff_preview=\n{}"
+                ).format(
+                    change.file_path,
+                    change.change_type,
+                    preview,
+                )
+            )
 
         try:
             commit_message = generator.suggest_commit_message(
@@ -344,8 +405,21 @@ class KlingonCMTWorkflow:
                 commit_message
             )
             self._print_commit_generated(change.file_path, validated)
+            if self.debug:
+                print(
+                    "DEBUG: prepare.success path={} header='{}'".format(
+                        change.file_path,
+                        validated.splitlines()[0] if validated else "",
+                    )
+                )
             return PreparedCommit(change=change, message=validated)
         except (ValidationError, LLMError) as exc:
+            if self.debug:
+                print(
+                    "DEBUG: prepare.failure path={} error='{}'".format(
+                        change.file_path, str(exc)[:200]
+                    )
+                )
             return PreparedCommit(
                 change=change,
                 message=None,
