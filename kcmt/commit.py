@@ -163,21 +163,6 @@ class CommitGenerator:
                     )
                 if attempt < max_attempts:
                     continue
-        # Final failure: optionally fallback heuristically if allowed
-        if self._config.allow_fallback:
-            if self.debug:
-                print("DEBUG: commit.fallback engaged after retries exhausted")
-            heuristic = self.heuristic_message(diff, context)
-            # Ensure heuristic conforms; if not, wrap in generic safe header
-            if not self.validate_conventional_commit(heuristic):
-                heuristic = "chore(core): update"
-            if self.debug:
-                print(
-                    "DEBUG: commit.fallback.result header='{}'".format(
-                        heuristic
-                    )
-                )
-            return heuristic
         raise LLMError(
             (
                 "LLM unavailable or invalid output after {} attempts; "
@@ -185,71 +170,7 @@ class CommitGenerator:
             ).format(max_attempts)
         ) from last_error
 
-    # ------------------------------------------------------------------
-    # Fallback heuristics
-    # ------------------------------------------------------------------
-    def heuristic_message(
-        self, diff: str, context: str
-    ) -> str:  # pragma: no cover
-        """Create a conventional commit message without the LLM.
-
-    Rules (simple & deterministic):
-        - type: feat (new file) / refactor (code) / docs / chore (config) /
-          style (ui) / test (tests)
-        - scope inferred from path (tests, docs, config, ui, core default)
-        - subject 'add <file>' if new else 'update <file>'
-        - body with counts if >5 changed lines
-        """
-        file_path = None
-        if context.startswith("File:"):
-            file_path = context.split("File:", 1)[1].strip() or None
-        elif "File:" in context:
-            file_path = context.split("File:", 1)[1].strip() or None
-
-        basename = None
-        if file_path:
-            basename = file_path.split("/")[-1]
-        else:
-            basename = "changes"
-
-        lines = diff.splitlines()
-        # Removed previous additions/deletions counting (not needed when
-        # fallback body lines are disabled).
-        is_new = any(
-            ("new file mode" in line) or line.startswith("--- /dev/null")
-            for line in lines
-        )
-
-        # Infer scope from path
-        scope = "core"
-        if file_path:
-            lower = file_path.lower()
-            if "test" in lower:
-                scope = "tests"
-            elif lower.endswith(('.md', '.rst', '.txt')):
-                scope = "docs"
-            elif lower.endswith(('.json', '.yml', '.yaml', '.toml', '.ini')):
-                scope = "config"
-            elif lower.endswith(('.css', '.scss', '.sass', '.less')):
-                scope = "ui"
-
-        # Infer type
-        msg_type = "feat" if is_new else "refactor"
-        if scope == "tests":
-            msg_type = "test"
-        elif scope == "docs":
-            msg_type = "docs"
-        elif scope == "config":
-            msg_type = "chore"
-        elif scope == "ui" and not is_new:
-            msg_type = "style"
-
-        verb = "add" if is_new else "update"
-        subject = f"{verb} {basename}" if basename else "update files"
-        header = f"{msg_type}({scope}): {subject}"
-
-        # We deliberately omit body lines to avoid generic fallback phrasing
-        return header
+    # (Heuristic generation removed per user request – no fallback path.)
 
     def validate_conventional_commit(self, message: str) -> bool:
         """Validate if a commit message follows conventional commit format.
