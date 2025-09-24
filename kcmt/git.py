@@ -66,6 +66,7 @@ class GitRepo:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
+                check=False,
             )
         except FileNotFoundError:
             return False
@@ -87,6 +88,17 @@ class GitRepo:
             staged: True to get staged diff, False for working tree diff.
         """
         args = ["diff"]
+        if staged:
+            args.append("--cached")
+        args += ["--", file_path]
+        return self._run_git_command(args)
+
+    def get_file_diff_text(self, file_path: str, staged: bool = False) -> str:
+        """Get a diff forcing text mode, overriding binary heuristics.
+
+        Uses `git diff --text` which treats all files as text for the diff.
+        """
+        args = ["diff", "--text"]
         if staged:
             args.append("--cached")
         args += ["--", file_path]
@@ -141,7 +153,9 @@ class GitRepo:
         """
         self._run_git_command(["commit", "-m", message, "--", file_path])
 
-    def push(self, remote: str = "origin", branch: Optional[str] = None) -> str:
+    def push(
+        self, remote: str = "origin", branch: Optional[str] = None
+    ) -> str:
         """Push current branch to remote.
 
         If branch is None, determine it via 'git rev-parse --abbrev-ref HEAD'.
