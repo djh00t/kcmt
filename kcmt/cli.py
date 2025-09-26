@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from json.encoder import (
+    INFINITY,
+    _make_iterencode,
+    encode_basestring,
+    encode_basestring_ascii,
+)
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +38,59 @@ MAGENTA = "\033[95m"
 RED = "\033[91m"
 
 
+class DecimalFriendlyJSONEncoder(json.JSONEncoder):
+    """JSON encoder that renders floats without scientific notation."""
+
+    def iterencode(self, o, _one_shot=False):  # noqa: N802 - match json API
+        if self.check_circular:
+            markers = {}
+        else:
+            markers = None
+
+        if self.ensure_ascii:
+            _encoder = encode_basestring_ascii
+        else:
+            _encoder = encode_basestring
+
+        def floatstr(  # noqa: ANN001 - signature fixed by json module
+            value,
+            allow_nan=self.allow_nan,
+            _inf=INFINITY,
+            _neginf=-INFINITY,
+        ) -> str:
+            if value != value:  # NaN check
+                text = "NaN"
+            elif value == _inf:
+                text = "Infinity"
+            elif value == _neginf:
+                text = "-Infinity"
+            else:
+                text = format(value, ".6f")
+                if "." in text:
+                    text = text.rstrip("0").rstrip(".")
+                if "." not in text:
+                    text = f"{text}.0"
+            if not allow_nan and text in {"NaN", "Infinity", "-Infinity"}:
+                raise ValueError(
+                    "Out of range float values are not JSON compliant"
+                )
+            return text
+
+        _iterencode = _make_iterencode(
+            markers,
+            self.default,
+            _encoder,
+            self.indent,
+            floatstr,
+            self.key_separator,
+            self.item_separator,
+            self.sort_keys,
+            self.skipkeys,
+            _one_shot,
+        )
+        return _iterencode(o, 0)
+
+
 class CLI:
     """Command-line interface for kcmt."""
 
@@ -47,8 +107,8 @@ class CLI:
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
-  kcmt                                  # default atomic workflow with live stats
-  kcmt --oneshot                        # commit a single candidate file automatically
+  kcmt                                  # default workflow with live stats
+  kcmt --oneshot                        # commit a single auto-selected file
   kcmt --file README.md                 # commit only README.md
   kcmt --configure                      # interactive provider & model setup
     kcmt --provider openai --model gpt-5-mini-2025-08-07
@@ -85,7 +145,7 @@ Examples:
         parser.add_argument(
             "--repo-path",
             default=".",
-            help="Path to the target Git repository (default: current directory)",
+            help="Path to the target Git repo (default: current dir)",
         )
         parser.add_argument(
             "--max-commit-length",
@@ -130,6 +190,13 @@ Examples:
             help="Show detailed LLM API requests and responses",
         )
         parser.add_argument(
+            "--list-models",
+            action="store_true",
+            help=(
+                "List available models for each provider using your API keys"
+            ),
+        )
+        parser.add_argument(
             "--allow-fallback",
             action="store_true",
             help=(
@@ -164,6 +231,8 @@ Examples:
             if getattr(parsed_args, "github_token", None):
                 os.environ["GITHUB_TOKEN"] = parsed_args.github_token
 
+            if parsed_args.list_models:
+                return self._execute_list_models(parsed_args)
             if parsed_args.configure:
                 return self._run_configuration(parsed_args, repo_root)
 
@@ -277,14 +346,6 @@ Examples:
             return 1
         except SystemExit as exc:  # argparse
             return int(exc.code) if isinstance(exc.code, int) else 0
-        except Exception as err:  # pragma: no cover noqa: BLE001
-            self._print_error(f"Unexpected error: {err}")
-            _pa = locals().get("parsed_args")
-            if _pa is not None and getattr(_pa, "verbose", False):
-                import traceback
-
-                traceback.print_exc()
-            return 1
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -481,6 +542,130 @@ Examples:
         self._print_info(f"One-shot targeting file: {target_path}")
         args.single_file = target_path
         return self._execute_single_file(args, config)
+
+    def _execute_list_models(self, args: argparse.Namespace) -> int:
+        """Query each provider for models. Drivers include enrichment."""
+
+        from .providers.anthropic_driver import AnthropicDriver
+        from .providers.base import BaseDriver
+        from .providers.openai_driver import OpenAIDriver
+        from .providers.xai_driver import XAIDriver
+
+        # Build per-provider configs using active env
+        configs: Dict[str, Config] = {}
+        for prov in ("openai", "anthropic", "xai"):
+            overrides: Dict[str, str] = {"provider": prov}
+            try:
+                cfg = load_config(overrides=overrides)
+                configs[prov] = cfg
+            except (ValueError, OSError, RuntimeError, TypeError, KeyError):
+                continue
+
+        out: Dict[str, Any] = {}
+        for prov, cfg in configs.items():
+            try:
+                driver: BaseDriver
+                if prov == "openai":
+                    driver = OpenAIDriver(
+                        cfg,
+                        debug=getattr(args, "debug", False),
+                    )
+                elif prov == "xai":
+                    driver = XAIDriver(
+                        cfg,
+                        debug=getattr(args, "debug", False),
+                    )
+                else:
+                    driver = AnthropicDriver(
+                        cfg,
+                        debug=getattr(args, "debug", False),
+                    )
+                out[prov] = driver.list_models()
+            except (ValueError, RuntimeError, TypeError, KeyError) as e:
+                # Fallback: use dataset-derived listing so users still
+                # see models for this provider
+                try:
+                    from .providers.pricing import build_enrichment_context as _bctx
+                    from .providers.pricing import enrich_ids as _enrich
+                    alias_lut, _ctx, _mx = _bctx()
+                    ids: list[str] = []
+                    seen: set[str] = set()
+                    for (p, mid), canon in alias_lut.items():
+                        if p != prov:
+                            continue
+                        for candidate in (str(canon), str(mid)):
+                            if candidate and candidate not in seen:
+                                ids.append(candidate)
+                                seen.add(candidate)
+                    # Apply provider-specific filters for CLI fallback
+                    if prov == "openai":
+                        ids = [
+                            mm
+                            for mm in ids
+                            if OpenAIDriver.is_allowed_model_id(mm)
+                        ]
+                    elif prov == "xai":
+                        ids = [
+                            mm
+                            for mm in ids
+                            if XAIDriver.is_allowed_model_id(mm)
+                        ]
+                    elif prov == "anthropic":
+                        ids = [
+                            mm
+                            for mm in ids
+                            if AnthropicDriver.is_allowed_model_id(mm)
+                        ]
+                    try:
+                        emap = _enrich(prov, ids)
+                    except (
+                        ValueError,
+                        RuntimeError,
+                        KeyError,
+                        TypeError,
+                    ):
+                        emap = {}
+                    owned_by = prov
+                    out_list: list[dict[str, Any]] = []
+                    for mid in ids:
+                        em = emap.get(mid) or {}
+                        if not em or not em.get("_has_pricing", False):
+                            if getattr(args, "debug", False):
+                                print(
+                                    "DEBUG(CLI:list-models): skipping %s/%s "
+                                    "due to missing pricing"
+                                    % (prov, mid)
+                                )
+                            continue
+                        payload = dict(em)
+                        payload.pop("_has_pricing", None)
+                        out_list.append(
+                            {
+                                "id": mid,
+                                "owned_by": owned_by,
+                                **payload,
+                            }
+                        )
+                    out[prov] = out_list
+                except (
+                    ImportError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    RuntimeError,
+                    AttributeError,
+                ):
+                    out[prov] = {"error": str(e)}
+
+        print(
+            json.dumps(
+                out,
+                indent=2,
+                ensure_ascii=False,
+                cls=DecimalFriendlyJSONEncoder,
+            )
+        )
+        return 0
 
     def _execute_single_file(
         self, args: argparse.Namespace, config: Config
