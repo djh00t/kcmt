@@ -26,6 +26,8 @@ classifiers = [
 dependencies = [
   "openai>=1.108.1",
   "httpx>=0.25.0",
+  "requests>=2.32.5",
+  "genai-prices>=0.0.27",
 ]
 
 [project.optional-dependencies]
