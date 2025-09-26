@@ -1,11 +1,10 @@
 import os
-from pathlib import Path
 
 import pytest
 
 from kcmt.config import (
-    Config,
     DEFAULT_MODELS,
+    Config,
     clear_active_config,
     detect_available_providers,
     get_active_config,
@@ -98,7 +97,7 @@ def test_detect_available_providers_fuzzy(monkeypatch):
 def test_active_config_helpers_roundtrip():
     cfg = Config(
         provider="openai",
-        model="gpt-5-mini",
+        model="gpt-5-mini-2025-08-07",
         llm_endpoint="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=".",
