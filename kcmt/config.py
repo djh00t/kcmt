@@ -138,9 +138,14 @@ def load_config(
 
     defaults = DEFAULT_MODELS[provider]
 
+    # Only reuse persisted model if it's for the same provider; otherwise
+    # fall back to defaults for the newly selected provider.
+    persisted_model = (
+        persisted.model if (persisted and persisted.provider == provider) else None
+    )
     model = (
         overrides.get("model")
-        or (persisted.model if persisted else None)
+        or persisted_model
         or os.environ.get("KLINGON_CMT_LLM_MODEL")
         or defaults["model"]
     )
@@ -151,9 +156,14 @@ def load_config(
     if provider == "openai" and model == "gpt-5-mini":
         model = defaults["model"]
 
+    # Only reuse persisted endpoint if it's for the same provider; otherwise
+    # select from environment or provider defaults.
+    persisted_endpoint = (
+        persisted.llm_endpoint if (persisted and persisted.provider == provider) else None
+    )
     endpoint = (
         overrides.get("endpoint")
-        or (persisted.llm_endpoint if persisted else None)
+        or persisted_endpoint
         or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or defaults["endpoint"]
     )
