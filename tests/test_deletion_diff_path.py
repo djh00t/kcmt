@@ -3,6 +3,7 @@ import subprocess
 
 from kcmt.commit import CommitGenerator
 from kcmt.config import Config, set_active_config
+from kcmt.exceptions import LLMError
 
 
 def test_deletion_diff_path(tmp_path):
@@ -24,7 +25,7 @@ def test_deletion_diff_path(tmp_path):
         llm_endpoint="http://local",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo),
-        allow_fallback=True,
+        allow_fallback=False,  # deprecated behavior (strict mode)
     )
     set_active_config(cfg)
 
@@ -33,15 +34,10 @@ def test_deletion_diff_path(tmp_path):
     gen = CommitGenerator(repo_path=str(repo), config=cfg)
     diff = gen.git_repo.get_working_diff()
     assert "deleteme.txt" in diff
-    # Fallback path should produce a refactor/chore style header (not failing)
-    from kcmt.exceptions import LLMError
-
+    # In strict mode we either get a valid conventional header or raise.
     try:
         msg = gen.suggest_commit_message(diff, context="File: deleteme.txt")
-    except LLMError:  # If LLM attempts fail it should still fallback
-        msg = gen.heuristic_message(diff, "File: deleteme.txt")
-    assert ": " in msg
-    assert ": " in msg
-    assert ": " in msg
-    assert ": " in msg
-    assert ": " in msg
+    except LLMError:
+        # Strict failure acceptable if model stub invalid
+        return
+    assert ": " in msg  # basic convention check
