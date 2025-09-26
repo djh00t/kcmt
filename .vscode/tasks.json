@@ -1,0 +1,30 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "pytest-quick-one",
+			"type": "shell",
+			"command": "pytest -q tests/test_cli.py::test_cli_oneshot_single_file -q",
+			"problemMatcher": [
+				"$pytest-stylish"
+			],
+			"group": "test"
+		},
+		{
+			"label": "kcmt list models smoke",
+			"type": "shell",
+			"command": "python -m kcmt --list-models",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "kcmt list models smoke (module main)",
+			"type": "shell",
+			"command": "python -m kcmt.main --list-models",
+			"args": [],
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
