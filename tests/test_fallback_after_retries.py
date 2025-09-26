@@ -26,6 +26,11 @@ def test_heuristic_fallback_after_invalid_llm(tmp_path, monkeypatch):
 
     target_file = tmp_path / "demo.py"
     target_file.write_text("print('demo')\n")
+    _git(["add", "demo.py"], tmp_path)
+    _git(["commit", "-m", "chore(core): seed"], tmp_path)
+    # Modify file to create a diff after seed commit
+    target_file.write_text("print('demo v2')\n")
+    _git(["add", "demo.py"], tmp_path)
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
@@ -50,7 +55,7 @@ def test_heuristic_fallback_after_invalid_llm(tmp_path, monkeypatch):
 
     cfg = Config(
         provider="openai",
-        model="gpt-5-mini",
+        model="gpt-5-mini-2025-08-07",
         llm_endpoint="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(tmp_path),
@@ -58,7 +63,9 @@ def test_heuristic_fallback_after_invalid_llm(tmp_path, monkeypatch):
     )
     set_active_config(cfg)
 
-    wf = KlingonCMTWorkflow(repo_path=str(tmp_path), show_progress=False)
+    wf = KlingonCMTWorkflow(
+        repo_path=str(tmp_path), show_progress=False, config=cfg
+    )
     results = wf.execute_workflow()
 
     file_commits = [r for r in results.get("file_commits", []) if r.success]
