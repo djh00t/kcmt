@@ -110,6 +110,12 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
+        # Heuristic short-circuits before calling the LLM
+        if diff and len(diff.strip()) < 10:
+            return self.llm_client.heuristic_minimal(context, style)
+        if diff and len(diff) > 8000:
+            return self.llm_client.heuristic_large(diff, context, style)
+
         last_error: Exception | None = None
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -163,6 +169,9 @@ class CommitGenerator:
                     )
                 if attempt < max_attempts:
                     continue
+        # Fallback: if allowed by config, synthesize a heuristic message
+        if getattr(self._config, "allow_fallback", False):
+            return self.llm_client.heuristic_minimal(context, style)
         raise LLMError(
             (
                 "LLM unavailable or invalid output after {} attempts; "
