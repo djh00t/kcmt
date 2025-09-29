@@ -88,3 +88,11 @@ dev-dependencies = [
 
 [tool.isort]
 profile = "black"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+update_changelog_on_bump = false
+version_files = ["kcmt/__init__.py"]
+message_template = "{{type}}({{scope}}): {{subject}}"

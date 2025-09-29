@@ -78,16 +78,17 @@ def test_process_deletions_first_stages_deleted(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_run_git(args):
-        if args == ["status", "--porcelain"]:
-            # Leading "D  " lines to satisfy parser
-            return "D  file1.txt\nM  other.txt\nD  dir/file2.py\n"
-        raise AssertionError("Unexpected git invocation")
+    def fake_porcelain(self):
+        return [
+            ("D ", "file1.txt"),
+            (" M", "other.txt"),
+            ("D ", "dir/file2.py"),
+        ]
 
     def fake_stage(file_path):
         calls.append(file_path)
 
-    monkeypatch.setattr(GitRepo, "_run_git_command", lambda self, a: fake_run_git(a))
+    monkeypatch.setattr(GitRepo, "_run_git_porcelain", fake_porcelain)
     monkeypatch.setattr(GitRepo, "stage_file", lambda self, p: fake_stage(p))
 
     deleted = GitRepo.process_deletions_first(repo)

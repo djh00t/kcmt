@@ -1,6 +1,5 @@
 """Git operations for kcmt."""
 
-import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -216,22 +215,62 @@ class GitRepo:
         """Unstage a specific file."""
         self._run_git_command(["reset", "HEAD", file_path])
 
+    def _run_git_porcelain(self) -> list[tuple[str, str]]:
+        """Return ``git status`` entries parsed from porcelain ``-z`` output."""
+
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                cwd=self.repo_path,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - git
+            raise GitError(
+                f"Git command failed: status --porcelain\n{exc.stderr}"
+            ) from exc
+        except FileNotFoundError as exc:  # pragma: no cover - env
+            raise GitError("Git command not found. Please install Git.") from exc
+
+        data = result.stdout.decode("utf-8", "surrogateescape")
+        raw_entries = data.split("\0")
+
+        entries: list[tuple[str, str]] = []
+        idx = 0
+        while idx < len(raw_entries):
+            entry = raw_entries[idx]
+            idx += 1
+            if not entry:
+                continue
+
+            status = entry[:2]
+            if len(entry) > 3 and entry[2] == " ":
+                primary_path = entry[3:]
+            else:
+                primary_path = entry[2:]
+
+            path = primary_path
+            rename_status = {status[0], status[1]} & {"R", "C"}
+            if rename_status and idx < len(raw_entries):
+                path = raw_entries[idx]
+                idx += 1
+
+            entries.append((status, path))
+
+        return entries
+
     def process_deletions_first(self) -> list[str]:
         """Process deletions first by staging all deleted files."""
-        status_output = self._run_git_command(["status", "--porcelain"])
 
-        deleted_files = []
-        for line in status_output.split("\n"):
-            if not line:
-                continue
-            status = line[:2]
+        deleted_files: list[str] = []
+        for status, file_path in self._run_git_porcelain():
             if "D" not in status:
-                continue
-            raw_path = (
-                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
-            )
-            file_path = raw_path.strip()
-            if not file_path:
                 continue
             deleted_files.append(file_path)
             self.stage_file(file_path)
@@ -240,41 +279,82 @@ class GitRepo:
 
     def list_changed_files(self) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
-        status_output = self._run_git_command(["status", "--porcelain"])
 
-        entries: list[tuple[str, str]] = []
-        for line in status_output.split("\n"):
-            if not line:
-                continue
-            status = line[:2]
-            raw_path = (
-                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+        return [
+            (status, path)
+            for status, path in self._run_git_porcelain()
+            if path
+        ]
+
+    def get_worktree_diff_for_path(self, file_path: str) -> str:
+        """Return a unified diff for ``file_path`` without touching the index."""
+
+        head_diff_cmd = ["git", "diff", "--patch", "HEAD", "--", file_path]
+        head_result = subprocess.run(
+            head_diff_cmd,
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        diff_output = head_result.stdout if head_result.returncode in {0, 1} else ""
+        if diff_output.strip():
+            return diff_output
+
+        # Fall back to plain working-tree diff when HEAD is unavailable (e.g.,
+        # an empty repository) or produced no output. ``git diff`` returns 129
+        # when HEAD cannot be resolved; treat that like ``git diff`` with no
+        # base revision.
+        if head_result.returncode not in {0, 1} or not diff_output.strip():
+            worktree_cmd = ["git", "diff", "--patch", "--", file_path]
+            worktree_result = subprocess.run(
+                worktree_cmd,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            path = raw_path.strip()
-            if not path:
-                continue
-            if " -> " in path:
-                path = path.split(" -> ", 1)[1].strip()
-            if path.startswith('"') and path.endswith('"') and len(path) >= 2:
-                path = path[1:-1]
-            # Expand untracked directories (Git collapses them in porcelain)
-            if path.endswith("/") and status.startswith("??"):
-                dir_rel = path.rstrip("/")
-                dir_full = self.repo_path / dir_rel
-                if dir_full.is_dir():
-                    for root, _dirs, files in os.walk(dir_full):
-                        for f in files:
-                            full_path = Path(root) / f
-                            rel_path = str(
-                                full_path.relative_to(self.repo_path)
-                            )
-                            if self.is_ignored(rel_path):
-                                continue
-                            entries.append((status, rel_path))
-                continue
-            # Skip ignored standalone paths
-            if self.is_ignored(path):
-                continue
-            entries.append((status, path))
+            if worktree_result.returncode not in {0, 1}:
+                raise GitError(
+                    "Git command failed: diff --patch --\n"
+                    f"{worktree_result.stderr}"
+                )
+            diff_output = worktree_result.stdout
+            if diff_output.strip():
+                return diff_output
 
-        return entries
+        # If both diffs returned nothing, the file is likely untracked.
+        tracked_check = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", file_path],
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tracked_check.returncode == 0:
+            return diff_output
+
+        abs_path = str((self.repo_path / file_path).resolve())
+        no_index_cmd = [
+            "git",
+            "diff",
+            "--patch",
+            "--no-index",
+            "/dev/null",
+            abs_path,
+        ]
+        no_index_result = subprocess.run(
+            no_index_cmd,
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if no_index_result.returncode not in {0, 1}:
+            raise GitError(
+                "Git command failed: diff --no-index\n"
+                f"{no_index_result.stderr}"
+            )
+
+        return no_index_result.stdout

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -586,40 +587,31 @@ Examples:
             self._print_info(f"File limit: {args.limit}")
         self._print_info("")
 
-        try:
-            workflow = None
+        workflow = None
 
-            def _wf_extra() -> str:
-                if workflow is None:
-                    return ""
-                return f"repo={workflow.git_repo.repo_path}"
+        def _wf_extra() -> str:
+            if workflow is None:
+                return ""
+            return f"repo={workflow.git_repo.repo_path}"
 
-            with self._profile_timer("init-workflow", extra=_wf_extra):
-                workflow = KlingonCMTWorkflow(
-                    repo_path=config.git_repo_path,
-                    max_retries=args.max_retries,
-                    config=config,
-                    show_progress=not args.no_progress,
-                    file_limit=getattr(args, 'limit', None),
-                    debug=getattr(args, 'debug', False),
-                    profile=self._profile_enabled,
-                )
-        except TypeError:  # Backward compatibility for tests
-            workflow = None
+        raw_kwargs = {
+            "repo_path": config.git_repo_path,
+            "max_retries": args.max_retries,
+            "config": config,
+            "show_progress": not args.no_progress,
+            "file_limit": getattr(args, "limit", None),
+            "debug": getattr(args, "debug", False),
+            "profile": self._profile_enabled,
+        }
+        signature = inspect.signature(KlingonCMTWorkflow)
+        filtered_kwargs = {
+            key: value
+            for key, value in raw_kwargs.items()
+            if key in signature.parameters and (value is not None or key != "file_limit")
+        }
 
-            def _wf_extra_bc() -> str:
-                if workflow is None:
-                    return ""
-                return f"repo={workflow.git_repo.repo_path}"
-
-            with self._profile_timer("init-workflow", extra=_wf_extra_bc):
-                workflow = KlingonCMTWorkflow(
-                    repo_path=config.git_repo_path,
-                    max_retries=args.max_retries,
-                    config=config,
-                    show_progress=not args.no_progress,
-                    profile=self._profile_enabled,
-                )
+        with self._profile_timer("init-workflow", extra=_wf_extra):
+            workflow = KlingonCMTWorkflow(**filtered_kwargs)
 
         results: Dict[str, Any] = {}
 

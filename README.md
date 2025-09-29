@@ -121,6 +121,18 @@ no longer performs heuristic commit generation.
 - `--no-progress` – disable the live stats bar.
 - `--verbose`, `-v` – emit detailed logs and per-file results.
 
+## Conventional commit automation
+
+kcmt now ships with a [Commitizen](https://commitizen-tools.github.io/commitizen/) configuration that mirrors the
+LLM-generated commit format. After installing the project you can:
+
+- run `cz check` to validate a message before committing manually;
+- run `cz commit` to invoke Commitizen's prompt flow while still benefitting from kcmt's
+  validation rules and version tracking (it watches `kcmt/__init__.py`).
+
+The configuration lives in `pyproject.toml` under `[tool.commitizen]`, so any repository that
+adopts kcmt inherits the same conventional commit guardrails automatically.
+
 ## Library usage examples
 
 Basic: generate a message from staged changes

@@ -10,6 +10,15 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+RESET = "\033[0m"
+BOLD = "\033[1m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+MAGENTA = "\033[95m"
+DIM = "\033[2m"
+RED = "\033[91m"
+
 from .commit import CommitGenerator
 from .config import Config, get_active_config
 from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
@@ -112,6 +121,8 @@ class KlingonCMTWorkflow:
         self.file_limit = file_limit
         self.debug = debug
         self.profile = profile
+        self._thread_local = threading.local()
+        self._thread_local.generator = self.commit_generator
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -268,27 +279,21 @@ class KlingonCMTWorkflow:
         # that file for its own atomic commit.
         file_changes: List[FileChange] = []
         collect_start = time.perf_counter()
-        for _status, file_path in non_deletion_files:
+        for status, file_path in non_deletion_files:
             try:
-                # Stage the file to obtain a reliable diff (untracked files
-                # won't appear in plain working diff output otherwise)
-                self.git_repo.stage_file(file_path)
-                single_diff = self.git_repo.get_file_diff(
-                    file_path, staged=True
+                single_diff = self.git_repo.get_worktree_diff_for_path(
+                    file_path
                 )
-                # Unstage so subsequent commits are atomic
-                try:
-                    self.git_repo.unstage(file_path)
-                except GitError:
-                    # Non-fatal; if unstage fails we still proceed
-                    pass
                 if not single_diff.strip():
                     continue
-                parsed = self._parse_git_diff(single_diff)
-                if parsed:
-                    # _parse_git_diff returns a list; for a single-file diff
-                    # we take the first element.
-                    file_changes.append(parsed[0])
+                change_type = self._change_type_from_status(status)
+                file_changes.append(
+                    FileChange(
+                        file_path=file_path,
+                        change_type=change_type,
+                        diff_content=single_diff,
+                    )
+                )
             except GitError as e:
                 results.append(
                     CommitResult(
@@ -337,6 +342,16 @@ class KlingonCMTWorkflow:
 
         return results
 
+    def _change_type_from_status(self, status: str) -> str:
+        """Map a porcelain status code to FileChange.change_type."""
+
+        trimmed = status.strip()
+        if "D" in trimmed:
+            return "D"
+        if trimmed == "??" or "A" in trimmed:
+            return "A"
+        return "M"
+
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
@@ -346,9 +361,8 @@ class KlingonCMTWorkflow:
         prepared: List[Tuple[int, PreparedCommit]] = []
 
         print(
-            "Using {} concurrent threads for {} files".format(
-                workers, len(file_changes)
-            )
+            f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
+            f"{len(file_changes)} file(s){RESET}"
         )
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
@@ -423,12 +437,21 @@ class KlingonCMTWorkflow:
 
         return prepared
 
+    def _get_thread_commit_generator(self) -> CommitGenerator:
+        """Return a per-thread CommitGenerator instance."""
+
+        generator = getattr(self._thread_local, "generator", None)
+        if generator is None:
+            generator = CommitGenerator(
+                repo_path=str(self.git_repo.repo_path),
+                config=self._config,
+                debug=self.debug,
+            )
+            self._thread_local.generator = generator
+        return generator
+
     def _prepare_single_change(self, change: FileChange) -> PreparedCommit:
-        generator = CommitGenerator(
-            repo_path=str(self.git_repo.repo_path),
-            config=self._config,
-            debug=self.debug,
-        )
+        generator = self._get_thread_commit_generator()
         if self.debug:
             snippet = change.diff_content.splitlines()[:20]
             preview = "\n".join(snippet)
@@ -509,13 +532,26 @@ class KlingonCMTWorkflow:
         failures = snapshot["failures"]
         rate = snapshot["rate"]
 
-        bar = (
-            f"[kcmt] stage={stage:<7} | files {processed}/{total} "
-            f"| prepared {prepared}/{total} | ok {success} | fail {failures} "
-            f"| {rate:.2f} commits/s"
+        stage_styles = {
+            "prepare": ("🧠", CYAN),
+            "commit": ("🚀", GREEN),
+            "done": ("🏁", YELLOW),
+        }
+        icon, color = stage_styles.get(stage, ("🔄", CYAN))
+        stage_label = stage.upper()
+
+        status_line = (
+            "\r"
+            f"{BOLD}{icon} kcmt{RESET} "
+            f"{color}{stage_label:<7}{RESET} │ "
+            f"{GREEN}{processed:>3}{RESET}/{total:>3} files │ "
+            f"{CYAN}{prepared:>3}{RESET}/{total:>3} ready │ "
+            f"{GREEN}✓ {success:>3}{RESET} │ "
+            f"{RED}✗ {failures:>3}{RESET} │ "
+            f"{DIM}{rate:5.2f} commits/s{RESET}   "
         )
 
-        print("\r" + bar, end="", flush=True)
+        print(status_line, end="", flush=True)
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
