@@ -20,8 +20,6 @@ from .config import Config, get_active_config
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
 from .providers.base import BaseDriver
-
-# Driver imports (new provider-specific architecture)
 from .providers.openai_driver import OpenAIDriver
 from .providers.xai_driver import XAIDriver
 
