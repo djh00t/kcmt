@@ -78,18 +78,76 @@ def test_process_deletions_first_stages_deleted(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_run_git(args):
-        if args == ["status", "--porcelain"]:
-            # Leading "D  " lines to satisfy parser
-            return "D  file1.txt\nM  other.txt\nD  dir/file2.py\n"
-        raise AssertionError("Unexpected git invocation")
+    def fake_porcelain(self):
+        return [
+            ("D ", "file1.txt"),
+            (" M", "other.txt"),
+            ("D ", "dir/file2.py"),
+        ]
 
     def fake_stage(file_path):
         calls.append(file_path)
 
-    monkeypatch.setattr(GitRepo, "_run_git_command", lambda self, a: fake_run_git(a))
+    monkeypatch.setattr(GitRepo, "_run_git_porcelain", fake_porcelain)
     monkeypatch.setattr(GitRepo, "stage_file", lambda self, p: fake_stage(p))
 
     deleted = GitRepo.process_deletions_first(repo)
     assert deleted == ["file1.txt", "dir/file2.py"]
     assert calls == ["file1.txt", "dir/file2.py"]
+
+
+def _make_result(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    class _Result:
+        def __init__(self) -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    return _Result()
+
+
+def test_get_worktree_diff_prefers_head(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [_make_result(stdout="diff from head\n", returncode=1)]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "diff from head\n"
+
+
+def test_get_worktree_diff_falls_back_to_worktree(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [
+        _make_result(stdout="", returncode=0),
+        _make_result(stdout="worktree diff\n", returncode=1),
+    ]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "worktree diff\n"
+
+
+def test_get_worktree_diff_handles_untracked(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [
+        _make_result(stdout="", returncode=129),
+        _make_result(stdout="", returncode=0),
+        _make_result(stdout="", returncode=1),
+        _make_result(stdout="no-index diff\n", returncode=1),
+    ]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "no-index diff\n"

@@ -29,9 +29,7 @@ def test_openai_integration_basic_round_trip(monkeypatch):
     cfg = load_config(
         overrides={
             "provider": "openai",
-            "model": os.environ.get(
-                "KCMT_OPENAI_MODEL", "gpt-4o-mini"
-            ),
+            "model": os.environ.get("KCMT_OPENAI_MODEL", "gpt-4o-mini"),
         }
     )
 

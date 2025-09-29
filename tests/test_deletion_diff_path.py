@@ -13,9 +13,7 @@ def test_deletion_diff_path(tmp_path):
     f = repo / "deleteme.txt"
     f.write_text("hello\nworld\n")
     subprocess.run(["git", "add", "deleteme.txt"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "chore: init"], cwd=repo, check=True
-    )
+    subprocess.run(["git", "commit", "-m", "chore: init"], cwd=repo, check=True)
     # delete file
     f.unlink()
 

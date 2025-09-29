@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import kcmt.cli as cli_module
 
@@ -11,7 +10,9 @@ def test_cli_help_returns_zero():
 
 def test_cli_executes_workflow_success(monkeypatch, tmp_path):
     class _FakeWorkflow:
-        def __init__(self, repo_path=None, max_retries=3, config=None, show_progress=True):
+        def __init__(
+            self, repo_path=None, max_retries=3, config=None, show_progress=True
+        ):
             self.repo_path = repo_path
             self.max_retries = max_retries
             self.config = config
@@ -106,14 +107,16 @@ def test_cli_oneshot_happy_path(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_module, "CommitGenerator", _CommitGenerator)
 
     cli = cli_module.CLI()
-    code = cli.run([
-        "--provider",
-        "openai",
-        "--oneshot",
-        "--repo-path",
-        str(tmp_path),
-        "--no-progress",
-    ])
+    code = cli.run(
+        [
+            "--provider",
+            "openai",
+            "--oneshot",
+            "--repo-path",
+            str(tmp_path),
+            "--no-progress",
+        ]
+    )
 
     assert code == 0
     assert staged == ["foo.py"]
@@ -121,13 +124,15 @@ def test_cli_oneshot_happy_path(monkeypatch, tmp_path):
 
 
 def test_cli_configure_writes_file(monkeypatch, tmp_path):
-    inputs = iter([
-        "1",  # choose anthropic
-        "y",  # confirm even without detected key
-        "my-model",
-        "https://anthropic",
-        "ANTHROPIC_API_KEY",
-    ])
+    inputs = iter(
+        [
+            "1",  # choose anthropic
+            "y",  # confirm even without detected key
+            "my-model",
+            "https://anthropic",
+            "ANTHROPIC_API_KEY",
+        ]
+    )
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     cli = cli_module.CLI()
