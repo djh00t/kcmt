@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import os
 import re
-from types import ModuleType
-from typing import Any, Optional, TYPE_CHECKING, cast
+from typing import Any, Optional, cast
 
+from ._optional import OpenAIModule, import_openai
 from .config import Config, get_active_config
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
@@ -28,15 +28,7 @@ from .providers.xai_driver import XAIDriver
 # Compatibility shim for older tests that expect kcmt.llm.OpenAI
 # to be available for monkeypatching. We avoid importing openai at
 # module import time unless necessary.
-if TYPE_CHECKING:  # pragma: no cover - typing-only import
-    import openai as _openai_module
-
-try:  # pragma: no cover - test scaffolding
-    import openai as _openai_module
-except Exception:  # pragma: no cover - if openai not installed
-    _openai_module = None
-
-_openai: ModuleType | None = cast("ModuleType | None", _openai_module)
+_openai: OpenAIModule | None = import_openai()
 
 
 class OpenAI:  # noqa: D401
