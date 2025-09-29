@@ -14,6 +14,7 @@ def _reload_with_anthropic(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     # Ensure OpenAI key does NOT force provider auto-selection to openai
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("KCMT_PROVIDER", "anthropic")
     # Remove cached modules so config re-evaluates env
     for mod in ["kcmt.config", "kcmt.llm"]:
         if mod in sys.modules:

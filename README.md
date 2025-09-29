@@ -74,6 +74,8 @@ Additional environment tweaks remain available:
 - `KLINGON_CMT_LLM_ENDPOINT`
 - `KLINGON_CMT_GIT_REPO_PATH`
 - `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
+- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `.kcmt/config.json`
+  (useful when CI supplies secrets that differ from the persisted repo defaults)
 Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
 fallback subject after repeated LLM failures. This path has been removed;
 kcmt now fails fast with an explicit LLMError so you never get an invented

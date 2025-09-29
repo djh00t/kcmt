@@ -94,3 +94,60 @@ def test_process_deletions_first_stages_deleted(monkeypatch, tmp_path):
     deleted = GitRepo.process_deletions_first(repo)
     assert deleted == ["file1.txt", "dir/file2.py"]
     assert calls == ["file1.txt", "dir/file2.py"]
+
+
+def _make_result(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    class _Result:
+        def __init__(self) -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    return _Result()
+
+
+def test_get_worktree_diff_prefers_head(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [_make_result(stdout="diff from head\n", returncode=1)]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "diff from head\n"
+
+
+def test_get_worktree_diff_falls_back_to_worktree(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [
+        _make_result(stdout="", returncode=0),
+        _make_result(stdout="worktree diff\n", returncode=1),
+    ]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "worktree diff\n"
+
+
+def test_get_worktree_diff_handles_untracked(monkeypatch, tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    results = [
+        _make_result(stdout="", returncode=129),
+        _make_result(stdout="", returncode=0),
+        _make_result(stdout="", returncode=1),
+        _make_result(stdout="no-index diff\n", returncode=1),
+    ]
+
+    def fake_run(*args, **kwargs):
+        return results.pop(0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
+    assert diff == "no-index diff\n"

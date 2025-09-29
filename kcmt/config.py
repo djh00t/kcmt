@@ -158,12 +158,15 @@ def load_config(
     overrides = overrides or {}
     repo_root = _ensure_path(repo_root)
     persisted = load_persisted_config(repo_root)
+    detected = detect_available_providers()
 
-    provider = (
-        overrides.get("provider")
-        or (persisted.provider if persisted else None)
-        or _auto_select_provider()
-    )
+    # Allow lightweight environment overrides without touching the persisted config.
+    provider_from_env = os.environ.get("KCMT_PROVIDER")
+    provider_override = overrides.get("provider") or provider_from_env
+    if persisted and not provider_override:
+        provider = persisted.provider
+    else:
+        provider = provider_override or _auto_select_provider(detected)
     if provider not in DEFAULT_MODELS:
         provider = "openai"
 
@@ -290,8 +293,11 @@ def _select_env_var_for_provider(provider: str) -> Optional[str]:
     return env_matches[0] if env_matches else defaults
 
 
-def _auto_select_provider() -> str:
-    detected = detect_available_providers()
+def _auto_select_provider(
+    detected: Optional[Dict[str, List[str]]] = None,
+) -> str:
+    if detected is None:
+        detected = detect_available_providers()
     for provider in ("openai", "anthropic", "xai", "github"):
         if detected.get(provider):
             return provider
