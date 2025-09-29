@@ -54,14 +54,13 @@ def _reload_with_anthropic(
 
     monkeypatch.setattr(httpx, "post", fake_post)
     import kcmt.llm as llm
+
     importlib.reload(llm)
     return llm
 
 
 def test_anthropic_success(monkeypatch):
-    llm = _reload_with_anthropic(
-        monkeypatch, content="feat(core): improve speed"
-    )
+    llm = _reload_with_anthropic(monkeypatch, content="feat(core): improve speed")
     client = llm.LLMClient()
     msg = client.generate_commit_message("diff --git a b", "ctx")
     assert msg.startswith("feat(")

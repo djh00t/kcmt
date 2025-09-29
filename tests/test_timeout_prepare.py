@@ -34,7 +34,7 @@ def test_per_file_timeout(monkeypatch, tmp_path):
     set_active_config(cfg)
 
     # Monkeypatch CommitGenerator.suggest_commit_message to sleep
-    import kcmt.commit as commit_module  # noqa: WPS433
+    import kcmt.commit as commit_module  # noqa: PLC0415
 
     real_suggest = commit_module.CommitGenerator.suggest_commit_message
 

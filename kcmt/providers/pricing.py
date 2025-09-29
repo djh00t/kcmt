@@ -32,6 +32,24 @@ class _SnapshotState:
 _STATE = _SnapshotState()
 
 
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _normalize_provider(provider: str) -> str:
     p = (provider or "").strip().lower()
     if p in {"openai", "open-ai"}:
@@ -209,9 +227,7 @@ def openrouter_metadata_lookup() -> dict[str, dict[str, object]]:
                     _scale_openrouter_price(pricing.get("completion"))
                 )
                 cached = pricing.get("cached") or pricing.get("cache_read")
-                meta["cache_read_per_mtok"] = _dec(
-                    _scale_openrouter_price(cached)
-                )
+                meta["cache_read_per_mtok"] = _dec(_scale_openrouter_price(cached))
             lut[mid] = meta
         return lut
     except (httpx.HTTPError, ValueError, KeyError, OSError):
@@ -290,8 +306,10 @@ def enrich_ids(provider: str, ids: list[str]) -> dict[str, dict[str, object]]:
             if max_output_tokens is None and candidate in max_out_lut:
                 max_output_tokens = max_out_lut[candidate]
             meta = meta_lut.get(candidate) or {}
-            if total_ctx is None and meta.get("context") is not None:
-                total_ctx = meta.get("context")
+            if total_ctx is None:
+                ctx_value = _coerce_int(meta.get("context"))
+                if ctx_value is not None:
+                    total_ctx = ctx_value
             if prices is None and any(
                 meta.get(key) is not None
                 for key in (

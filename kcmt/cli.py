@@ -13,19 +13,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, cast
 
-_json_encoder = json.encoder
-INFINITY = cast(float, getattr(_json_encoder, "INFINITY"))
-encode_basestring = cast(
-    Callable[[str], str], getattr(_json_encoder, "encode_basestring")
-)
-encode_basestring_ascii = cast(
-    Callable[[str], str], getattr(_json_encoder, "encode_basestring_ascii")
-)
-_make_iterencode = cast(
-    Callable[..., Callable[[Any, int], Iterator[str]]],
-    getattr(_json_encoder, "_make_iterencode"),
-)
-
 from .commit import CommitGenerator
 from .config import (
     DEFAULT_MODELS,
@@ -39,6 +26,19 @@ from .config import (
 from .core import KlingonCMTWorkflow
 from .exceptions import GitError, KlingonCMTError, LLMError
 from .git import GitRepo, find_git_repo_root
+
+_json_encoder = json.encoder
+INFINITY = cast(float, getattr(_json_encoder, "INFINITY"))
+encode_basestring = cast(
+    Callable[[str], str], getattr(_json_encoder, "encode_basestring")
+)
+encode_basestring_ascii = cast(
+    Callable[[str], str], getattr(_json_encoder, "encode_basestring_ascii")
+)
+_make_iterencode = cast(
+    Callable[..., Callable[[Any, int], Iterator[str]]],
+    getattr(_json_encoder, "_make_iterencode"),
+)
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -85,9 +85,7 @@ class DecimalFriendlyJSONEncoder(json.JSONEncoder):
                 if "." not in text:
                     text = f"{text}.0"
             if not allow_nan and text in {"NaN", "Infinity", "-Infinity"}:
-                raise ValueError(
-                    "Out of range float values are not JSON compliant"
-                )
+                raise ValueError("Out of range float values are not JSON compliant")
             return text
 
         _iterencode = _make_iterencode(
@@ -212,9 +210,7 @@ Examples:
         parser.add_argument(
             "--list-models",
             action="store_true",
-            help=(
-                "List available models for each provider using your API keys"
-            ),
+            help=("List available models for each provider using your API keys"),
         )
         parser.add_argument(
             "--allow-fallback",
@@ -235,9 +231,7 @@ Examples:
 
         return parser
 
-    def _profile_print(
-        self, label: str, elapsed_ms: float, extra: str = ""
-    ) -> None:
+    def _profile_print(self, label: str, elapsed_ms: float, extra: str = "") -> None:
         if not self._profile_enabled:
             return
         details = f" {extra}" if extra else ""
@@ -275,26 +269,21 @@ Examples:
             )
 
             requested_path = (
-                Path(parsed_args.repo_path)
-                .expanduser()
-                .resolve(strict=False)
+                Path(parsed_args.repo_path).expanduser().resolve(strict=False)
             )
 
             detected_root: Optional[Path] = None
             with self._profile_timer(
                 "find-git-root",
                 extra=lambda: (
-                    f"found={detected_root}"
-                    if detected_root
-                    else "found=<none>"
+                    f"found={detected_root}" if detected_root else "found=<none>"
                 ),
             ):
                 detected_root = find_git_repo_root(requested_path)
 
             repo_root = (detected_root or requested_path).resolve(strict=False)
             non_interactive = (
-                bool(os.environ.get("PYTEST_CURRENT_TEST"))
-                or not sys.stdin.isatty()
+                bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
             )
 
             # Allow providing the token via CLI for this run
@@ -312,9 +301,7 @@ Examples:
             with self._profile_timer(
                 "load-persisted-config",
                 extra=lambda: (
-                    "result=missing"
-                    if persisted_config is None
-                    else "result=loaded"
+                    "result=missing" if persisted_config is None else "result=loaded"
                 ),
             ):
                 persisted_config = load_persisted_config(repo_root)
@@ -325,11 +312,7 @@ Examples:
                 if non_interactive:
                     with self._profile_timer(
                         "load-config",
-                        extra=lambda: (
-                            f"provider={config.provider}"
-                            if config
-                            else ""
-                        ),
+                        extra=lambda: (f"provider={config.provider}" if config else ""),
                     ):
                         config = load_config(
                             repo_root=repo_root,
@@ -350,15 +333,9 @@ Examples:
             else:
                 with self._profile_timer(
                     "load-config",
-                    extra=lambda: (
-                        f"provider={config.provider}"
-                        if config
-                        else ""
-                    ),
+                    extra=lambda: (f"provider={config.provider}" if config else ""),
                 ):
-                    config = load_config(
-                        repo_root=repo_root, overrides=overrides
-                    )
+                    config = load_config(repo_root=repo_root, overrides=overrides)
 
             if not persisted_config:
                 refreshed_cfg: Optional[Config] = None
@@ -378,8 +355,7 @@ Examples:
                 should_persist = True
             else:
                 if config.auto_push and (
-                    not persisted_cfg
-                    or not getattr(persisted_cfg, "auto_push", False)
+                    not persisted_cfg or not getattr(persisted_cfg, "auto_push", False)
                 ):
                     should_persist = True
                 if config.allow_fallback and (
@@ -397,9 +373,8 @@ Examples:
             if not config.resolve_api_key():
                 # Allow tests that explicitly pass --api-key-env but don't
                 # exercise LLM paths (monkeypatched workflow) to proceed.
-                if (
-                    os.environ.get("PYTEST_CURRENT_TEST")
-                    and getattr(parsed_args, "api_key_env", None)
+                if os.environ.get("PYTEST_CURRENT_TEST") and getattr(
+                    parsed_args, "api_key_env", None
                 ):
                     self._print_warning(
                         "Proceeding without API key (test mode, explicit "
@@ -453,31 +428,23 @@ Examples:
         if args.max_commit_length is not None:
             overrides["max_commit_length"] = str(args.max_commit_length)
         if args.repo_path:
-            overrides["repo_path"] = str(
-                repo_root.expanduser().resolve(strict=False)
-            )
+            overrides["repo_path"] = str(repo_root.expanduser().resolve(strict=False))
         if getattr(args, "allow_fallback", False):
             overrides["allow_fallback"] = "1"
         if getattr(args, "auto_push", False):
             overrides["auto_push"] = "1"
         return overrides
 
-    def _run_configuration(
-        self, args: argparse.Namespace, repo_root: Path
-    ) -> int:
+    def _run_configuration(self, args: argparse.Namespace, repo_root: Path) -> int:
         detected = detect_available_providers()
-        provider = (args.provider or self._prompt_provider(detected))
+        provider = args.provider or self._prompt_provider(detected)
 
         provider_meta = DEFAULT_MODELS[provider]
-        model = args.model or self._prompt_model(
-            provider, provider_meta["model"]
-        )
+        model = args.model or self._prompt_model(provider, provider_meta["model"])
         endpoint = args.endpoint or self._prompt_endpoint(
             provider, provider_meta["endpoint"]
         )
-        api_key_env = args.api_key_env or self._prompt_api_key_env(
-            provider, detected
-        )
+        api_key_env = args.api_key_env or self._prompt_api_key_env(provider, detected)
 
         config = Config(
             provider=provider,
@@ -498,14 +465,8 @@ Examples:
     def _prompt_provider(self, detected: dict[str, list[str]]) -> str:
         self._print_heading("Select provider")
         for idx, name in enumerate(sorted(DEFAULT_MODELS.keys()), start=1):
-            badge = (
-                GREEN + "●" + RESET
-                if detected.get(name)
-                else YELLOW + "○" + RESET
-            )
-            print(
-                f"  {idx}. {badge} {describe_provider(name)}"
-            )
+            badge = GREEN + "●" + RESET if detected.get(name) else YELLOW + "○" + RESET
+            print(f"  {idx}. {badge} {describe_provider(name)}")
 
         while True:
             choice = input(
@@ -516,32 +477,30 @@ Examples:
             if choice.isdigit() and 1 <= int(choice) <= len(DEFAULT_MODELS):
                 provider = sorted(DEFAULT_MODELS.keys())[int(choice) - 1]
                 if not detected.get(provider):
-                    confirm = input(
-                        f"{YELLOW}No keys detected for {provider}. Continue?"
-                        f" [y/N]{RESET} "
-                    ).strip().lower()
+                    confirm = (
+                        input(
+                            f"{YELLOW}No keys detected for {provider}. Continue?"
+                            f" [y/N]{RESET} "
+                        )
+                        .strip()
+                        .lower()
+                    )
                     if confirm not in {"y", "yes"}:
                         continue
                 return provider
             self._print_warning("Invalid selection. Please choose again.")
 
     def _prompt_model(self, provider: str, default_model: str) -> str:
-        prompt = (
-            f"{MAGENTA}Model for {provider}{RESET} [{default_model}]: "
-        )
+        prompt = f"{MAGENTA}Model for {provider}{RESET} [{default_model}]: "
         response = input(prompt).strip()
         return response or default_model
 
     def _prompt_endpoint(self, provider: str, default_endpoint: str) -> str:
-        prompt = (
-            f"{MAGENTA}Endpoint for {provider}{RESET} [{default_endpoint}]: "
-        )
+        prompt = f"{MAGENTA}Endpoint for {provider}{RESET} [{default_endpoint}]: "
         response = input(prompt).strip()
         return response or default_endpoint
 
-    def _prompt_api_key_env(
-        self, provider: str, detected: dict[str, list[str]]
-    ) -> str:
+    def _prompt_api_key_env(self, provider: str, detected: dict[str, list[str]]) -> str:
         matches = detected.get(provider, [])
         if not matches:
             default_env = DEFAULT_MODELS[provider]["api_key_env"]
@@ -552,15 +511,9 @@ Examples:
             response = input(prompt).strip()
             return response or default_env
 
-        self._print_heading(
-            "Select API key environment variable"
-        )
+        self._print_heading("Select API key environment variable")
         for idx, env_key in enumerate(matches, start=1):
-            marker = (
-                GREEN + "●" + RESET
-                if env_key in os.environ
-                else RED + "●" + RESET
-            )
+            marker = GREEN + "●" + RESET if env_key in os.environ else RED + "●" + RESET
             suffix = " (missing)" if env_key not in os.environ else ""
             print(f"  {idx}. {marker} {env_key}{suffix}")
         print(f"  {len(matches) + 1}. {CYAN}Enter a different variable{RESET}")
@@ -579,22 +532,18 @@ Examples:
                     break
             self._print_warning("Invalid selection. Try again.")
 
-        entered = input(
-            f"{MAGENTA}Enter environment variable name{RESET}: "
-        ).strip()
+        entered = input(f"{MAGENTA}Enter environment variable name{RESET}: ").strip()
         return entered or DEFAULT_MODELS[provider]["api_key_env"]
 
     # ------------------------------------------------------------------
     # Execution modes
     # ------------------------------------------------------------------
-    def _execute_workflow(
-        self, args: argparse.Namespace, config: Config
-    ) -> int:
+    def _execute_workflow(self, args: argparse.Namespace, config: Config) -> int:
         self._print_info(f"Provider: {config.provider}")
         self._print_info(f"Model: {config.model}")
         self._print_info(f"Endpoint: {config.llm_endpoint}")
         self._print_info(f"Max retries: {args.max_retries}")
-        if hasattr(args, 'limit') and args.limit:
+        if hasattr(args, "limit") and args.limit:
             self._print_info(f"File limit: {args.limit}")
         self._print_info("")
 
@@ -618,7 +567,8 @@ Examples:
         filtered_kwargs = {
             key: value
             for key, value in raw_kwargs.items()
-            if key in signature.parameters and (value is not None or key != "file_limit")
+            if key in signature.parameters
+            and (value is not None or key != "file_limit")
         }
 
         with self._profile_timer("init-workflow", extra=_wf_extra):
@@ -640,9 +590,7 @@ Examples:
         self._display_results(results, args.verbose)
         return 0
 
-    def _execute_oneshot(
-        self, args: argparse.Namespace, config: Config
-    ) -> int:
+    def _execute_oneshot(self, args: argparse.Namespace, config: Config) -> int:
         repo = GitRepo(config.git_repo_path, config)
         entries = repo.list_changed_files()
 
@@ -701,6 +649,7 @@ Examples:
                 try:
                     from .providers.pricing import build_enrichment_context as _bctx
                     from .providers.pricing import enrich_ids as _enrich
+
                     alias_lut, _ctx, _mx = _bctx()
                     ids: list[str] = []
                     seen: set[str] = set()
@@ -713,22 +662,12 @@ Examples:
                                 seen.add(candidate)
                     # Apply provider-specific filters for CLI fallback
                     if prov == "openai":
-                        ids = [
-                            mm
-                            for mm in ids
-                            if OpenAIDriver.is_allowed_model_id(mm)
-                        ]
+                        ids = [mm for mm in ids if OpenAIDriver.is_allowed_model_id(mm)]
                     elif prov == "xai":
-                        ids = [
-                            mm
-                            for mm in ids
-                            if XAIDriver.is_allowed_model_id(mm)
-                        ]
+                        ids = [mm for mm in ids if XAIDriver.is_allowed_model_id(mm)]
                     elif prov == "anthropic":
                         ids = [
-                            mm
-                            for mm in ids
-                            if AnthropicDriver.is_allowed_model_id(mm)
+                            mm for mm in ids if AnthropicDriver.is_allowed_model_id(mm)
                         ]
                     try:
                         emap = _enrich(prov, ids)
@@ -747,8 +686,7 @@ Examples:
                             if getattr(args, "debug", False):
                                 print(
                                     "DEBUG(CLI:list-models): skipping %s/%s "
-                                    "due to missing pricing"
-                                    % (prov, mid)
+                                    "due to missing pricing" % (prov, mid)
                                 )
                             continue
                         payload = dict(em)
@@ -781,9 +719,7 @@ Examples:
         )
         return 0
 
-    def _execute_single_file(
-        self, args: argparse.Namespace, config: Config
-    ) -> int:
+    def _execute_single_file(self, args: argparse.Namespace, config: Config) -> int:
         file_path = args.single_file
         repo = GitRepo(config.git_repo_path, config)
 
@@ -804,7 +740,7 @@ Examples:
             style="conventional",
         )
         msg = gen.validate_and_fix_commit_message(msg)
-        
+
         repo.commit(msg)
         recent = repo.get_recent_commits(1)
         commit_hash = recent[0].split()[0] if recent else None
@@ -814,7 +750,7 @@ Examples:
         self._print_info(f"  {msg}")
         if commit_hash:
             self._print_info(f"  {commit_hash[:8]}")
-        
+
         return 0
 
     # ------------------------------------------------------------------
@@ -823,8 +759,7 @@ Examples:
     def _print_banner(self, config: Config) -> None:
         repo = Path(config.git_repo_path).resolve()
         banner = (
-            f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo "
-            f"{repo}{RESET}"
+            f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo " f"{repo}{RESET}"
         )
         print(banner)
 
@@ -868,18 +803,12 @@ Examples:
             successful_commits = [r for r in file_commits if r.success]
             failed_commits = [r for r in file_commits if not r.success]
             if successful_commits:
-                self._print_success(
-                    f"✓ Committed {len(successful_commits)} file(s)"
-                )
+                self._print_success(f"✓ Committed {len(successful_commits)} file(s)")
             if failed_commits:
-                self._print_warning(
-                    f"✗ Failed to commit {len(failed_commits)} file(s)"
-                )
+                self._print_warning(f"✗ Failed to commit {len(failed_commits)} file(s)")
                 for result in failed_commits:
-                    if hasattr(result, 'file_path') and result.file_path:
-                        self._print_error(
-                            f"  {result.file_path}: {result.error}"
-                        )
+                    if hasattr(result, "file_path") and result.file_path:
+                        self._print_error(f"  {result.file_path}: {result.error}")
                     else:
                         self._print_error(f"  {result.error}")
 

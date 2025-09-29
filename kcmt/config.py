@@ -190,7 +190,9 @@ def load_config(
     # Only reuse persisted endpoint if it's for the same provider; otherwise
     # select from environment or provider defaults.
     persisted_endpoint = (
-        persisted.llm_endpoint if (persisted and persisted.provider == provider) else None
+        persisted.llm_endpoint
+        if (persisted and persisted.provider == provider)
+        else None
     )
     endpoint = (
         overrides.get("endpoint")
@@ -210,17 +212,17 @@ def load_config(
         or _select_env_var_for_provider(provider)
     )
 
-    git_repo_path_raw = overrides.get("repo_path") or os.environ.get(
-        "KLINGON_CMT_GIT_REPO_PATH"
-    ) or (persisted.git_repo_path if persisted else str(repo_root))
+    git_repo_path_raw = (
+        overrides.get("repo_path")
+        or os.environ.get("KLINGON_CMT_GIT_REPO_PATH")
+        or (persisted.git_repo_path if persisted else str(repo_root))
+    )
 
     git_repo_candidate = Path(git_repo_path_raw).expanduser()
     if git_repo_candidate.is_absolute():
         git_repo_candidate = git_repo_candidate.resolve(strict=False)
     else:
-        git_repo_candidate = (repo_root / git_repo_candidate).resolve(
-            strict=False
-        )
+        git_repo_candidate = (repo_root / git_repo_candidate).resolve(strict=False)
     git_repo_path = str(git_repo_candidate)
 
     max_commit_length = int(

@@ -6,6 +6,7 @@ def _client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-key")
     clear_active_config()
     cfg = load_config(overrides={"provider": "openai"})
+
     # Stub OpenAI network client minimal
     class _Dummy:
         class chat:  # type: ignore
@@ -17,7 +18,9 @@ def _client(monkeypatch):
                             self.message = type(
                                 "M", (), {"content": "feat(core): add thing"}
                             )
+
                     return type("R", (), {"choices": [_C()]})
+
     monkeypatch.setattr("kcmt.llm.OpenAI", lambda base_url, api_key: _Dummy())
     return LLMClient(config=cfg)
 
@@ -27,9 +30,7 @@ def test_subject_enforcement(monkeypatch):
     long_subject = "feat(core): " + ("x" * 120)
     # Access internal helper intentionally to assert subject shortening.
     adjusted = c._enforce_subject_length(long_subject)  # noqa: SLF001
-    assert (
-        len(adjusted.splitlines()[0]) <= c.config.max_commit_length + 1
-    )  # ellipsis
+    assert len(adjusted.splitlines()[0]) <= c.config.max_commit_length + 1  # ellipsis
 
 
 def test_wrap_body(monkeypatch):
@@ -55,4 +56,3 @@ def test_minimal_and_large_and_binary(monkeypatch):
         "conventional",
     )
     assert binary.startswith("feat(")
-    

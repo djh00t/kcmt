@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import os
 import re
+from types import ModuleType
 from typing import Any, Callable
-
-# Optional dependency: import module, not symbols, for easier test stubbing
-try:  # pragma: no cover - optional import
-    import openai as _openai
-except Exception:  # pragma: no cover
-    _openai = None
 
 import httpx
 
 from kcmt.config import Config
 from kcmt.exceptions import LLMError
 from kcmt.providers.base import BaseDriver
+
+# Optional dependency: import module, not symbols, for easier test stubbing
+_openai: ModuleType | None
+try:  # pragma: no cover - optional import
+    import openai as _openai
+except Exception:  # pragma: no cover
+    _openai = None
 
 
 class OpenAIDriver(BaseDriver):
@@ -68,9 +70,7 @@ class OpenAIDriver(BaseDriver):
             raise LLMError("OpenAI SDK not available")
         max_tokens_env = os.environ.get("KCMT_OPENAI_MAX_TOKENS")
         try:
-            self._max_completion_tokens = (
-                int(max_tokens_env) if max_tokens_env else 512
-            )
+            self._max_completion_tokens = int(max_tokens_env) if max_tokens_env else 512
         except ValueError:
             self._max_completion_tokens = 512
         self._minimal_prompt = False  # orchestrator can flip; kept for compat
@@ -84,10 +84,7 @@ class OpenAIDriver(BaseDriver):
 
         if self.debug:
             print("DEBUG(Driver:OpenAI): invoke")
-            print(
-                f"  model={model} token_param={token_param} "
-                f"value={max_tokens}"
-            )
+            print(f"  model={model} token_param={token_param} " f"value={max_tokens}")
             print(f"  minimal_prompt={self._minimal_prompt}")
 
         # Prepare kwargs; for gpt-5 try once WITHOUT token limit first
@@ -101,9 +98,7 @@ class OpenAIDriver(BaseDriver):
             base_kwargs[token_param] = max_tokens
 
         def _call_with_kwargs(k: dict[str, Any]) -> Any:
-            create_fn = (
-                self._client.chat.completions.create
-            )
+            create_fn = self._client.chat.completions.create
             return create_fn(**k)
 
         try:
@@ -111,17 +106,10 @@ class OpenAIDriver(BaseDriver):
             resp = _call_with_kwargs(base_kwargs)
         except Exception as e:  # noqa: BLE001 - broadened to support stubs
             msg = str(e)
-            if (
-                (not is_gpt5)
-                and "Unsupported parameter" in msg
-                and "max_tokens" in msg
-            ):
+            if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 # Some servers only accept max_completion_tokens
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): fallback to "
-                        "max_completion_tokens"
-                    )
+                    print("DEBUG(Driver:OpenAI): fallback to " "max_completion_tokens")
                 base_kwargs.pop("max_tokens", None)
                 base_kwargs["max_completion_tokens"] = max_tokens
                 resp = _call_with_kwargs(base_kwargs)
@@ -146,9 +134,7 @@ class OpenAIDriver(BaseDriver):
                         txt = part.get("text") or part.get("content") or ""
                         fragments.append(str(txt))
                     else:  # object with .text maybe
-                        txt = getattr(part, "text", "") or getattr(
-                            part, "content", ""
-                        )
+                        txt = getattr(part, "text", "") or getattr(part, "content", "")
                         if txt:
                             fragments.append(str(txt))
                 content = "".join(fragments).strip()
@@ -198,16 +184,10 @@ class OpenAIDriver(BaseDriver):
                     pass
             except (ValueError, RuntimeError) as err:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): token-limited retry error "
-                        + str(err)
-                    )
+                    print("DEBUG(Driver:OpenAI): token-limited retry error " + str(err))
             if not content:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): attempting responses API "
-                        "fallback"
-                    )
+                    print("DEBUG(Driver:OpenAI): attempting responses API " "fallback")
             # Combine messages into single prompt (preserve system parts)
             system_parts: list[str] = []
             user_parts: list[str] = []
@@ -221,14 +201,10 @@ class OpenAIDriver(BaseDriver):
                 else:
                     user_parts.append(str(c))
             combined_input = (
-                ("\n\n".join(system_parts).strip() + "\n\n")
-                if system_parts
-                else ""
+                ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
             ) + "\n\n".join(user_parts)
             try:
-                resp_create = (
-                    self._client.responses.create
-                )
+                resp_create = self._client.responses.create
                 resp_alt = resp_create(
                     model=model,
                     input=combined_input,
@@ -280,10 +256,7 @@ class OpenAIDriver(BaseDriver):
                     msg = str(resp_err)
                     if len(msg) > 200:
                         msg = msg[:200] + "…"
-                    print(
-                        "DEBUG(Driver:OpenAI): responses fallback error "
-                        + msg
-                    )
+                    print("DEBUG(Driver:OpenAI): responses fallback error " + msg)
 
         # Adaptive strategies
         if not content and finish_reason == "length":
@@ -346,10 +319,7 @@ class OpenAIDriver(BaseDriver):
                             pass
                     except (ValueError, RuntimeError) as retry_err:
                         if self.debug:
-                            print(
-                                "DEBUG(Driver:OpenAI): retry error "
-                                f"{retry_err}"
-                            )
+                            print("DEBUG(Driver:OpenAI): retry error " f"{retry_err}")
                         # fall through; content still empty -> final raise
 
             if not content:
@@ -395,9 +365,7 @@ class OpenAIDriver(BaseDriver):
         headers = {"Authorization": f"Bearer {key}"}
         items: list[Any] = []
         try:
-            resp = httpx.get(
-                url, headers=headers, timeout=self._request_timeout
-            )
+            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
@@ -450,9 +418,8 @@ class OpenAIDriver(BaseDriver):
                         if not mm or mm in seen:
                             continue
                         # Apply same filters as remote path
-                        if (
-                            self._DATE_YMD_RE.search(mm)
-                            or self._MD_SUFFIX_RE.search(mm)
+                        if self._DATE_YMD_RE.search(mm) or self._MD_SUFFIX_RE.search(
+                            mm
                         ):
                             continue
                         if self._contains_disallowed_string(mm):
@@ -492,8 +459,7 @@ class OpenAIDriver(BaseDriver):
                 if self.debug:
                     print(
                         "DEBUG(Driver:OpenAI): skipping %s due to missing "
-                        "pricing"
-                        % mid
+                        "pricing" % mid
                     )
                 continue
             payload = dict(em)
@@ -503,9 +469,7 @@ class OpenAIDriver(BaseDriver):
 
     # Alias/date filters
     _DATE_YMD_RE = re.compile(r"20\d{2}(?:-\d{2}){1,2}")
-    _MD_SUFFIX_RE = re.compile(
-        r"-(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])($|[^0-9])"
-    )
+    _MD_SUFFIX_RE = re.compile(r"-(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])($|[^0-9])")
 
     # Families/strings to exclude anywhere in the id (wildcards semantics)
     DISALLOWED_STRINGS: list[str] = [
@@ -587,7 +551,7 @@ class OpenAIDriver(BaseDriver):
     def list_filtered_alias_models(self) -> list[dict[str, object]]:
         """Alias models limited to known families/prefixes.
 
-    Combines the date-token alias filter with DISALLOWED_STRINGS.
+        Combines the date-token alias filter with DISALLOWED_STRINGS.
         """
         alias_models = self.list_alias_models()
         out: list[dict[str, object]] = []
@@ -602,16 +566,13 @@ class OpenAIDriver(BaseDriver):
     def is_allowed_model_id(cls, model_id: str) -> bool:
         """Public helper to evaluate if a model id should be shown.
 
-        Applies the same rules as list_models():
-        - filters out date-like ids (year-month[-day], monthday suffix)
-    - filters out ids containing disallowed strings/families
+            Applies the same rules as list_models():
+            - filters out date-like ids (year-month[-day], monthday suffix)
+        - filters out ids containing disallowed strings/families
         """
         if not model_id:
             return False
-        if (
-            cls._DATE_YMD_RE.search(model_id)
-            or cls._MD_SUFFIX_RE.search(model_id)
-        ):
+        if cls._DATE_YMD_RE.search(model_id) or cls._MD_SUFFIX_RE.search(model_id):
             return False
         if cls._contains_disallowed_string(model_id):
             return False

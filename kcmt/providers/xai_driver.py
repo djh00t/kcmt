@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import httpx
-
 from typing import Any
+
+import httpx
 
 from kcmt.providers.openai_driver import OpenAIDriver
 
@@ -14,6 +14,7 @@ from kcmt.providers.openai_driver import OpenAIDriver
 
 class XAIDriver(OpenAIDriver):
     """Alias driver for XAI/Grok style API (OpenAI-compatible)."""
+
     # Wildcard-style strings to exclude anywhere in model id
     DISALLOWED_STRINGS: list[str] = [
         "grok-2-",
@@ -30,9 +31,7 @@ class XAIDriver(OpenAIDriver):
         ids: list[str] = []
         items: list[Any] = []
         try:
-            resp = httpx.get(
-                url, headers=headers, timeout=self._request_timeout
-            )
+            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
@@ -78,9 +77,7 @@ class XAIDriver(OpenAIDriver):
                             continue
                         for candidate in (str(canon), str(mid)):
                             if candidate and candidate not in seen:
-                                out.append(
-                                    {"id": candidate, "owned_by": "xai"}
-                                )
+                                out.append({"id": candidate, "owned_by": "xai"})
                                 ids.append(candidate)
                                 seen.add(candidate)
                     if len(out) > 200:
@@ -110,9 +107,7 @@ class XAIDriver(OpenAIDriver):
             if not em or not em.get("_has_pricing", False):
                 if self.debug:
                     print(
-                        "DEBUG(Driver:XAI): skipping %s due to missing "
-                        "pricing"
-                        % mid
+                        "DEBUG(Driver:XAI): skipping %s due to missing " "pricing" % mid
                     )
                 continue
             payload = dict(em)

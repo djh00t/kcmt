@@ -54,8 +54,7 @@ class AnthropicDriver(BaseDriver):
                             "type": "text",
                             "text": (
                                 "Generate a conventional commit "
-                                "message diff.\n"
-                                + prompt
+                                "message diff.\n" + prompt
                             ),
                         }
                     ],
@@ -104,9 +103,7 @@ class AnthropicDriver(BaseDriver):
             "anthropic-version": "2023-06-01",
         }
         try:
-            resp = httpx.get(
-                url, headers=headers, timeout=self._request_timeout
-            )
+            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"Anthropic list_models failed: {e}") from e

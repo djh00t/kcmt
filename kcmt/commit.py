@@ -47,9 +47,7 @@ class CommitGenerator:
             ValidationError: If no staged changes are found.
         """
         if not self.git_repo.has_staged_changes():
-            raise ValidationError(
-                "No staged changes found. Stage your changes first."
-            )
+            raise ValidationError("No staged changes found. Stage your changes first.")
 
         diff = self.git_repo.get_staged_diff()
         return self.llm_client.generate_commit_message(diff, context, style)
@@ -120,18 +118,14 @@ class CommitGenerator:
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             if self.debug:
-                truncated_ctx = (
-                    context[:120] + '…' if len(context) > 120 else context
-                )
+                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
                 print(
                     "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
                         attempt, len(diff), truncated_ctx
                     )
                 )
             try:
-                msg = self.llm_client.generate_commit_message(
-                    diff, context, style
-                )
+                msg = self.llm_client.generate_commit_message(diff, context, style)
                 if not msg or not msg.strip():
                     raise LLMError("LLM returned empty response")
                 # Validate format; if invalid, try again (unless final)
@@ -140,16 +134,14 @@ class CommitGenerator:
                         invalid_header = msg.splitlines()[0][:120]
                         print(
                             (
-                                "DEBUG: commit.invalid_format attempt={} "
-                                "msg='{}'"
+                                "DEBUG: commit.invalid_format attempt={} " "msg='{}'"
                             ).format(attempt, invalid_header)
                         )
                     if attempt < max_attempts:
                         continue
                     raise LLMError(
                         (
-                            "LLM produced invalid commit message after {} "
-                            "attempts"
+                            "LLM produced invalid commit message after {} " "attempts"
                         ).format(max_attempts)
                     )
                 if self.debug:
@@ -174,8 +166,7 @@ class CommitGenerator:
             return self.llm_client.heuristic_minimal(context, style)
         raise LLMError(
             (
-                "LLM unavailable or invalid output after {} attempts; "
-                "commit aborted"
+                "LLM unavailable or invalid output after {} attempts; " "commit aborted"
             ).format(max_attempts)
         ) from last_error
 
@@ -226,6 +217,5 @@ class CommitGenerator:
             pass
 
         raise ValidationError(
-            "Commit message does not follow conventional commit format: "
-            f"{message}"
+            "Commit message does not follow conventional commit format: " f"{message}"
         )

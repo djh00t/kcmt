@@ -13,20 +13,22 @@ from __future__ import annotations
 
 import os
 import re
+from types import ModuleType
 from typing import Any, Optional, cast
 
 from .config import Config, get_active_config
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
+from .providers.base import BaseDriver
 
 # Driver imports (new provider-specific architecture)
 from .providers.openai_driver import OpenAIDriver
 from .providers.xai_driver import XAIDriver
-from .providers.base import BaseDriver
 
 # Compatibility shim for older tests that expect kcmt.llm.OpenAI
 # to be available for monkeypatching. We avoid importing openai at
 # module import time unless necessary.
+_openai: ModuleType | None
 try:  # pragma: no cover - test scaffolding
     import openai as _openai
 except Exception:  # pragma: no cover - if openai not installed
@@ -52,9 +54,7 @@ class OpenAI:  # noqa: D401
 class LLMClient:
     """Provider-aware client for generating commit messages."""
 
-    def __init__(
-        self, config: Optional[Config] = None, debug: bool = False
-    ) -> None:
+    def __init__(self, config: Optional[Config] = None, debug: bool = False) -> None:
         self.debug = debug
         if debug:
             print(f"DEBUG: LLMClient initialized with debug={debug}")
@@ -68,11 +68,7 @@ class LLMClient:
             if "PYTEST_CURRENT_TEST" in os.environ:
                 self.api_key = "DUMMY_TEST_KEY"
                 if debug:
-                    print(
-                        "DEBUG: Using dummy key for {} (tests)".format(
-                            self.provider
-                        )
-                    )
+                    print("DEBUG: Using dummy key for {} (tests)".format(self.provider))
             else:
                 raise LLMError(
                     "Environment variable '"
@@ -83,9 +79,7 @@ class LLMClient:
         # Per-request timeout (seconds) configurable; default 60s.
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
         try:
-            self._request_timeout = (
-                float(timeout_env) if timeout_env else 60.0
-            )
+            self._request_timeout = float(timeout_env) if timeout_env else 60.0
         except ValueError:
             self._request_timeout = 60.0
 
@@ -134,7 +128,7 @@ class LLMClient:
             print(f"  Diff length: {len(diff)} characters")
             print(f"  Context: {context}")
             print(f"  Provider: {self.provider}")
-        
+
         # Heuristic early-exits for special cases expected by tests and UX:
         # 1) Very small diffs -> minimal commit without hitting the API
         if len(diff.strip()) < 10:
@@ -142,10 +136,8 @@ class LLMClient:
         # 2) Very large diffs -> generate deterministic message based on
         #    file type to avoid oversized prompts and flakiness
         if len(diff) > 8000:
-            return self._generate_large_file_commit_message(
-                diff, context, style
-            )
-        
+            return self._generate_large_file_commit_message(diff, context, style)
+
         # Handle binary files (but NEVER treat known text files as binary)
         file_path_hint = ""
         if context and "File:" in context:
@@ -159,7 +151,7 @@ class LLMClient:
                     "commit message"
                 )
             return self._generate_binary_commit_message(diff, context, style)
-        
+
         # Clean up diff and apply truncation if too large for prompt budgets
         if len(diff) > 12000:
             # Keep head and tail to provide context while limiting size
@@ -170,10 +162,8 @@ class LLMClient:
             diff_for_prompt = diff
         cleaned_diff = self._clean_diff_for_llm(diff_for_prompt)
         if self.debug:
-            print(
-                f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters"
-            )
-        
+            print(f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters")
+
         prompt = self._build_prompt(cleaned_diff, context, style)
 
         if self._mode == "openai":
@@ -204,13 +194,9 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 elif self.debug:
-                    print(
-                        "DEBUG: minimal_prompt suppressed (gpt-5 model)"
-                    )
+                    print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
                 retry_raw = self._call_openai(prompt)
-                sanitized = self._sanitize_commit_output(
-                    retry_raw.strip(), context
-                )
+                sanitized = self._sanitize_commit_output(retry_raw.strip(), context)
             else:
                 raise
 
@@ -226,15 +212,9 @@ class LLMClient:
         ):
             if self.debug:
                 print(
-                    "DEBUG: enrichment.trigger changed_lines={}".format(
-                        changed_lines
-                    )
+                    "DEBUG: enrichment.trigger changed_lines={}".format(changed_lines)
                 )
-                print(
-                    "DEBUG: enrichment.header '{}...'".format(
-                        sanitized[:60]
-                    )
-                )
+                print("DEBUG: enrichment.header '{}...'".format(sanitized[:60]))
             enriched = self._enrich_with_body(
                 header=sanitized.splitlines()[0],
                 diff=cleaned_diff,
@@ -243,16 +223,10 @@ class LLMClient:
             if (
                 enriched
                 and enriched.strip()
-                and enriched.splitlines()[0].startswith(
-                    sanitized.splitlines()[0]
-                )
+                and enriched.splitlines()[0].startswith(sanitized.splitlines()[0])
             ):
                 if self.debug:
-                    print(
-                        "DEBUG: enrichment.success length={}".format(
-                            len(enriched)
-                        )
-                    )
+                    print("DEBUG: enrichment.success length={}".format(len(enriched)))
                 sanitized = enriched
             elif self.debug:
                 print("DEBUG: enrichment.skip (no improvement)")
@@ -266,11 +240,7 @@ class LLMClient:
                     )
                 )
             else:
-                print(
-                    "DEBUG: sanitize.header unchanged '{}'".format(
-                        raw_first[:120]
-                    )
-                )
+                print("DEBUG: sanitize.header unchanged '{}'".format(raw_first[:120]))
 
         # Post-process: enforce subject line length only, then wrap body.
         processed = self._enforce_subject_length(sanitized)
@@ -282,10 +252,7 @@ class LLMClient:
             print(f"  Final length: {len(processed)}")
             if raw_message != processed:
                 print(
-                    (
-                        "  Differences were applied (subject enforcement /"
-                        " wrapping)."
-                    )
+                    ("  Differences were applied (subject enforcement /" " wrapping).")
                 )
             else:
                 print("  No changes applied to raw model output.")
@@ -302,9 +269,7 @@ class LLMClient:
     # ------------------------------------------------------------------
     # Public helpers to expose heuristic generators (used by workflow when
     # allow_fallback is enabled or for pre-LLM short-circuits in tests)
-    def heuristic_minimal(
-        self, context: str, style: str = "conventional"
-    ) -> str:
+    def heuristic_minimal(self, context: str, style: str = "conventional") -> str:
         return self._generate_minimal_commit_message(context, style)
 
     def heuristic_large(
@@ -348,9 +313,7 @@ class LLMClient:
                     messages,
                     minimal_ok=False,
                 )
-            elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith(
-                "gpt-5"
-            ):
+            elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
                     print(
                         "DEBUG: driver signalled simplified prompt retry; "
@@ -374,9 +337,7 @@ class LLMClient:
 
     def _call_anthropic(self, prompt: str) -> str:
         if self._mode != "anthropic":  # defensive
-            raise LLMError(
-                "_call_anthropic invoked for non-anthropic provider"
-            )
+            raise LLMError("_call_anthropic invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
         return driver.invoke(prompt)
 
@@ -399,9 +360,8 @@ class LLMClient:
             "",  # blank line
             "Return only the commit message.",
         ]
-        if (
-            getattr(self, "_minimal_prompt", False)
-            and not self.model.startswith("gpt-5")
+        if getattr(self, "_minimal_prompt", False) and not self.model.startswith(
+            "gpt-5"
         ):
             system_lines = [
                 "You output a single concise conventional commit message.",
@@ -458,9 +418,7 @@ class LLMClient:
                 ]
             )
         elif style == "simple":
-            prompt_parts.extend(
-                ["", "Keep it simple but include mandatory scope."]
-            )
+            prompt_parts.extend(["", "Keep it simple but include mandatory scope."])
         prompt_parts.append("")
         prompt_parts.append("Analyze the changes carefully and be specific.")
         return "\n".join(prompt_parts)
@@ -485,17 +443,51 @@ class LLMClient:
         if not file_path:
             return False
         text_exts = {
-            ".py", ".pyi", ".pyx", ".pxd",
-            ".js", ".ts", ".jsx", ".tsx",
-            ".css", ".scss", ".sass", ".less",
-            ".html", ".htm", ".xml",
-            ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-            ".md", ".rst", ".txt",
-            ".csv", ".tsv",
-            ".java", ".c", ".cpp", ".h", ".hpp",
-            ".go", ".rs", ".rb", ".php",
-            ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
-            ".gradle", ".make", ".mk", ".cmake",
+            ".py",
+            ".pyi",
+            ".pyx",
+            ".pxd",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".css",
+            ".scss",
+            ".sass",
+            ".less",
+            ".html",
+            ".htm",
+            ".xml",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".ini",
+            ".cfg",
+            ".md",
+            ".rst",
+            ".txt",
+            ".csv",
+            ".tsv",
+            ".java",
+            ".c",
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".go",
+            ".rs",
+            ".rb",
+            ".php",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".ps1",
+            ".bat",
+            ".cmd",
+            ".gradle",
+            ".make",
+            ".mk",
+            ".cmake",
         }
         lower = file_path.lower()
         for ext in text_exts:
@@ -600,13 +592,13 @@ class LLMClient:
         if len(subject) <= max_len:
             return message
         # Find last space before limit to avoid mid-word cut
-        cutoff = subject.rfind(' ', 0, max_len)
+        cutoff = subject.rfind(" ", 0, max_len)
         # fall back to hard cut if no good space
         if cutoff == -1 or cutoff < max_len * 0.6:
             cutoff = max_len - 1
-        shortened = subject[:cutoff].rstrip() + '…'
+        shortened = subject[:cutoff].rstrip() + "…"
         lines[0] = shortened
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     def _wrap_body(self, message: str, width: int = 72) -> str:
         """Wrap body lines (after the first blank separator) to given width.
@@ -621,19 +613,19 @@ class LLMClient:
         # Identify body start: first blank line after subject
         body_start = None
         for i in range(1, len(lines)):
-            if lines[i].strip() == '':
+            if lines[i].strip() == "":
                 body_start = i + 1
                 break
         if body_start is None or body_start >= len(lines):
             return message  # no body
         body = lines[body_start:]
         wrapped_body: list[str] = []
-        for paragraph in '\n'.join(body).split('\n\n'):
+        for paragraph in "\n".join(body).split("\n\n"):
             if not paragraph.strip():
-                wrapped_body.append('')
+                wrapped_body.append("")
                 continue
             # Skip wrapping code blocks or diff-like fenced blocks
-            if paragraph.strip().startswith('```'):
+            if paragraph.strip().startswith("```"):
                 wrapped_body.append(paragraph)
                 continue
             # Wrap only lines that exceed width
@@ -641,12 +633,12 @@ class LLMClient:
                 paragraph, width=width, drop_whitespace=True
             ):
                 wrapped_body.append(wrapped_line)
-            wrapped_body.append('')  # preserve paragraph break
+            wrapped_body.append("")  # preserve paragraph break
         # Remove trailing blank introduced
-        if wrapped_body and wrapped_body[-1] == '':
+        if wrapped_body and wrapped_body[-1] == "":
             wrapped_body.pop()
         new_lines = lines[:body_start] + wrapped_body
-        return '\n'.join(new_lines)
+        return "\n".join(new_lines)
 
     def _generate_large_file_commit_message(
         self, diff: str, context: str, _style: str
@@ -656,27 +648,25 @@ class LLMClient:
         file_path = ""
         if context and "File:" in context:
             file_path = context.split("File:", 1)[1].strip()
-        
+
         # Determine appropriate commit message based on file type and size
         if file_path:
-            if file_path.endswith(
-                ('.py', '.java', '.cpp', '.c', '.js', '.ts')
-            ):
-                filename = file_path.split('/')[-1]
+            if file_path.endswith((".py", ".java", ".cpp", ".c", ".js", ".ts")):
+                filename = file_path.split("/")[-1]
                 return f"feat(core): add {filename} implementation"
-            elif file_path.endswith(('.json', '.yaml', '.yml', '.toml')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".json", ".yaml", ".yml", ".toml")):
+                filename = file_path.split("/")[-1]
                 return f"chore(config): add {filename} configuration"
-            elif file_path.endswith(('.md', '.rst', '.txt')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".md", ".rst", ".txt")):
+                filename = file_path.split("/")[-1]
                 return f"docs: add {filename}"
-            elif file_path.endswith(('.html', '.css', '.scss')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".html", ".css", ".scss")):
+                filename = file_path.split("/")[-1]
                 return f"feat(ui): add {filename} styles"
             else:
-                filename = file_path.split('/')[-1]
+                filename = file_path.split("/")[-1]
                 return f"feat: add {filename}"
-        
+
         # Check if it's a new file vs modification
         if "new file mode" in diff:
             return "feat(core): add new implementation file"
@@ -691,68 +681,58 @@ class LLMClient:
         file_path = ""
         if context and "File:" in context:
             file_path = context.split("File:", 1)[1].strip()
-        
+
         # Determine appropriate type and scope based on file
         if file_path:
-            if file_path.endswith(('.coverage', '.cov')):
+            if file_path.endswith((".coverage", ".cov")):
                 return "test(coverage): update test coverage data"
-            elif file_path.endswith(
-                ('.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg')
-            ):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg")):
+                filename = file_path.split("/")[-1]
                 return f"feat(assets): add {filename} image file"
-            elif file_path.endswith(('.pdf', '.doc', '.docx')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".pdf", ".doc", ".docx")):
+                filename = file_path.split("/")[-1]
                 return f"docs(assets): add {filename} document"
-            elif file_path.endswith(
-                ('.zip', '.tar.gz', '.tar', '.gz', '.tgz')
-            ):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".zip", ".tar.gz", ".tar", ".gz", ".tgz")):
+                filename = file_path.split("/")[-1]
                 return f"build(deps): add {filename} archive"
-            elif file_path.endswith(('.woff', '.woff2', '.ttf', '.eot')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".woff", ".woff2", ".ttf", ".eot")):
+                filename = file_path.split("/")[-1]
                 return f"feat(fonts): add {filename} font file"
-            elif file_path.endswith(('.mp4', '.avi', '.mov', '.webm')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".mp4", ".avi", ".mov", ".webm")):
+                filename = file_path.split("/")[-1]
                 return f"feat(media): add {filename} video file"
-            elif file_path.endswith(('.mp3', '.wav', '.ogg', '.flac')):
-                filename = file_path.split('/')[-1]
+            elif file_path.endswith((".mp3", ".wav", ".ogg", ".flac")):
+                filename = file_path.split("/")[-1]
                 return f"feat(media): add {filename} audio file"
             else:
-                filename = file_path.split('/')[-1]
+                filename = file_path.split("/")[-1]
                 return f"chore(assets): add {filename} binary file"
-        
+
         # Fallback for binary files without clear context
         if "Binary files /dev/null and" in diff:
             return "chore(assets): add binary file"
         else:
             return "chore(assets): update binary file"
 
-    def _generate_minimal_commit_message(
-        self, context: str, _style: str
-    ) -> str:
+    def _generate_minimal_commit_message(self, context: str, _style: str) -> str:
         """Generate commit message when diff is empty or minimal."""
         if context and "File:" in context:
             file_path = context.split("File:", 1)[1].strip()
-            filename = file_path.split('/')[-1]
-            
+            filename = file_path.split("/")[-1]
+
             # Determine appropriate scope based on file path
-            if 'test' in file_path.lower() or file_path.endswith('.test.'):
+            if "test" in file_path.lower() or file_path.endswith(".test."):
                 return f"test(core): update {filename}"
-            elif file_path.endswith(('.md', '.txt', '.rst')):
+            elif file_path.endswith((".md", ".txt", ".rst")):
                 return f"docs(content): update {filename}"
-            elif file_path.endswith(
-                ('.json', '.yaml', '.yml', '.toml', '.ini')
-            ):
+            elif file_path.endswith((".json", ".yaml", ".yml", ".toml", ".ini")):
                 # Use allowed conventional commit type 'chore'
                 return f"chore(config): update {filename}"
-            elif file_path.endswith(('.css', '.scss', '.sass', '.less')):
+            elif file_path.endswith((".css", ".scss", ".sass", ".less")):
                 return f"style(ui): update {filename}"
-            elif file_path.endswith(('.js', '.ts', '.jsx', '.tsx')):
+            elif file_path.endswith((".js", ".ts", ".jsx", ".tsx")):
                 return f"refactor(core): update {filename}"
-            elif file_path.endswith(
-                ('.py', '.java', '.cpp', '.c', '.go', '.rs')
-            ):
+            elif file_path.endswith((".py", ".java", ".cpp", ".c", ".go", ".rs")):
                 return f"refactor(core): update {filename}"
             else:
                 return f"chore(misc): update {filename}"
@@ -784,7 +764,7 @@ class LLMClient:
             raise LLMError("Empty LLM output (no heuristic fallback)")
 
         # Remove surrounding quotes/backticks
-        if (text.startswith("\"") and text.endswith("\"")) or (
+        if (text.startswith('"') and text.endswith('"')) or (
             text.startswith("'") and text.endswith("'")
         ):
             text = text[1:-1].strip()
@@ -794,7 +774,7 @@ class LLMClient:
             # take first non-empty non-fence segment
             for part in parts:
                 candidate = part.strip()
-                if candidate and not candidate.startswith(('yaml', 'json')):
+                if candidate and not candidate.startswith(("yaml", "json")):
                     text = candidate
                     break
 
@@ -803,18 +783,18 @@ class LLMClient:
         header = None
         body_lines: list[str] = []
         for i, line in enumerate(lines):
-            cleaned = line.lstrip('-*• ').strip('`').strip()
+            cleaned = line.lstrip("-*• ").strip("`").strip()
             # Collapse internal whitespace
             cleaned = re.sub(r"\s+", " ", cleaned)
             if self._CC_PATTERN.match(cleaned):
                 header = cleaned
-                body_lines = lines[i + 1:]
+                body_lines = lines[i + 1 :]
                 break
 
         if header is None:
             # Try to detect pattern like "feat: something" missing scope
             for i, line in enumerate(lines):
-                cleaned = line.lstrip('-*• ').strip('`').strip()
+                cleaned = line.lstrip("-*• ").strip("`").strip()
                 cleaned = re.sub(r"\s+", " ", cleaned)
                 pattern_simple = (
                     r"^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|"
@@ -822,7 +802,7 @@ class LLMClient:
                 )
                 if re.match(pattern_simple, cleaned):
                     header = cleaned  # already acceptable (scope optional)
-                    body_lines = lines[i + 1:]
+                    body_lines = lines[i + 1 :]
                     break
 
         if header is None:
@@ -832,11 +812,11 @@ class LLMClient:
             )
 
         # Strip trailing periods from header (common style issue)
-        header = header.rstrip('.')
+        header = header.rstrip(".")
 
         body: list[str] = []
         for bline in body_lines:
-            if bline.strip().startswith(('```', '---', '===')):
+            if bline.strip().startswith(("```", "---", "===")):
                 # Skip decorative / fence lines in body
                 continue
             if len(body) > 12:

@@ -79,13 +79,9 @@ class GitRepo:
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             cmd = " ".join(args)
-            raise GitError(
-                f"Git command failed: {cmd}\n{e.stderr}"
-            ) from e
+            raise GitError(f"Git command failed: {cmd}\n{e.stderr}") from e
         except FileNotFoundError as exc:
-            raise GitError(
-                "Git command not found. Please install Git."
-            ) from exc
+            raise GitError("Git command not found. Please install Git.") from exc
 
     def is_ignored(self, rel_path: str) -> bool:
         """Return True if path is ignored by gitignore.
@@ -105,7 +101,7 @@ class GitRepo:
         except FileNotFoundError:
             return False
         return result.returncode == 0
-    
+
     def get_staged_diff(self) -> str:
         """Get the diff of staged changes."""
         return self._run_git_command(["diff", "--cached"])
@@ -150,20 +146,20 @@ class GitRepo:
 
     def get_commit_diff(self, commit_hash: str) -> str:
         """Get the diff for a specific commit."""
-        return self._run_git_command(
-            ["show", "--no-patch", "--format=", commit_hash]
-        )
+        return self._run_git_command(["show", "--no-patch", "--format=", commit_hash])
 
     def get_recent_commits(self, count: int = 5) -> list[str]:
         """Get recent commit messages."""
         # Use a custom pretty format that always includes abbreviated hash
         # followed by a single space and the subject line. Avoid combining
         # --oneline with --format which discards the hash.
-        output = self._run_git_command([
-            "log",
-            f"-{count}",
-            "--pretty=%h %s",
-        ])
+        output = self._run_git_command(
+            [
+                "log",
+                f"-{count}",
+                "--pretty=%h %s",
+            ]
+        )
         return output.split("\n") if output else []
 
     def stage_file(self, file_path: str) -> None:
@@ -187,20 +183,20 @@ class GitRepo:
         """
         self._run_git_command(["commit", "-m", message, "--", file_path])
 
-    def push(
-        self, remote: str = "origin", branch: Optional[str] = None
-    ) -> str:
+    def push(self, remote: str = "origin", branch: Optional[str] = None) -> str:
         """Push current branch to remote.
 
         If branch is None, determine it via 'git rev-parse --abbrev-ref HEAD'.
         Returns the stdout from git push.
         """
         if branch is None:
-            branch = self._run_git_command([
-                "rev-parse",
-                "--abbrev-ref",
-                "HEAD",
-            ])
+            branch = self._run_git_command(
+                [
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ]
+            )
         return self._run_git_command(["push", remote, branch])
 
     def reset_index(self) -> None:
@@ -280,11 +276,7 @@ class GitRepo:
     def list_changed_files(self) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
 
-        return [
-            (status, path)
-            for status, path in self._run_git_porcelain()
-            if path
-        ]
+        return [(status, path) for status, path in self._run_git_porcelain() if path]
 
     def get_worktree_diff_for_path(self, file_path: str) -> str:
         """Return a unified diff for ``file_path`` without touching the index."""
@@ -317,8 +309,7 @@ class GitRepo:
             )
             if worktree_result.returncode not in {0, 1}:
                 raise GitError(
-                    "Git command failed: diff --patch --\n"
-                    f"{worktree_result.stderr}"
+                    "Git command failed: diff --patch --\n" f"{worktree_result.stderr}"
                 )
             diff_output = worktree_result.stdout
             if diff_output.strip():
@@ -353,8 +344,7 @@ class GitRepo:
         )
         if no_index_result.returncode not in {0, 1}:
             raise GitError(
-                "Git command failed: diff --no-index\n"
-                f"{no_index_result.stderr}"
+                "Git command failed: diff --no-index\n" f"{no_index_result.stderr}"
             )
 
         return no_index_result.stdout

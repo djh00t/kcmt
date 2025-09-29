@@ -44,7 +44,7 @@ def test_cli_smoke_openai(monkeypatch, tmp_path):
     clear_active_config()
 
     # Stub LLMClient.generate_commit_message to avoid network
-    from kcmt import commit as commit_module  # noqa: WPS433
+    from kcmt import commit as commit_module  # noqa: PLC0415
 
     monkeypatch.setattr(
         commit_module.LLMClient,
@@ -53,17 +53,19 @@ def test_cli_smoke_openai(monkeypatch, tmp_path):
     )
 
     # Run CLI via its main entrypoint
-    from kcmt.cli import main  # noqa: WPS433
+    from kcmt.cli import main  # noqa: PLC0415
 
-    exit_code = main([
-        "--provider",
-        "openai",
-        "--no-progress",
-        "--limit",
-        "1",
-        "--repo-path",
-        str(tmp_path),
-    ])
+    exit_code = main(
+        [
+            "--provider",
+            "openai",
+            "--no-progress",
+            "--limit",
+            "1",
+            "--repo-path",
+            str(tmp_path),
+        ]
+    )
 
     assert exit_code == 0
     log = _git(["log", "--oneline", "-n", "1"], tmp_path)
@@ -89,7 +91,7 @@ def test_cli_config_saved_in_repo_root_from_nested_path(monkeypatch, tmp_path):
 
     clear_active_config()
 
-    from kcmt import commit as commit_module  # noqa: WPS433
+    from kcmt import commit as commit_module  # noqa: PLC0415
 
     monkeypatch.setattr(
         commit_module.LLMClient,
@@ -97,7 +99,7 @@ def test_cli_config_saved_in_repo_root_from_nested_path(monkeypatch, tmp_path):
         staticmethod(lambda *a, **k: "feat(core): nested run"),
     )
 
-    from kcmt.cli import main  # noqa: WPS433
+    from kcmt.cli import main  # noqa: PLC0415
 
     exit_code = main(
         [
@@ -143,7 +145,7 @@ def test_llm_env_disable_shortcut(monkeypatch):
     cfg = load_config(overrides={"provider": "openai"})
 
     # Avoid patching underlying OpenAI client; rely on early return.
-    from kcmt.llm import LLMClient  # noqa: WPS433
+    from kcmt.llm import LLMClient  # noqa: PLC0415
 
     client = LLMClient(config=cfg)
     msg = client.generate_commit_message(
