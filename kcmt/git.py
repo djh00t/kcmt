@@ -9,6 +9,41 @@ from .config import Config, get_active_config
 from .exceptions import GitError
 
 
+def find_git_repo_root(start_path: Optional[Path] = None) -> Optional[Path]:
+    """Return the top-level Git repository directory for ``start_path``.
+
+    Attempts ``git rev-parse --show-toplevel`` first so worktrees and
+    submodules are handled correctly. Falls back to walking parent
+    directories looking for a ``.git`` directory or file. Returns ``None``
+    when no Git repository can be found starting from ``start_path``.
+    """
+
+    path = Path(start_path or Path.cwd()).expanduser().resolve(strict=False)
+    if path.is_file():
+        path = path.parent
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        top = result.stdout.strip()
+        if top:
+            return Path(top)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    for candidate in (path, *path.parents):
+        git_meta = candidate / ".git"
+        if git_meta.exists():
+            return candidate
+
+    return None
+
+
 class GitRepo:
     """Handles Git repository operations."""
 
@@ -243,4 +278,3 @@ class GitRepo:
             entries.append((status, path))
 
         return entries
-
