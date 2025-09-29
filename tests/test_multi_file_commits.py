@@ -54,9 +54,7 @@ def test_two_new_files_committed_separately(tmp_path, monkeypatch):
     )
 
     # Run workflow with limit 2
-    wf = KlingonCMTWorkflow(
-        repo_path=str(tmp_path), show_progress=False, file_limit=2
-    )
+    wf = KlingonCMTWorkflow(repo_path=str(tmp_path), show_progress=False, file_limit=2)
     results = wf.execute_workflow()
 
     # Collect commits

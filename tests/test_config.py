@@ -49,6 +49,16 @@ def test_load_config_invalid_override_falls_back(tmp_path):
     assert cfg.provider == "openai"
 
 
+def test_load_config_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("KCMT_PROVIDER", "anthropic")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    cfg = load_config(repo_root=tmp_path)
+
+    assert cfg.provider == "anthropic"
+    assert cfg.api_key_env in {"ANTHROPIC_API_KEY"}
+
+
 def test_overrides_take_precedence(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     overrides = {

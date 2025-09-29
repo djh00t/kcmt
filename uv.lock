@@ -512,7 +512,9 @@ dev = [
     { name = "build" },
     { name = "iniconfig" },
     { name = "isort" },
+    { name = "mypy" },
     { name = "pytest" },
+    { name = "pytest-bdd" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
     { name = "ruff" },
@@ -522,43 +524,51 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
+    { name = "build" },
     { name = "iniconfig" },
+    { name = "isort" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-bdd" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "twine" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=0.10.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=25.9.0" },
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.2" },
     { name = "genai-prices", specifier = ">=0.0.27" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "iniconfig", marker = "extra == 'dev'", specifier = ">=2.1.0" },
-    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13.2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.2" },
     { name = "openai", specifier = ">=1.108.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
+    { name = "pytest-bdd", marker = "extra == 'dev'", specifier = ">=8.1.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.1" },
     { name = "requests", specifier = ">=2.32.5" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.9" },
+    { name = "twine", marker = "extra == 'dev'", specifier = ">=5.1.1" },
 ]
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "black" },
     { name = "black", specifier = ">=25.9.0" },
+    { name = "build", specifier = ">=1.2.2" },
     { name = "iniconfig", specifier = ">=2.1.0" },
+    { name = "isort", specifier = ">=5.13.2" },
     { name = "mypy", specifier = ">=1.18.2" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-bdd", specifier = ">=8.1.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-xdist" },
     { name = "pytest-xdist", specifier = ">=3.6.1" },
+    { name = "ruff", specifier = ">=0.6.9" },
+    { name = "twine", specifier = ">=5.1.1" },
 ]
 
 [[package]]

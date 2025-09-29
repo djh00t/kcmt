@@ -74,6 +74,8 @@ Additional environment tweaks remain available:
 - `KLINGON_CMT_LLM_ENDPOINT`
 - `KLINGON_CMT_GIT_REPO_PATH`
 - `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
+- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `.kcmt/config.json`
+  (useful when CI supplies secrets that differ from the persisted repo defaults)
 Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
 fallback subject after repeated LLM failures. This path has been removed;
 kcmt now fails fast with an explicit LLMError so you never get an invented
@@ -120,6 +122,18 @@ no longer performs heuristic commit generation.
 - `--file PATH` – stage & commit an explicit file.
 - `--no-progress` – disable the live stats bar.
 - `--verbose`, `-v` – emit detailed logs and per-file results.
+
+## Conventional commit automation
+
+kcmt now ships with a [Commitizen](https://commitizen-tools.github.io/commitizen/) configuration that mirrors the
+LLM-generated commit format. After installing the project you can:
+
+- run `cz check` to validate a message before committing manually;
+- run `cz commit` to invoke Commitizen's prompt flow while still benefitting from kcmt's
+  validation rules and version tracking (it watches `kcmt/__init__.py`).
+
+The configuration lives in `pyproject.toml` under `[tool.commitizen]`, so any repository that
+adopts kcmt inherits the same conventional commit guardrails automatically.
 
 ## Library usage examples
 
@@ -308,6 +322,9 @@ Run tests
 - Basic: uv run pytest -ra -vv tests
 - Strict CI-like run (parallel, warnings as errors, coverage):
   uv run pytest -n auto -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers --cov=kcmt --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=85 tests
+  - On Windows/PowerShell use a single line (no trailing `\`) or replace the
+    line continuation with a backtick (`` ` ``); PowerShell treats ``\`` as a
+    literal character and will otherwise break up the arguments.
 
 Make targets
 

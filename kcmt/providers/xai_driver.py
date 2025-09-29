@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 from kcmt.providers.openai_driver import OpenAIDriver
@@ -12,6 +14,7 @@ from kcmt.providers.openai_driver import OpenAIDriver
 
 class XAIDriver(OpenAIDriver):
     """Alias driver for XAI/Grok style API (OpenAI-compatible)."""
+
     # Wildcard-style strings to exclude anywhere in model id
     DISALLOWED_STRINGS: list[str] = [
         "grok-2-",
@@ -26,13 +29,14 @@ class XAIDriver(OpenAIDriver):
         headers = {"Authorization": f"Bearer {key}"}
         out: list[dict[str, object]] = []
         ids: list[str] = []
+        items: list[Any] = []
         try:
-            resp = httpx.get(
-                url, headers=headers, timeout=self._request_timeout
-            )
+            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
-            items = data.get("data") or []
+            payload_items = data.get("data") if isinstance(data, dict) else None
+            if isinstance(payload_items, list):
+                items = payload_items
         except (httpx.HTTPError, ValueError, KeyError):
             items = []
 
@@ -61,42 +65,34 @@ class XAIDriver(OpenAIDriver):
         # If nothing came back, try dataset fallback for xai
         if not out:
             try:
+                from kcmt.providers.pricing import build_enrichment_context
+            except ImportError:
+                pass
+            else:
                 try:
-                    from kcmt.providers.pricing import (
-                        build_enrichment_context as _bctx,  # type: ignore
-                    )
-                except ImportError:
-                    _bctx = None  # type: ignore[assignment]
-                if _bctx is not None:
-                    alias_lut, _ctx, _mx = _bctx()
+                    alias_lut, _ctx, _mx = build_enrichment_context()
                     seen: set[str] = set()
                     for (prov, mid), canon in alias_lut.items():
                         if prov != "xai":
                             continue
                         for candidate in (str(canon), str(mid)):
                             if candidate and candidate not in seen:
-                                out.append(
-                                    {"id": candidate, "owned_by": "xai"}
-                                )
+                                out.append({"id": candidate, "owned_by": "xai"})
                                 ids.append(candidate)
                                 seen.add(candidate)
                     if len(out) > 200:
                         out = out[:200]
                         ids = ids[:200]
-            except (RuntimeError, ValueError, KeyError, TypeError):
-                pass
+                except (RuntimeError, ValueError, KeyError, TypeError):
+                    pass
         # Enrich as xai
         try:
-            try:
-                from kcmt.providers.pricing import enrich_ids as _enrich  # type: ignore
-            except ImportError:
-                _enrich = None  # type: ignore[assignment]
-            if _enrich is None:
-                return out
+            from kcmt.providers.pricing import enrich_ids as _enrich
+        except ImportError:
+            return out
+        try:
             emap = _enrich("xai", ids)
         except (
-            ImportError,
-            ModuleNotFoundError,
             ValueError,
             TypeError,
             KeyError,
@@ -110,11 +106,7 @@ class XAIDriver(OpenAIDriver):
             em = emap.get(mid) or {}
             if not em or not em.get("_has_pricing", False):
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:XAI): skipping %s due to missing "
-                        "pricing"
-                        % mid
-                    )
+                    print("DEBUG(Driver:XAI): skipping %s due to missing pricing" % mid)
                 continue
             payload = dict(em)
             payload.pop("_has_pricing", None)

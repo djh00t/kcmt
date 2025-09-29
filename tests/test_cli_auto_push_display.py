@@ -21,13 +21,15 @@ def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("KLINGON_CMT_AUTO_PUSH", "1")
     monkeypatch.setattr("kcmt.cli.KlingonCMTWorkflow", _FakeWorkflow)
     cli = CLI()
-    code = cli.run([
-        "--provider",
-        "openai",
-        "--repo-path",
-        str(tmp_path),
-        "--no-progress",
-    ])
+    code = cli.run(
+        [
+            "--provider",
+            "openai",
+            "--repo-path",
+            str(tmp_path),
+            "--no-progress",
+        ]
+    )
     captured = capsys.readouterr()
     assert code in (0, 2)
     assert "Pushed commits to remote" in captured.out
