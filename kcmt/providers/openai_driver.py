@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING, cast
 
 import httpx
 
@@ -12,11 +12,15 @@ from kcmt.exceptions import LLMError
 from kcmt.providers.base import BaseDriver
 
 # Optional dependency: import module, not symbols, for easier test stubbing
-_openai: ModuleType | None
+if TYPE_CHECKING:  # pragma: no cover - import-time only for typing
+    import openai as _openai_module
+
 try:  # pragma: no cover - optional import
-    import openai as _openai
+    import openai as _openai_module
 except Exception:  # pragma: no cover
-    _openai = None
+    _openai_module = None
+
+_openai: ModuleType | None = cast("ModuleType | None", _openai_module)
 
 
 class OpenAIDriver(BaseDriver):

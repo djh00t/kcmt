@@ -71,17 +71,25 @@ class GitRepo:
         self, args: list[str], *, env: Optional[Dict[str, str]] = None
     ) -> str:
         """Run a Git command and return its output."""
-        run_kwargs: Dict[str, object] = {
-            "cwd": self.repo_path,
-            "capture_output": True,
-            "text": True,
-            "check": True,
-        }
-        if env is not None:
-            run_kwargs["env"] = env
-
         try:
-            result = subprocess.run(["git"] + args, **run_kwargs)
+            result: subprocess.CompletedProcess[str]
+            if env is None:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            else:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             cmd = " ".join(args)
