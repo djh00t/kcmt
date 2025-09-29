@@ -1,0 +1,5 @@
+- After code changes, run `uv run pytest` (or `make test`) and relevant targeted tests.
+- Run linters/formatters (`make check` or `ruff check kcmt tests` + `isort --check-only` + `black --check`).
+- Ensure `.kcmt/config.json` remains valid if touched; do not commit API keys.
+- Validate CLI by invoking `uv run kcmt --help` or dry-run flags where practical.
+- Keep Git worktree clean; new features should include/update tests when feasible.
