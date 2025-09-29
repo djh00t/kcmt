@@ -1,8 +1,9 @@
 """Git operations for kcmt."""
 
+import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from .config import Config, get_active_config
 from .exceptions import GitError
@@ -66,16 +67,21 @@ class GitRepo:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
-    def _run_git_command(self, args: list[str]) -> str:
+    def _run_git_command(
+        self, args: list[str], *, env: Optional[Dict[str, str]] = None
+    ) -> str:
         """Run a Git command and return its output."""
+        run_kwargs: Dict[str, object] = {
+            "cwd": self.repo_path,
+            "capture_output": True,
+            "text": True,
+            "check": True,
+        }
+        if env is not None:
+            run_kwargs["env"] = env
+
         try:
-            result = subprocess.run(
-                ["git"] + args,
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            result = subprocess.run(["git"] + args, **run_kwargs)
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             cmd = " ".join(args)
@@ -170,9 +176,29 @@ class GitRepo:
         """Stage all changes (including new and deleted files)."""
         self._run_git_command(["add", "-A"])
 
+    def _commit_env(self) -> Dict[str, str]:
+        """Return environment ensuring Git has an identity for commits."""
+
+        env = os.environ.copy()
+
+        author_name = env.get("GIT_AUTHOR_NAME") or env.get("KCMT_GIT_AUTHOR_NAME")
+        author_email = env.get("GIT_AUTHOR_EMAIL") or env.get("KCMT_GIT_AUTHOR_EMAIL")
+
+        if not author_name:
+            author_name = "kcmt-bot"
+        if not author_email:
+            author_email = "kcmt@example.com"
+
+        env.setdefault("GIT_AUTHOR_NAME", author_name)
+        env.setdefault("GIT_COMMITTER_NAME", author_name)
+        env.setdefault("GIT_AUTHOR_EMAIL", author_email)
+        env.setdefault("GIT_COMMITTER_EMAIL", author_email)
+
+        return env
+
     def commit(self, message: str) -> None:
         """Create a commit with the given message."""
-        self._run_git_command(["commit", "-m", message])
+        self._run_git_command(["commit", "-m", message], env=self._commit_env())
 
     def commit_file(self, message: str, file_path: str) -> None:
         """Create a commit including ONLY the specified file.
@@ -181,7 +207,9 @@ class GitRepo:
         are staged (intentionally or accidentally) they are not part of this
         commit. Ensures true per-file atomic commits.
         """
-        self._run_git_command(["commit", "-m", message, "--", file_path])
+        self._run_git_command(
+            ["commit", "-m", message, "--", file_path], env=self._commit_env()
+        )
 
     def push(self, remote: str = "origin", branch: Optional[str] = None) -> str:
         """Push current branch to remote.
