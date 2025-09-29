@@ -98,6 +98,7 @@ class KlingonCMTWorkflow:
         show_progress: bool = False,
         file_limit: Optional[int] = None,
         debug: bool = False,
+        profile: bool = False,
     ) -> None:
         """Initialize the workflow."""
         self._config = config or get_active_config()
@@ -110,6 +111,15 @@ class KlingonCMTWorkflow:
         self._show_progress = show_progress
         self.file_limit = file_limit
         self.debug = debug
+        self.profile = profile
+
+    def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
+        if not self.profile:
+            return
+        details = f" {extra}" if extra else ""
+        print(
+            f"[kcmt-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}"
+        )
 
     def execute_workflow(self) -> Dict[str, Any]:
         """Execute the complete kcmt workflow."""
@@ -119,6 +129,8 @@ class KlingonCMTWorkflow:
             "errors": [],
             "summary": "",
         }
+
+        workflow_start = time.perf_counter()
 
         try:
             deletion_results = self._process_deletions_first()
@@ -155,13 +167,31 @@ class KlingonCMTWorkflow:
                     f"Auto-push failed: {e}"
                 )
 
+        total_elapsed = time.perf_counter() - workflow_start
+        self._profile(
+            "workflow-total",
+            total_elapsed,
+            extra=(
+                "files={} deletions={}".format(
+                    len(results.get("file_commits", [])),
+                    len(results.get("deletions_committed", [])),
+                )
+            ),
+        )
+
         return results
 
     def _process_deletions_first(self) -> List[CommitResult]:
         """Process all deletions first with a single commit."""
         results: List[CommitResult] = []
 
+        deletions_start = time.perf_counter()
         deleted_files = self.git_repo.process_deletions_first()
+        self._profile(
+            "process-deletions",
+            time.perf_counter() - deletions_start,
+            extra=f"count={len(deleted_files)}",
+        )
         if not deleted_files:
             return results
 
