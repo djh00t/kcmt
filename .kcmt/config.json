@@ -6,5 +6,5 @@
   "git_repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "max_commit_length": 72,
   "allow_fallback": false,
-  "auto_push": false
+  "auto_push": true
 }
