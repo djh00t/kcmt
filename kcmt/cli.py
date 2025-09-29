@@ -52,7 +52,9 @@ RED = "\033[91m"
 class DecimalFriendlyJSONEncoder(json.JSONEncoder):
     """JSON encoder that renders floats without scientific notation."""
 
-    def iterencode(self, o: Any, _one_shot: bool = False) -> Iterator[str]:  # noqa: N802 - match json API
+    def iterencode(
+        self, o: Any, _one_shot: bool = False
+    ) -> Iterator[str]:  # noqa: N802 - match json API
         markers: dict[int, Any] | None
         if self.check_circular:
             markers = {}
