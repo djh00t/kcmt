@@ -6,6 +6,8 @@ import argparse
 import json
 import os
 import sys
+import time
+from contextlib import contextmanager
 from json.encoder import (
     INFINITY,
     _make_iterencode,
@@ -13,7 +15,7 @@ from json.encoder import (
     encode_basestring_ascii,
 )
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .commit import CommitGenerator
 from .config import (
@@ -96,6 +98,7 @@ class CLI:
 
     def __init__(self) -> None:
         self.parser = self._create_parser()
+        self._profile_enabled = False
 
     # ------------------------------------------------------------------
     # Argument parsing
@@ -190,6 +193,11 @@ Examples:
             help="Show detailed LLM API requests and responses",
         )
         parser.add_argument(
+            "--profile-startup",
+            action="store_true",
+            help="Print timing diagnostics for startup phases",
+        )
+        parser.add_argument(
             "--list-models",
             action="store_true",
             help=(
@@ -215,18 +223,62 @@ Examples:
 
         return parser
 
+    def _profile_print(
+        self, label: str, elapsed_ms: float, extra: str = ""
+    ) -> None:
+        if not self._profile_enabled:
+            return
+        details = f" {extra}" if extra else ""
+        print(f"[kcmt-profile] {label}: {elapsed_ms:.1f} ms{details}")
+
+    @contextmanager
+    def _profile_timer(
+        self,
+        label: str,
+        extra: Optional[Callable[[], str]] = None,
+    ):
+        if not self._profile_enabled:
+            yield
+            return
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            details = extra() if callable(extra) else ""
+            self._profile_print(label, elapsed_ms, details)
+
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
     def run(self, args: Optional[List[str]] = None) -> int:
         try:
-            parsed_args = self.parser.parse_args(args)
+            with self._profile_timer("parse-args"):
+                parsed_args = self.parser.parse_args(args)
+
+            profile_env = os.environ.get("KCMT_PROFILE_STARTUP", "")
+            env_profile = profile_env.lower() in {"1", "true", "yes", "on"}
+            self._profile_enabled = bool(
+                getattr(parsed_args, "profile_startup", False) or env_profile
+            )
+
             requested_path = (
                 Path(parsed_args.repo_path)
                 .expanduser()
                 .resolve(strict=False)
             )
-            detected_root = find_git_repo_root(requested_path)
+
+            detected_root: Optional[Path] = None
+            with self._profile_timer(
+                "find-git-root",
+                extra=lambda: (
+                    f"found={detected_root}"
+                    if detected_root
+                    else "found=<none>"
+                ),
+            ):
+                detected_root = find_git_repo_root(requested_path)
+
             repo_root = (detected_root or requested_path).resolve(strict=False)
             non_interactive = (
                 bool(os.environ.get("PYTEST_CURRENT_TEST"))
@@ -243,15 +295,36 @@ Examples:
                 return self._run_configuration(parsed_args, repo_root)
 
             overrides = self._collect_overrides(parsed_args, repo_root)
-            persisted_config = load_persisted_config(repo_root)
+
+            persisted_config: Optional[Config] = None
+            with self._profile_timer(
+                "load-persisted-config",
+                extra=lambda: (
+                    "result=missing"
+                    if persisted_config is None
+                    else "result=loaded"
+                ),
+            ):
+                persisted_config = load_persisted_config(repo_root)
 
             # Check if this is the first time running kcmt in this repo
+            config: Optional[Config] = None
             if not persisted_config:
                 if non_interactive:
-                    config = load_config(
-                        repo_root=repo_root, overrides=overrides
-                    )
-                    save_config(config, repo_root)
+                    with self._profile_timer(
+                        "load-config",
+                        extra=lambda: (
+                            f"provider={config.provider}"
+                            if config
+                            else ""
+                        ),
+                    ):
+                        config = load_config(
+                            repo_root=repo_root,
+                            overrides=overrides,
+                        )
+                    with self._profile_timer("persist-config"):
+                        save_config(config, repo_root)
                 else:
                     self._print_info(
                         "🚀 Welcome to kcmt! This appears to be your first "
@@ -263,10 +336,23 @@ Examples:
                     )
                     return self._run_configuration(parsed_args, repo_root)
             else:
-                config = load_config(repo_root=repo_root, overrides=overrides)
+                with self._profile_timer(
+                    "load-config",
+                    extra=lambda: (
+                        f"provider={config.provider}"
+                        if config
+                        else ""
+                    ),
+                ):
+                    config = load_config(
+                        repo_root=repo_root, overrides=overrides
+                    )
 
             if not persisted_config:
-                persisted_cfg = load_persisted_config(repo_root)
+                refreshed_cfg: Optional[Config] = None
+                with self._profile_timer("reload-persisted-config"):
+                    refreshed_cfg = load_persisted_config(repo_root)
+                persisted_cfg = refreshed_cfg
             else:
                 persisted_cfg = persisted_config
 
@@ -291,7 +377,8 @@ Examples:
                     should_persist = True
             if should_persist:
                 try:  # pragma: no cover - trivial persistence path
-                    save_config(config, repo_root)
+                    with self._profile_timer("persist-flags"):
+                        save_config(config, repo_root)
                 except OSError:  # Narrowed from broad Exception
                     pass
 
@@ -500,22 +587,53 @@ Examples:
         self._print_info("")
 
         try:
-            workflow = KlingonCMTWorkflow(
-                repo_path=config.git_repo_path,
-                max_retries=args.max_retries,
-                config=config,
-                show_progress=not args.no_progress,
-                file_limit=getattr(args, 'limit', None),
-                debug=getattr(args, 'debug', False),
-            )
+            workflow = None
+
+            def _wf_extra() -> str:
+                if workflow is None:
+                    return ""
+                return f"repo={workflow.git_repo.repo_path}"
+
+            with self._profile_timer("init-workflow", extra=_wf_extra):
+                workflow = KlingonCMTWorkflow(
+                    repo_path=config.git_repo_path,
+                    max_retries=args.max_retries,
+                    config=config,
+                    show_progress=not args.no_progress,
+                    file_limit=getattr(args, 'limit', None),
+                    debug=getattr(args, 'debug', False),
+                    profile=self._profile_enabled,
+                )
         except TypeError:  # Backward compatibility for tests
-            workflow = KlingonCMTWorkflow(
-                repo_path=config.git_repo_path,
-                max_retries=args.max_retries,
-                config=config,
-                show_progress=not args.no_progress,
-            )
-        results = workflow.execute_workflow()
+            workflow = None
+
+            def _wf_extra_bc() -> str:
+                if workflow is None:
+                    return ""
+                return f"repo={workflow.git_repo.repo_path}"
+
+            with self._profile_timer("init-workflow", extra=_wf_extra_bc):
+                workflow = KlingonCMTWorkflow(
+                    repo_path=config.git_repo_path,
+                    max_retries=args.max_retries,
+                    config=config,
+                    show_progress=not args.no_progress,
+                    profile=self._profile_enabled,
+                )
+
+        results: Dict[str, Any] = {}
+
+        with self._profile_timer(
+            "execute-workflow",
+            extra=lambda: (
+                "files={}".format(
+                    len(results.get("file_commits", []))
+                    if isinstance(results, dict)
+                    else 0
+                )
+            ),
+        ):
+            results = workflow.execute_workflow()
         self._display_results(results, args.verbose)
         return 0
 
