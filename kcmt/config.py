@@ -67,8 +67,14 @@ class Config:
 _CONFIG_STATE: Dict[str, Optional[Config]] = {"active": None}
 
 
+def _ensure_path(path_like: Optional[Path]) -> Path:
+    if path_like is None:
+        return Path.cwd().resolve(strict=False)
+    return Path(path_like).expanduser().resolve(strict=False)
+
+
 def _config_dir(repo_root: Optional[Path] = None) -> Path:
-    return (repo_root or Path.cwd()) / CONFIG_DIR_NAME
+    return _ensure_path(repo_root) / CONFIG_DIR_NAME
 
 
 def _config_file(repo_root: Optional[Path] = None) -> Path:
@@ -79,7 +85,20 @@ def save_config(config: Config, repo_root: Optional[Path] = None) -> None:
     """Persist configuration JSON within the repository."""
     cfg_path = _config_file(repo_root)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_text(json.dumps(config.to_dict(), indent=2))
+    data = config.to_dict()
+    base_root = _ensure_path(repo_root)
+    git_path = data.get("git_repo_path")
+    if git_path:
+        candidate = Path(git_path).expanduser()
+        if candidate.is_absolute():
+            normalised = candidate.resolve(strict=False)
+        else:
+            normalised = (base_root / candidate).resolve(strict=False)
+    else:
+        normalised = base_root
+    data["git_repo_path"] = str(normalised)
+    config.git_repo_path = data["git_repo_path"]
+    cfg_path.write_text(json.dumps(data, indent=2))
 
 
 def load_persisted_config(
@@ -93,6 +112,18 @@ def load_persisted_config(
         data["allow_fallback"] = False
     if "auto_push" not in data:  # backward compat
         data["auto_push"] = False
+    resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
+    resolved_root = _ensure_path(resolved_root)
+    git_path = data.get("git_repo_path")
+    if git_path:
+        candidate = Path(git_path).expanduser()
+        if candidate.is_absolute():
+            candidate = candidate.resolve(strict=False)
+        else:
+            candidate = (resolved_root / candidate).resolve(strict=False)
+        data["git_repo_path"] = str(candidate)
+    else:
+        data["git_repo_path"] = str(resolved_root)
     return Config(**data)
 
 
@@ -125,7 +156,7 @@ def load_config(
     """Build configuration from config file, environment and overrides."""
 
     overrides = overrides or {}
-    repo_root = repo_root or Path.cwd()
+    repo_root = _ensure_path(repo_root)
     persisted = load_persisted_config(repo_root)
 
     provider = (
@@ -179,9 +210,18 @@ def load_config(
         or _select_env_var_for_provider(provider)
     )
 
-    git_repo_path = overrides.get("repo_path") or os.environ.get(
+    git_repo_path_raw = overrides.get("repo_path") or os.environ.get(
         "KLINGON_CMT_GIT_REPO_PATH"
-    ) or (persisted.git_repo_path if persisted else ".")
+    ) or (persisted.git_repo_path if persisted else str(repo_root))
+
+    git_repo_candidate = Path(git_repo_path_raw).expanduser()
+    if git_repo_candidate.is_absolute():
+        git_repo_candidate = git_repo_candidate.resolve(strict=False)
+    else:
+        git_repo_candidate = (repo_root / git_repo_candidate).resolve(
+            strict=False
+        )
+    git_repo_path = str(git_repo_candidate)
 
     max_commit_length = int(
         overrides.get("max_commit_length")
