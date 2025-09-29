@@ -232,7 +232,13 @@ class KlingonCMTWorkflow:
         results: List[CommitResult] = []
 
         # First, get all changed files from git status (both staged/unstaged)
+        status_start = time.perf_counter()
         all_changed_files = self.git_repo.list_changed_files()
+        self._profile(
+            "git-status",
+            time.perf_counter() - status_start,
+            extra=f"entries={len(all_changed_files)}",
+        )
         
         # Filter out deletions (they're handled separately)
         non_deletion_files = [
@@ -261,6 +267,7 @@ class KlingonCMTWorkflow:
         # immediately unstage it. Commit generation later will re-stage only
         # that file for its own atomic commit.
         file_changes: List[FileChange] = []
+        collect_start = time.perf_counter()
         for _status, file_path in non_deletion_files:
             try:
                 # Stage the file to obtain a reliable diff (untracked files
@@ -291,6 +298,17 @@ class KlingonCMTWorkflow:
                     )
                 )
                 continue
+
+        self._profile(
+            "collect-diffs",
+            time.perf_counter() - collect_start,
+            extra=(
+                "candidates={} collected={}".format(
+                    len(non_deletion_files),
+                    len(file_changes),
+                )
+            ),
+        )
 
         if not file_changes:
             return results
