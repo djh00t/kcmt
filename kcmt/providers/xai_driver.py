@@ -106,9 +106,7 @@ class XAIDriver(OpenAIDriver):
             em = emap.get(mid) or {}
             if not em or not em.get("_has_pricing", False):
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:XAI): skipping %s due to missing " "pricing" % mid
-                    )
+                    print("DEBUG(Driver:XAI): skipping %s due to missing pricing" % mid)
                 continue
             payload = dict(em)
             payload.pop("_has_pricing", None)

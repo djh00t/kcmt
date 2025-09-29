@@ -84,7 +84,7 @@ class OpenAIDriver(BaseDriver):
 
         if self.debug:
             print("DEBUG(Driver:OpenAI): invoke")
-            print(f"  model={model} token_param={token_param} " f"value={max_tokens}")
+            print(f"  model={model} token_param={token_param} value={max_tokens}")
             print(f"  minimal_prompt={self._minimal_prompt}")
 
         # Prepare kwargs; for gpt-5 try once WITHOUT token limit first
@@ -109,7 +109,7 @@ class OpenAIDriver(BaseDriver):
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 # Some servers only accept max_completion_tokens
                 if self.debug:
-                    print("DEBUG(Driver:OpenAI): fallback to " "max_completion_tokens")
+                    print("DEBUG(Driver:OpenAI): fallback to max_completion_tokens")
                 base_kwargs.pop("max_tokens", None)
                 base_kwargs["max_completion_tokens"] = max_tokens
                 resp = _call_with_kwargs(base_kwargs)
@@ -187,7 +187,7 @@ class OpenAIDriver(BaseDriver):
                     print("DEBUG(Driver:OpenAI): token-limited retry error " + str(err))
             if not content:
                 if self.debug:
-                    print("DEBUG(Driver:OpenAI): attempting responses API " "fallback")
+                    print("DEBUG(Driver:OpenAI): attempting responses API fallback")
             # Combine messages into single prompt (preserve system parts)
             system_parts: list[str] = []
             user_parts: list[str] = []
@@ -264,8 +264,7 @@ class OpenAIDriver(BaseDriver):
             if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
                 if self.debug:
                     print(
-                        "DEBUG(Driver:OpenAI): enabling minimal prompt + "
-                        "halving tokens"
+                        "DEBUG(Driver:OpenAI): enabling minimal prompt + halving tokens"
                     )
                 self._minimal_prompt = True
                 self._max_completion_tokens = max(64, max_tokens // 2)
@@ -319,7 +318,7 @@ class OpenAIDriver(BaseDriver):
                             pass
                     except (ValueError, RuntimeError) as retry_err:
                         if self.debug:
-                            print("DEBUG(Driver:OpenAI): retry error " f"{retry_err}")
+                            print(f"DEBUG(Driver:OpenAI): retry error {retry_err}")
                         # fall through; content still empty -> final raise
 
             if not content:
@@ -458,8 +457,7 @@ class OpenAIDriver(BaseDriver):
             if not em or not em.get("_has_pricing", False):
                 if self.debug:
                     print(
-                        "DEBUG(Driver:OpenAI): skipping %s due to missing "
-                        "pricing" % mid
+                        "DEBUG(Driver:OpenAI): skipping %s due to missing pricing" % mid
                     )
                 continue
             payload = dict(em)

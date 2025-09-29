@@ -309,8 +309,7 @@ class GitRepo:
             )
             if worktree_result.returncode not in {0, 1}:
                 raise GitError(
-                    "Git command failed: diff --patch --\n"
-                    f"{worktree_result.stderr}"
+                    f"Git command failed: diff --patch --\n{worktree_result.stderr}"
                 )  # pragma: no cover - requires simulating git failure
             diff_output = worktree_result.stdout
             if diff_output.strip():
@@ -345,8 +344,7 @@ class GitRepo:
         )
         if no_index_result.returncode not in {0, 1}:
             raise GitError(
-                "Git command failed: diff --no-index\n"
-                f"{no_index_result.stderr}"
+                f"Git command failed: diff --no-index\n{no_index_result.stderr}"
             )  # pragma: no cover - requires simulating git failure
 
         return no_index_result.stdout

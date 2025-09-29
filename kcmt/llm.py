@@ -251,9 +251,7 @@ class LLMClient:
             print(f"  Raw length: {len(raw_message)}")
             print(f"  Final length: {len(processed)}")
             if raw_message != processed:
-                print(
-                    ("  Differences were applied (subject enforcement /" " wrapping).")
-                )
+                print(("  Differences were applied (subject enforcement / wrapping)."))
             else:
                 print("  No changes applied to raw model output.")
             print("  --- RAW MESSAGE START ---")

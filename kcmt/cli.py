@@ -52,9 +52,7 @@ RED = "\033[91m"
 class DecimalFriendlyJSONEncoder(json.JSONEncoder):
     """JSON encoder that renders floats without scientific notation."""
 
-    def iterencode(
-        self, o: Any, _one_shot: bool = False
-    ) -> Iterator[str]:  # noqa: N802 - match json API
+    def iterencode(self, o: Any, _one_shot: bool = False) -> Iterator[str]:  # noqa: N802 - match json API
         markers: dict[int, Any] | None
         if self.check_circular:
             markers = {}
@@ -505,8 +503,7 @@ Examples:
         if not matches:
             default_env = DEFAULT_MODELS[provider]["api_key_env"]
             prompt = (
-                f"{MAGENTA}Environment variable with API key{RESET} "
-                f"[{default_env}]: "
+                f"{MAGENTA}Environment variable with API key{RESET} [{default_env}]: "
             )
             response = input(prompt).strip()
             return response or default_env
@@ -520,7 +517,7 @@ Examples:
 
         while True:
             choice = input(
-                f"{MAGENTA}API key variable [1-{len(matches)+1}]{RESET}: "
+                f"{MAGENTA}API key variable [1-{len(matches) + 1}]{RESET}: "
             ).strip()
             if not choice:
                 choice = "1"
@@ -758,9 +755,7 @@ Examples:
     # ------------------------------------------------------------------
     def _print_banner(self, config: Config) -> None:
         repo = Path(config.git_repo_path).resolve()
-        banner = (
-            f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo " f"{repo}{RESET}"
-        )
+        banner = f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo {repo}{RESET}"
         print(banner)
 
     def _print_heading(self, title: str) -> None:

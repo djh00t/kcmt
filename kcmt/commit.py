@@ -133,15 +133,15 @@ class CommitGenerator:
                     if self.debug:
                         invalid_header = msg.splitlines()[0][:120]
                         print(
-                            (
-                                "DEBUG: commit.invalid_format attempt={} " "msg='{}'"
-                            ).format(attempt, invalid_header)
+                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
+                                attempt, invalid_header
+                            )
                         )
                     if attempt < max_attempts:
                         continue
                     raise LLMError(
                         (
-                            "LLM produced invalid commit message after {} " "attempts"
+                            "LLM produced invalid commit message after {} attempts"
                         ).format(max_attempts)
                     )
                 if self.debug:
@@ -166,7 +166,7 @@ class CommitGenerator:
             return self.llm_client.heuristic_minimal(context, style)
         raise LLMError(
             (
-                "LLM unavailable or invalid output after {} attempts; " "commit aborted"
+                "LLM unavailable or invalid output after {} attempts; commit aborted"
             ).format(max_attempts)
         ) from last_error
 
@@ -217,5 +217,5 @@ class CommitGenerator:
             pass
 
         raise ValidationError(
-            "Commit message does not follow conventional commit format: " f"{message}"
+            f"Commit message does not follow conventional commit format: {message}"
         )

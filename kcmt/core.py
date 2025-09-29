@@ -377,8 +377,7 @@ class KlingonCMTWorkflow:
                             change=file_changes[idx],
                             message=None,
                             error=(
-                                "Error preparing "
-                                f"{file_changes[idx].file_path}: {exc}"
+                                f"Error preparing {file_changes[idx].file_path}: {exc}"
                             ),
                         )
                     prepared.append((idx, prepared_commit))
@@ -429,9 +428,7 @@ class KlingonCMTWorkflow:
             snippet = change.diff_content.splitlines()[:20]
             preview = "\n".join(snippet)
             print(
-                (
-                    "DEBUG: prepare.file path={} change_type={} " "diff_preview=\n{}"
-                ).format(
+                ("DEBUG: prepare.file path={} change_type={} diff_preview=\n{}").format(
                     change.file_path,
                     change.change_type,
                     preview,
