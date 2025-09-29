@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
-from typing import Dict, List
+from typing import Any, cast
 
 import httpx
 from genai_prices import UpdatePrices, data_snapshot
@@ -113,7 +113,7 @@ def _mtok_value(val: Decimal | TieredPrices | None) -> float | None:
 
 def _prices_from_model(
     model_info: ModelInfo | None,
-) -> Dict[str, float | None] | None:
+) -> dict[str, float | None] | None:
     if model_info is None:
         return None
     now = datetime.now(timezone.utc)
@@ -139,10 +139,13 @@ def _dec(val: Decimal | str | float | int | None) -> float | None:
     return float(s) if s else 0.0
 
 
-def _get(url: str, headers: dict | None = None) -> dict:
+def _get(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
     response = httpx.get(url, headers=(headers or {}), timeout=TIMEOUT)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    if isinstance(data, dict):
+        return data
+    raise ValueError("Expected JSON object from pricing endpoint")
 
 
 def _scale_openrouter_price(value: float | str | None) -> Decimal | None:
@@ -156,14 +159,14 @@ def _scale_openrouter_price(value: float | str | None) -> Decimal | None:
 
 
 @lru_cache(maxsize=1)
-def openrouter_max_output_lookup() -> Dict[str, int | None]:
+def openrouter_max_output_lookup() -> dict[str, int | None]:
     try:
         headers = {}
         api_key = os.getenv("OPENROUTER_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = _get("https://openrouter.ai/api/v1/models", headers=headers)
-        lut: Dict[str, int | None] = {}
+        lut: dict[str, int | None] = {}
         for model in payload.get("data", []):
             mid = model.get("id")
             if not mid:
@@ -176,19 +179,19 @@ def openrouter_max_output_lookup() -> Dict[str, int | None]:
 
 
 @lru_cache(maxsize=1)
-def openrouter_metadata_lookup() -> Dict[str, dict]:
+def openrouter_metadata_lookup() -> dict[str, dict[str, object]]:
     try:
         headers = {}
         api_key = os.getenv("OPENROUTER_API_KEY")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = _get("https://openrouter.ai/api/v1/models", headers=headers)
-        lut: Dict[str, dict] = {}
+        lut: dict[str, dict[str, object]] = {}
         for model in payload.get("data", []):
             mid = model.get("id")
             if not mid:
                 continue
-            meta: dict = {}
+            meta: dict[str, object] = {}
             provider_info = model.get("top_provider") or {}
             meta["max_output"] = provider_info.get("max_completion_tokens")
             ctx_len = model.get("context_length")
@@ -216,12 +219,12 @@ def openrouter_metadata_lookup() -> Dict[str, dict]:
 
 
 def candidate_openrouter_ids(
-    prefix: str | List[str],
+    prefix: str | list[str],
     mid: str,
     canon: str,
-) -> List[str]:
+) -> list[str]:
     prefixes = prefix if isinstance(prefix, list) else [prefix]
-    cands: List[str] = []
+    cands: list[str] = []
     for pref in prefixes:
         for model_key in {mid, canon}:
             if not model_key:
@@ -239,7 +242,7 @@ def candidate_openrouter_ids(
     return out
 
 
-def _router_prefix_variants(canonical: str) -> List[str]:
+def _router_prefix_variants(canonical: str) -> list[str]:
     if canonical == "openai":
         return ["openai", "open-ai"]
     if canonical == "anthropic":
@@ -249,7 +252,7 @@ def _router_prefix_variants(canonical: str) -> List[str]:
     return [canonical]
 
 
-def list_known_model_ids(provider: str) -> List[str]:
+def list_known_model_ids(provider: str) -> list[str]:
     canonical = _normalize_provider(provider)
     if canonical not in _SUPPORTED:
         return []
@@ -263,7 +266,7 @@ def list_known_model_ids(provider: str) -> List[str]:
     return []
 
 
-def enrich_ids(provider: str, ids: List[str]) -> Dict[str, dict]:
+def enrich_ids(provider: str, ids: list[str]) -> dict[str, dict[str, object]]:
     snapshot = _ensure_snapshot()
     canonical = _normalize_provider(provider)
     provider_id = _snapshot_provider_id(canonical)
@@ -271,7 +274,7 @@ def enrich_ids(provider: str, ids: List[str]) -> Dict[str, dict]:
     meta_lut = openrouter_metadata_lookup()
     max_out_lut = openrouter_max_output_lookup()
 
-    enriched: Dict[str, dict] = {}
+    enriched: dict[str, dict[str, object]] = {}
     for mid in ids:
         resolved_id, model_info = _resolve_model(snapshot, provider_id, mid)
         prices = _prices_from_model(model_info)
@@ -298,9 +301,15 @@ def enrich_ids(provider: str, ids: List[str]) -> Dict[str, dict]:
                 )
             ):
                 prices = {
-                    "input_price_per_mtok": meta.get("input_price_per_mtok"),
-                    "output_price_per_mtok": meta.get("output_price_per_mtok"),
-                    "cache_read_per_mtok": meta.get("cache_read_per_mtok"),
+                    "input_price_per_mtok": cast(
+                        float | None, meta.get("input_price_per_mtok")
+                    ),
+                    "output_price_per_mtok": cast(
+                        float | None, meta.get("output_price_per_mtok")
+                    ),
+                    "cache_read_per_mtok": cast(
+                        float | None, meta.get("cache_read_per_mtok")
+                    ),
                 }
 
         record: dict[str, object] = {
@@ -313,3 +322,32 @@ def enrich_ids(provider: str, ids: List[str]) -> Dict[str, dict]:
             record.update(prices)
         enriched[mid] = record
     return enriched
+
+
+def build_enrichment_context() -> tuple[
+    dict[tuple[str, str], str],
+    dict[str, int | None],
+    dict[str, int | None],
+]:
+    """Pre-compute alias mapping and metadata for offline enrichment."""
+
+    snapshot = _ensure_snapshot()
+    alias_map: dict[tuple[str, str], str] = {}
+    context_map: dict[str, int | None] = {}
+    max_output_map = openrouter_max_output_lookup()
+
+    for provider_info in snapshot.providers:
+        canonical = _normalize_provider(provider_info.id)
+        if canonical not in _SUPPORTED:
+            continue
+        prefixes = _router_prefix_variants(canonical)
+        for model in provider_info.models:
+            model_id = model.id
+            alias_map[(canonical, model_id)] = model_id
+            context_map[f"{canonical}:{model_id}"] = getattr(
+                model, "context_window", None
+            )
+            for alias in candidate_openrouter_ids(prefixes, model_id, model_id):
+                alias_map[(canonical, alias)] = model_id
+
+    return alias_map, context_map, max_output_map

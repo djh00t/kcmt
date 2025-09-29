@@ -96,3 +96,21 @@ tag_format = "v$version"
 update_changelog_on_bump = false
 version_files = ["kcmt/__init__.py"]
 message_template = "{{type}}({{scope}}): {{subject}}"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["kcmt"]
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = [
+  "httpx",
+  "httpx.*",
+  "genai_prices",
+  "genai_prices.*",
+  "openai",
+  "openai.*",
+]
+ignore_missing_imports = true

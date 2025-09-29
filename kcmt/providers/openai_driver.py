@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, Callable
 
 # Optional dependency: import module, not symbols, for easier test stubbing
 try:  # pragma: no cover - optional import
-    import openai as _openai  # type: ignore
+    import openai as _openai
 except Exception:  # pragma: no cover
-    _openai = None  # type: ignore[assignment]
+    _openai = None
 
 import httpx
 
@@ -35,33 +35,34 @@ class OpenAIDriver(BaseDriver):
         except ValueError:
             self._request_timeout = 60.0
         # Prefer factory from kcmt.llm so tests can monkeypatch kcmt.llm.OpenAI
-        client_factory = None
+        client_factory: Callable[..., Any] | None = None
         try:  # pragma: no cover - relies on package layout at runtime
-            from kcmt import llm as _llm_mod  # type: ignore
+            from kcmt import llm as _llm_mod
 
             client_factory = getattr(_llm_mod, "OpenAI", None)
         except Exception:  # pragma: no cover
             client_factory = None
 
+        self._client: Any
         if client_factory is not None:
             try:
                 # Keep kwargs minimal to support narrow test doubles
-                self._client = client_factory(  # type: ignore[misc]
+                self._client = client_factory(
                     base_url=config.llm_endpoint,
                     api_key=config.resolve_api_key(),
                 )
             except TypeError:
                 # Fall back to passing timeout when supported
-                self._client = client_factory(  # type: ignore[misc]
+                self._client = client_factory(
                     base_url=config.llm_endpoint,
                     api_key=config.resolve_api_key(),
                     timeout=self._request_timeout,
                 )
         elif _openai is not None:
-            self._client = _openai.OpenAI(  # type: ignore[call-arg]
+            self._client = _openai.OpenAI(
                 base_url=config.llm_endpoint,
                 api_key=config.resolve_api_key(),
-                timeout=self._request_timeout,  # type: ignore[arg-type]
+                timeout=self._request_timeout,
             )
         else:  # pragma: no cover - missing dependency entirely
             raise LLMError("OpenAI SDK not available")
@@ -91,7 +92,7 @@ class OpenAIDriver(BaseDriver):
 
         # Prepare kwargs; for gpt-5 try once WITHOUT token limit first
         base_kwargs: dict[str, Any] = {
-            "messages": messages,  # type: ignore[arg-type]
+            "messages": messages,
             "model": model,
         }
         if is_gpt5:
@@ -99,7 +100,7 @@ class OpenAIDriver(BaseDriver):
         else:
             base_kwargs[token_param] = max_tokens
 
-        def _call_with_kwargs(k: dict[str, Any]):
+        def _call_with_kwargs(k: dict[str, Any]) -> Any:
             create_fn = (
                 self._client.chat.completions.create
             )
@@ -392,14 +393,16 @@ class OpenAIDriver(BaseDriver):
         url = f"{base}/models"
         key = self.config.resolve_api_key() or ""
         headers = {"Authorization": f"Bearer {key}"}
-        items = []
+        items: list[Any] = []
         try:
             resp = httpx.get(
                 url, headers=headers, timeout=self._request_timeout
             )
             resp.raise_for_status()
             data = resp.json()
-            items = data.get("data") or []
+            payload_items = data.get("data") if isinstance(data, dict) else None
+            if isinstance(payload_items, list):
+                items = payload_items
         except (httpx.HTTPError, ValueError, KeyError):
             # Defer to dataset-based fallback below
             items = []
@@ -435,14 +438,10 @@ class OpenAIDriver(BaseDriver):
         if not out:
             try:
                 try:
-                    from kcmt.providers.pricing import (
-                        build_enrichment_context as _bctx,  # type: ignore
-                    )
-                except ImportError:
-                    _bctx = None  # type: ignore[assignment]
-                if _bctx is None:
-                    raise RuntimeError("pricing helper not available")
-                alias_lut, _ctx, _mx = _bctx()
+                    from kcmt.providers.pricing import build_enrichment_context
+                except ImportError as import_err:
+                    raise RuntimeError("pricing helper not available") from import_err
+                alias_lut, _ctx, _mx = build_enrichment_context()
                 seen: set[str] = set()
                 for (prov, mid), canon in alias_lut.items():
                     if prov != "openai":
@@ -472,32 +471,12 @@ class OpenAIDriver(BaseDriver):
 
         # Enrich with pricing/context/max_output (non-fatal on errors)
         try:
-            try:
-                from kcmt.providers.pricing import enrich_ids as _enrich  # type: ignore
-            except ImportError:
-                _enrich = None  # type: ignore[assignment]
-            if _enrich is None:
-                return out
+            from kcmt.providers.pricing import enrich_ids as _enrich
+        except ImportError:
+            return out
+        try:
             emap = _enrich("openai", ids)
-            enriched: list[dict[str, object]] = []
-            for item in out:
-                mid = str(item.get("id", ""))
-                em = emap.get(mid) or {}
-                if not em or not em.get("_has_pricing", False):
-                    if self.debug:
-                        print(
-                            "DEBUG(Driver:OpenAI): skipping %s due to missing "
-                            "pricing"
-                            % mid
-                        )
-                    continue
-                payload = dict(em)
-                payload.pop("_has_pricing", None)
-                enriched.append({**item, **payload})
-            return enriched
         except (
-            ImportError,
-            ModuleNotFoundError,
             ValueError,
             TypeError,
             KeyError,
@@ -505,6 +484,22 @@ class OpenAIDriver(BaseDriver):
             AttributeError,
         ):
             return out
+        enriched: list[dict[str, object]] = []
+        for item in out:
+            mid = str(item.get("id", ""))
+            em = emap.get(mid) or {}
+            if not em or not em.get("_has_pricing", False):
+                if self.debug:
+                    print(
+                        "DEBUG(Driver:OpenAI): skipping %s due to missing "
+                        "pricing"
+                        % mid
+                    )
+                continue
+            payload = dict(em)
+            payload.pop("_has_pricing", None)
+            enriched.append({**item, **payload})
+        return enriched
 
     # Alias/date filters
     _DATE_YMD_RE = re.compile(r"20\d{2}(?:-\d{2}){1,2}")

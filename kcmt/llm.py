@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from .config import Config, get_active_config
 from .exceptions import LLMError
@@ -22,22 +22,29 @@ from .providers.anthropic_driver import AnthropicDriver
 # Driver imports (new provider-specific architecture)
 from .providers.openai_driver import OpenAIDriver
 from .providers.xai_driver import XAIDriver
+from .providers.base import BaseDriver
 
 # Compatibility shim for older tests that expect kcmt.llm.OpenAI
 # to be available for monkeypatching. We avoid importing openai at
 # module import time unless necessary.
 try:  # pragma: no cover - test scaffolding
-    import openai as _openai  # type: ignore
-
-    class OpenAI:  # noqa: D401
-        def __init__(self, *args, **kwargs):  # noqa: D401
-            self._client = _openai.OpenAI(*args, **kwargs)
-            self.chat = self._client.chat
+    import openai as _openai
 except Exception:  # pragma: no cover - if openai not installed
-    class OpenAI:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs):  # noqa: D401, ARG002
+    _openai = None
+
+
+class OpenAI:  # noqa: D401
+    """Compatibility wrapper exposed for legacy tests."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401, ARG002
+        if _openai is not None:
+            client = _openai.OpenAI(*args, **kwargs)
+            self._client = client
+            self.chat = client.chat
+        else:
             # Minimal placeholder; tests will monkeypatch this symbol
             self.chat = type("_Chat", (), {"completions": object()})()
+
 
 # Removed direct OpenAI/httpx usage here (delegated to drivers)
 
@@ -83,7 +90,7 @@ class LLMClient:
             self._request_timeout = 60.0
 
         # Provider driver setup (strategy pattern)
-        self._driver: object
+        self._driver: BaseDriver
         if self.provider == "anthropic":
             self._mode = "anthropic"
             self._driver = AnthropicDriver(self.config, debug=debug)
@@ -319,9 +326,9 @@ class LLMClient:
         # Build messages (system + user) based on current minimal_prompt flag
         messages = self._build_messages(prompt)
         minimal_allowed = not self.model.startswith("gpt-5")
-        driver: OpenAIDriver = cast(OpenAIDriver, self._driver)
+        driver = cast(OpenAIDriver, self._driver)
         try:
-            content = driver.invoke_messages(  # type: ignore[attr-defined]
+            content = driver.invoke_messages(
                 messages,
                 minimal_ok=minimal_allowed,
             )
@@ -337,7 +344,6 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 messages = self._build_messages(prompt)
-                # type: ignore[attr-defined]
                 content = driver.invoke_messages(
                     messages,
                     minimal_ok=False,
@@ -351,7 +357,6 @@ class LLMClient:
                         "rebuilding system message for gpt-5"
                     )
                 simple_messages = self._build_messages_simple_gpt5(prompt)
-                # type: ignore[attr-defined]
                 content = driver.invoke_messages(
                     simple_messages,
                     minimal_ok=False,
@@ -372,12 +377,13 @@ class LLMClient:
             raise LLMError(
                 "_call_anthropic invoked for non-anthropic provider"
             )
-        return self._driver.invoke(prompt)  # type: ignore[attr-defined]
+        driver = cast(AnthropicDriver, self._driver)
+        return driver.invoke(prompt)
 
     # ------------------------------------------------------------------
     # Prompt helpers
     # ------------------------------------------------------------------
-    def _build_messages(self, prompt: str):  # type: ignore[override]
+    def _build_messages(self, prompt: str) -> list[dict[str, str]]:
         system_lines = [
             "You are a strict conventional commit message generator.",
             "Output ONLY: type(scope): description",
@@ -408,7 +414,7 @@ class LLMClient:
             {"role": "user", "content": prompt},
         ]
 
-    def _build_messages_simple_gpt5(self, prompt: str):
+    def _build_messages_simple_gpt5(self, prompt: str) -> list[dict[str, str]]:
         """One-shot simplified system prompt for gpt-5 retry.
 
         Keeps strict conventional commit requirements, but removes

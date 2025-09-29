@@ -8,15 +8,23 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from json.encoder import (
-    INFINITY,
-    _make_iterencode,
-    encode_basestring,
-    encode_basestring_ascii,
-)
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Optional, cast
+
+_json_encoder = json.encoder
+INFINITY = cast(float, getattr(_json_encoder, "INFINITY"))
+encode_basestring = cast(
+    Callable[[str], str], getattr(_json_encoder, "encode_basestring")
+)
+encode_basestring_ascii = cast(
+    Callable[[str], str], getattr(_json_encoder, "encode_basestring_ascii")
+)
+_make_iterencode = cast(
+    Callable[..., Callable[[Any, int], Iterator[str]]],
+    getattr(_json_encoder, "_make_iterencode"),
+)
 
 from .commit import CommitGenerator
 from .config import (
@@ -44,7 +52,10 @@ RED = "\033[91m"
 class DecimalFriendlyJSONEncoder(json.JSONEncoder):
     """JSON encoder that renders floats without scientific notation."""
 
-    def iterencode(self, o, _one_shot=False):  # noqa: N802 - match json API
+    def iterencode(
+        self, o: Any, _one_shot: bool = False
+    ) -> Iterator[str]:  # noqa: N802 - match json API
+        markers: dict[int, Any] | None
         if self.check_circular:
             markers = {}
         else:
@@ -55,11 +66,11 @@ class DecimalFriendlyJSONEncoder(json.JSONEncoder):
         else:
             _encoder = encode_basestring
 
-        def floatstr(  # noqa: ANN001 - signature fixed by json module
-            value,
-            allow_nan=self.allow_nan,
-            _inf=INFINITY,
-            _neginf=-INFINITY,
+        def floatstr(
+            value: float,
+            allow_nan: bool = self.allow_nan,
+            _inf: float = INFINITY,
+            _neginf: float = -INFINITY,
         ) -> str:
             if value != value:  # NaN check
                 text = "NaN"
@@ -237,7 +248,7 @@ Examples:
         self,
         label: str,
         extra: Optional[Callable[[], str]] = None,
-    ):
+    ) -> Iterator[None]:
         if not self._profile_enabled:
             yield
             return
@@ -252,7 +263,7 @@ Examples:
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
-    def run(self, args: Optional[List[str]] = None) -> int:
+    def run(self, args: Optional[list[str]] = None) -> int:
         try:
             with self._profile_timer("parse-args"):
                 parsed_args = self.parser.parse_args(args)
@@ -429,8 +440,8 @@ Examples:
     # ------------------------------------------------------------------
     def _collect_overrides(
         self, args: argparse.Namespace, repo_root: Path
-    ) -> Dict[str, str]:
-        overrides: Dict[str, str] = {}
+    ) -> dict[str, str]:
+        overrides: dict[str, str] = {}
         if args.provider:
             overrides["provider"] = args.provider
         if args.model:
@@ -484,7 +495,7 @@ Examples:
         )
         return 0
 
-    def _prompt_provider(self, detected: Dict[str, List[str]]) -> str:
+    def _prompt_provider(self, detected: dict[str, list[str]]) -> str:
         self._print_heading("Select provider")
         for idx, name in enumerate(sorted(DEFAULT_MODELS.keys()), start=1):
             badge = (
@@ -529,7 +540,7 @@ Examples:
         return response or default_endpoint
 
     def _prompt_api_key_env(
-        self, provider: str, detected: Dict[str, List[str]]
+        self, provider: str, detected: dict[str, list[str]]
     ) -> str:
         matches = detected.get(provider, [])
         if not matches:
@@ -613,7 +624,7 @@ Examples:
         with self._profile_timer("init-workflow", extra=_wf_extra):
             workflow = KlingonCMTWorkflow(**filtered_kwargs)
 
-        results: Dict[str, Any] = {}
+        results: dict[str, Any] = {}
 
         with self._profile_timer(
             "execute-workflow",
@@ -655,16 +666,16 @@ Examples:
         from .providers.xai_driver import XAIDriver
 
         # Build per-provider configs using active env
-        configs: Dict[str, Config] = {}
+        configs: dict[str, Config] = {}
         for prov in ("openai", "anthropic", "xai"):
-            overrides: Dict[str, str] = {"provider": prov}
+            overrides: dict[str, str] = {"provider": prov}
             try:
                 cfg = load_config(overrides=overrides)
                 configs[prov] = cfg
             except (ValueError, OSError, RuntimeError, TypeError, KeyError):
                 continue
 
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for prov, cfg in configs.items():
             try:
                 driver: BaseDriver
@@ -832,7 +843,7 @@ Examples:
     def _print_error(self, message: str) -> None:
         print(f"{RED}{message}{RESET}", file=sys.stderr)
 
-    def _display_results(self, results: Dict[str, Any], verbose: bool) -> None:
+    def _display_results(self, results: dict[str, Any], verbose: bool) -> None:
         deletions = results.get("deletions_committed", [])
         file_commits = results.get("file_commits", [])
         errors = results.get("errors", [])
@@ -883,7 +894,7 @@ Examples:
     # Success/failure counts already shown above; omit extra summary.
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """Entry point used by console scripts."""
     return CLI().run(argv)
 

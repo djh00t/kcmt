@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import httpx
 
+from typing import Any
+
 from kcmt.providers.openai_driver import OpenAIDriver
 
 # Currently XAI path reused OpenAI semantics with slight diff cleaning.
@@ -26,13 +28,16 @@ class XAIDriver(OpenAIDriver):
         headers = {"Authorization": f"Bearer {key}"}
         out: list[dict[str, object]] = []
         ids: list[str] = []
+        items: list[Any] = []
         try:
             resp = httpx.get(
                 url, headers=headers, timeout=self._request_timeout
             )
             resp.raise_for_status()
             data = resp.json()
-            items = data.get("data") or []
+            payload_items = data.get("data") if isinstance(data, dict) else None
+            if isinstance(payload_items, list):
+                items = payload_items
         except (httpx.HTTPError, ValueError, KeyError):
             items = []
 
@@ -61,14 +66,12 @@ class XAIDriver(OpenAIDriver):
         # If nothing came back, try dataset fallback for xai
         if not out:
             try:
+                from kcmt.providers.pricing import build_enrichment_context
+            except ImportError:
+                pass
+            else:
                 try:
-                    from kcmt.providers.pricing import (
-                        build_enrichment_context as _bctx,  # type: ignore
-                    )
-                except ImportError:
-                    _bctx = None  # type: ignore[assignment]
-                if _bctx is not None:
-                    alias_lut, _ctx, _mx = _bctx()
+                    alias_lut, _ctx, _mx = build_enrichment_context()
                     seen: set[str] = set()
                     for (prov, mid), canon in alias_lut.items():
                         if prov != "xai":
@@ -83,20 +86,16 @@ class XAIDriver(OpenAIDriver):
                     if len(out) > 200:
                         out = out[:200]
                         ids = ids[:200]
-            except (RuntimeError, ValueError, KeyError, TypeError):
-                pass
+                except (RuntimeError, ValueError, KeyError, TypeError):
+                    pass
         # Enrich as xai
         try:
-            try:
-                from kcmt.providers.pricing import enrich_ids as _enrich  # type: ignore
-            except ImportError:
-                _enrich = None  # type: ignore[assignment]
-            if _enrich is None:
-                return out
+            from kcmt.providers.pricing import enrich_ids as _enrich
+        except ImportError:
+            return out
+        try:
             emap = _enrich("xai", ids)
         except (
-            ImportError,
-            ModuleNotFoundError,
             ValueError,
             TypeError,
             KeyError,
