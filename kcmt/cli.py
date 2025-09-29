@@ -27,7 +27,7 @@ from .config import (
 )
 from .core import KlingonCMTWorkflow
 from .exceptions import GitError, KlingonCMTError, LLMError
-from .git import GitRepo
+from .git import GitRepo, find_git_repo_root
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -221,7 +221,13 @@ Examples:
     def run(self, args: Optional[List[str]] = None) -> int:
         try:
             parsed_args = self.parser.parse_args(args)
-            repo_root = Path(parsed_args.repo_path).resolve()
+            requested_path = (
+                Path(parsed_args.repo_path)
+                .expanduser()
+                .resolve(strict=False)
+            )
+            detected_root = find_git_repo_root(requested_path)
+            repo_root = (detected_root or requested_path).resolve(strict=False)
             non_interactive = (
                 bool(os.environ.get("PYTEST_CURRENT_TEST"))
                 or not sys.stdin.isatty()
@@ -277,7 +283,7 @@ Examples:
                     )
                     return self._run_configuration(parsed_args, repo_root)
 
-            overrides = self._collect_overrides(parsed_args)
+            overrides = self._collect_overrides(parsed_args, repo_root)
             config = load_config(repo_root=repo_root, overrides=overrides)
 
             # Persist updated boolean feature flags so subsequent plain runs
@@ -350,7 +356,9 @@ Examples:
     # ------------------------------------------------------------------
     # Configuration helpers
     # ------------------------------------------------------------------
-    def _collect_overrides(self, args: argparse.Namespace) -> Dict[str, str]:
+    def _collect_overrides(
+        self, args: argparse.Namespace, repo_root: Path
+    ) -> Dict[str, str]:
         overrides: Dict[str, str] = {}
         if args.provider:
             overrides["provider"] = args.provider
@@ -363,7 +371,9 @@ Examples:
         if args.max_commit_length is not None:
             overrides["max_commit_length"] = str(args.max_commit_length)
         if args.repo_path:
-            overrides["repo_path"] = args.repo_path
+            overrides["repo_path"] = str(
+                repo_root.expanduser().resolve(strict=False)
+            )
         if getattr(args, "allow_fallback", False):
             overrides["allow_fallback"] = "1"
         if getattr(args, "auto_push", False):
@@ -392,7 +402,7 @@ Examples:
             model=model,
             llm_endpoint=endpoint,
             api_key_env=api_key_env,
-            git_repo_path=args.repo_path,
+            git_repo_path=str(repo_root.expanduser().resolve(strict=False)),
         )
         save_config(config, repo_root)
 
