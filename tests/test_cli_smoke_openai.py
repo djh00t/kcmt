@@ -6,6 +6,7 @@ from kcmt.config import (
     Config,
     clear_active_config,
     load_config,
+    load_persisted_config,
     save_config,
 )
 
@@ -40,6 +41,8 @@ def test_cli_smoke_openai(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "1")  # force non-interactive
 
+    clear_active_config()
+
     # Stub LLMClient.generate_commit_message to avoid network
     from kcmt import commit as commit_module  # noqa: WPS433
 
@@ -65,6 +68,55 @@ def test_cli_smoke_openai(monkeypatch, tmp_path):
     assert exit_code == 0
     log = _git(["log", "--oneline", "-n", "1"], tmp_path)
     assert "feat(core): update example" in log
+
+
+def test_cli_config_saved_in_repo_root_from_nested_path(monkeypatch, tmp_path):
+    _git(["init", "-q"], tmp_path)
+    _git(["config", "user.name", "Tester"], tmp_path)
+    _git(["config", "user.email", "tester@example.com"], tmp_path)
+
+    target = tmp_path / "example.py"
+    target.write_text("print('hello')\n")
+    _git(["add", "example.py"], tmp_path)
+    _git(["commit", "-m", "chore(core): seed"], tmp_path)
+    target.write_text("print('nested change')\n")
+
+    nested = tmp_path / "pkg" / "sub"
+    nested.mkdir(parents=True)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "1")
+
+    clear_active_config()
+
+    from kcmt import commit as commit_module  # noqa: WPS433
+
+    monkeypatch.setattr(
+        commit_module.LLMClient,
+        "generate_commit_message",
+        staticmethod(lambda *a, **k: "feat(core): nested run"),
+    )
+
+    from kcmt.cli import main  # noqa: WPS433
+
+    exit_code = main(
+        [
+            "--provider",
+            "openai",
+            "--no-progress",
+            "--limit",
+            "1",
+            "--repo-path",
+            str(nested),
+        ]
+    )
+
+    assert exit_code == 0
+    cfg_path = tmp_path / ".kcmt" / "config.json"
+    assert cfg_path.exists()
+    persisted = load_persisted_config(tmp_path)
+    assert persisted is not None
+    assert persisted.git_repo_path == str(tmp_path)
 
 
 def test_config_migration_openai_model_upgrade(tmp_path):
