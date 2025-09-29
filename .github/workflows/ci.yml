@@ -27,6 +27,11 @@ jobs:
       - name: Sync dependencies (dev group)
         run: uv sync --group dev
 
+      - name: Configure Git identity
+        run: |
+          git config --global user.name "kcmt-ci"
+          git config --global user.email "ci@example.com"
+
       - name: Show versions
         run: |
           uv --version

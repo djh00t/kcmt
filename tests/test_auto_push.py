@@ -25,13 +25,13 @@ def test_auto_push_triggers_on_success(monkeypatch):
     monkeypatch.setattr(
         wf,
         "_process_deletions_first",
-        types.MethodType(lambda self: [], wf),
+        types.MethodType(lambda self, *_: [], wf),
     )
     monkeypatch.setattr(
         wf,
         "_process_per_file_commits",
         types.MethodType(
-            lambda self: [
+            lambda self, *_: [
                 CommitResult(
                     success=True,
                     commit_hash="abcd1234",
@@ -61,13 +61,13 @@ def test_auto_push_not_triggered_when_disabled(monkeypatch):
     monkeypatch.setattr(
         wf,
         "_process_deletions_first",
-        types.MethodType(lambda self: [], wf),
+        types.MethodType(lambda self, *_: [], wf),
     )
     monkeypatch.setattr(
         wf,
         "_process_per_file_commits",
         types.MethodType(
-            lambda self: [
+            lambda self, *_: [
                 CommitResult(
                     success=True,
                     commit_hash="deadbeef",
@@ -94,13 +94,13 @@ def test_auto_push_not_triggered_on_no_success(monkeypatch):
     monkeypatch.setattr(
         wf,
         "_process_deletions_first",
-        types.MethodType(lambda self: [], wf),
+        types.MethodType(lambda self, *_: [], wf),
     )
     monkeypatch.setattr(
         wf,
         "_process_per_file_commits",
         types.MethodType(
-            lambda self: [
+            lambda self, *_: [
                 CommitResult(
                     success=False,
                     commit_hash=None,

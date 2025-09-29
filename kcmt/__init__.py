@@ -32,7 +32,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> object:
     """Lazy attribute loader to avoid importing heavy modules at package import time.
 
     This prevents environment-dependent modules (e.g., those that read env in

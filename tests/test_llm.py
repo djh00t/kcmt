@@ -37,7 +37,7 @@ class _FakeOpenAI:
 def _reload_llm_with_fake(monkeypatch, content=None, error=None):
     # Set required API key environment variable
     monkeypatch.setenv("XAI_API_KEY", "fake_api_key_for_testing")
-    
+
     # Ensure config loaded and llm reloaded so it picks up env and fake OpenAI
     sys.modules.pop("kcmt.config", None)
     importlib.import_module("kcmt.config")
@@ -79,7 +79,7 @@ def test_generate_commit_message_subject_only_enforcement(monkeypatch):
     )
     client = llm_module.LLMClient()
     # ensure length > 10 to avoid minimal path
-    long_diff = ("diff line one\n" * 5)
+    long_diff = "diff line one\n" * 5
     msg = client.generate_commit_message(long_diff, "ctx", "conventional")
     # Should not truncate entire message to env length; subject unchanged
     assert msg.startswith("feat:")
