@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -9,6 +10,7 @@ from kcmt.config import (
     detect_available_providers,
     get_active_config,
     load_config,
+    load_persisted_config,
     save_config,
     set_active_config,
 )
@@ -81,6 +83,27 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
 
     assert loaded.provider == "github"
     assert loaded.max_commit_length == 88
+    assert loaded.git_repo_path == str(tmp_path)
+
+
+def test_load_config_upgrades_relative_repo_path(tmp_path):
+    config_dir = tmp_path / ".kcmt"
+    config_dir.mkdir()
+    legacy = {
+        "provider": "openai",
+        "model": DEFAULT_MODELS["openai"]["model"],
+        "llm_endpoint": DEFAULT_MODELS["openai"]["endpoint"],
+        "api_key_env": DEFAULT_MODELS["openai"]["api_key_env"],
+        "git_repo_path": ".",
+        "max_commit_length": 72,
+        "allow_fallback": False,
+        "auto_push": False,
+    }
+    (config_dir / "config.json").write_text(json.dumps(legacy))
+
+    loaded = load_persisted_config(tmp_path)
+
+    assert loaded is not None
     assert loaded.git_repo_path == str(tmp_path)
 
 
