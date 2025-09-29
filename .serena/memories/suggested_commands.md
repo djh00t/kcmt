@@ -1,0 +1,9 @@
+- Install dev deps: `make install-dev` (uv pip editable + tooling).
+- Run tests: `make test` (uv run pytest) or `uv run pytest`.
+- Strict tests/coverage: `make test-verbose`, `make coverage`, `make test-strict`.
+- Lint/format: `make lint`, `make format`, or individual `ruff check kcmt tests`, `isort kcmt tests`, `black kcmt tests`.
+- Type checking: `make typecheck` (uv run mypy kcmt).
+- Full check suite: `make check`.
+- Build package: `make build` or `python -m build`.
+- CLI entrypoints: `kcmt`, `commit`, or `python -m kcmt.main` (needs `.kcmt/config.json`).
+- Configure provider: `kcmt --configure` inside target repo.
