@@ -242,36 +242,16 @@ Examples:
             if parsed_args.configure:
                 return self._run_configuration(parsed_args, repo_root)
 
+            overrides = self._collect_overrides(parsed_args, repo_root)
+            persisted_config = load_persisted_config(repo_root)
+
             # Check if this is the first time running kcmt in this repo
-            if not load_persisted_config(repo_root):
-                if parsed_args.provider and non_interactive:
-                    # Ephemeral config using defaults (test / CI friendly).
-                    # Include env-driven feature flags on first-run so they
-                    # persist (previously they were lost until a second run).
-                    provider = parsed_args.provider
-                    meta = DEFAULT_MODELS.get(
-                        provider, DEFAULT_MODELS["openai"]
+            if not persisted_config:
+                if non_interactive:
+                    config = load_config(
+                        repo_root=repo_root, overrides=overrides
                     )
-                    env_allow = os.environ.get(
-                        "KLINGON_CMT_ALLOW_FALLBACK", ""
-                    ).lower() in {"1", "true", "yes", "on"}
-                    env_push = os.environ.get(
-                        "KLINGON_CMT_AUTO_PUSH", ""
-                    ).lower() in {"1", "true", "yes", "on"}
-                    cfg = Config(
-                        provider=provider,
-                        model=parsed_args.model or meta["model"],
-                        llm_endpoint=parsed_args.endpoint
-                        or meta["endpoint"],
-                        api_key_env=parsed_args.api_key_env
-                        or meta["api_key_env"],
-                        git_repo_path=str(repo_root),
-                        allow_fallback=env_allow
-                        or getattr(parsed_args, "allow_fallback", False),
-                        auto_push=env_push
-                        or getattr(parsed_args, "auto_push", False),
-                    )
-                    save_config(cfg, repo_root)
+                    save_config(config, repo_root)
                 else:
                     self._print_info(
                         "🚀 Welcome to kcmt! This appears to be your first "
@@ -282,14 +262,17 @@ Examples:
                         "generating commit messages."
                     )
                     return self._run_configuration(parsed_args, repo_root)
+            else:
+                config = load_config(repo_root=repo_root, overrides=overrides)
 
-            overrides = self._collect_overrides(parsed_args, repo_root)
-            config = load_config(repo_root=repo_root, overrides=overrides)
+            if not persisted_config:
+                persisted_cfg = load_persisted_config(repo_root)
+            else:
+                persisted_cfg = persisted_config
 
             # Persist updated boolean feature flags so subsequent plain runs
             # (without explicit flags) retain user preference. This mirrors
             # typical CLI tooling that records config after feature toggles.
-            persisted_cfg = load_persisted_config(repo_root)
             # Persist when flags explicitly overridden OR when env enabled a
             # feature not yet persisted (so subsequent plain runs inherit it)
             should_persist = False
