@@ -5,8 +5,9 @@ Enhancements (2025-09-22):
  - Added robust output sanitization `_sanitize_commit_output` to coerce
      verbose / multi-line OpenAI style responses into a valid conventional
      commit header + optional body (emulating successful xai behaviour).
- - Normalizes quotes, code fences, markdown artifacts; extracts first
-     plausible header; falls back to heuristic if model output unusable.
+ - Normalizes quotes, code fences, markdown artifacts; extracts the first
+     plausible header and raises when a conventional subject cannot be
+     recovered.
 """
 
 from __future__ import annotations
@@ -70,12 +71,12 @@ class LLMClient:
                     "' is not set or empty."
                 )
 
-        # Per-request timeout (seconds) configurable; default 60s.
+        # Per-request timeout (seconds) configurable; default 5s.
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 60.0
+            self._request_timeout = float(timeout_env) if timeout_env else 5.0
         except ValueError:
-            self._request_timeout = 60.0
+            self._request_timeout = 5.0
 
         # Provider driver setup (strategy pattern)
         self._driver: BaseDriver
@@ -123,38 +124,32 @@ class LLMClient:
             print(f"  Context: {context}")
             print(f"  Provider: {self.provider}")
 
-        # Heuristic early-exits for special cases expected by tests and UX:
-        # 1) Very small diffs -> minimal commit without hitting the API
-        if len(diff.strip()) < 10:
-            return self._generate_minimal_commit_message(context, style)
-        # 2) Very large diffs -> generate deterministic message based on
-        #    file type to avoid oversized prompts and flakiness
-        if len(diff) > 8000:
-            return self._generate_large_file_commit_message(diff, context, style)
-
         # Handle binary files (but NEVER treat known text files as binary)
         file_path_hint = ""
         if context and "File:" in context:
             file_path_hint = context.split("File:", 1)[1].strip()
-        if self._is_binary_diff(diff) and not self._looks_like_text_file(
-            file_path_hint
-        ):
+        diff_for_prompt = diff
+        binary_summary = None
+        if self._is_binary_diff(diff) and not self._looks_like_text_file(file_path_hint):
             if self.debug:
-                print(
-                    "DEBUG: Detected binary file (non-text), using binary "
-                    "commit message"
-                )
-            return self._generate_binary_commit_message(diff, context, style)
+                print("DEBUG: Detected binary diff; summarising for LLM prompt")
+            snippet = diff[:400].strip()
+            binary_summary = (
+                "Binary diff detected.\n"
+                f"File hint: {file_path_hint or 'unknown'}\n"
+                "Git reported: " + (snippet or "<no additional details>")
+            )
 
         # Clean up diff and apply truncation if too large for prompt budgets
-        if len(diff) > 12000:
+        if len(diff_for_prompt) > 12000:
             # Keep head and tail to provide context while limiting size
-            head = diff[:8000]
-            tail = diff[-2000:]
+            head = diff_for_prompt[:8000]
+            tail = diff_for_prompt[-2000:]
             diff_for_prompt = head + "\n...\n" + tail
-        else:
-            diff_for_prompt = diff
+
         cleaned_diff = self._clean_diff_for_llm(diff_for_prompt)
+        if binary_summary:
+            cleaned_diff = f"{binary_summary}\n\n{cleaned_diff}".strip()
         if self.debug:
             print(f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters")
 
@@ -259,16 +254,6 @@ class LLMClient:
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
-    # Public helpers to expose heuristic generators (used by workflow when
-    # allow_fallback is enabled or for pre-LLM short-circuits in tests)
-    def heuristic_minimal(self, context: str, style: str = "conventional") -> str:
-        return self._generate_minimal_commit_message(context, style)
-
-    def heuristic_large(
-        self, diff: str, context: str, style: str = "conventional"
-    ) -> str:
-        return self._generate_large_file_commit_message(diff, context, style)
-
     def _call_openai(self, prompt: str) -> str:
         """Delegate OpenAI-like provider call to the driver.
 
@@ -632,104 +617,6 @@ class LLMClient:
         new_lines = lines[:body_start] + wrapped_body
         return "\n".join(new_lines)
 
-    def _generate_large_file_commit_message(
-        self, diff: str, context: str, _style: str
-    ) -> str:
-        """Generate commit message for very large files."""
-        # Extract file path from context
-        file_path = ""
-        if context and "File:" in context:
-            file_path = context.split("File:", 1)[1].strip()
-
-        # Determine appropriate commit message based on file type and size
-        if file_path:
-            if file_path.endswith((".py", ".java", ".cpp", ".c", ".js", ".ts")):
-                filename = file_path.split("/")[-1]
-                return f"feat(core): add {filename} implementation"
-            elif file_path.endswith((".json", ".yaml", ".yml", ".toml")):
-                filename = file_path.split("/")[-1]
-                return f"chore(config): add {filename} configuration"
-            elif file_path.endswith((".md", ".rst", ".txt")):
-                filename = file_path.split("/")[-1]
-                return f"docs: add {filename}"
-            elif file_path.endswith((".html", ".css", ".scss")):
-                filename = file_path.split("/")[-1]
-                return f"feat(ui): add {filename} styles"
-            else:
-                filename = file_path.split("/")[-1]
-                return f"feat: add {filename}"
-
-        # Check if it's a new file vs modification
-        if "new file mode" in diff:
-            return "feat(core): add new implementation file"
-        else:
-            return "refactor(core): major code restructuring"
-
-    def _generate_binary_commit_message(
-        self, diff: str, context: str, _style: str
-    ) -> str:
-        """Generate commit message for binary file changes."""
-        # Extract file path from context or diff
-        file_path = ""
-        if context and "File:" in context:
-            file_path = context.split("File:", 1)[1].strip()
-
-        # Determine appropriate type and scope based on file
-        if file_path:
-            if file_path.endswith((".coverage", ".cov")):
-                return "test(coverage): update test coverage data"
-            elif file_path.endswith((".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg")):
-                filename = file_path.split("/")[-1]
-                return f"feat(assets): add {filename} image file"
-            elif file_path.endswith((".pdf", ".doc", ".docx")):
-                filename = file_path.split("/")[-1]
-                return f"docs(assets): add {filename} document"
-            elif file_path.endswith((".zip", ".tar.gz", ".tar", ".gz", ".tgz")):
-                filename = file_path.split("/")[-1]
-                return f"build(deps): add {filename} archive"
-            elif file_path.endswith((".woff", ".woff2", ".ttf", ".eot")):
-                filename = file_path.split("/")[-1]
-                return f"feat(fonts): add {filename} font file"
-            elif file_path.endswith((".mp4", ".avi", ".mov", ".webm")):
-                filename = file_path.split("/")[-1]
-                return f"feat(media): add {filename} video file"
-            elif file_path.endswith((".mp3", ".wav", ".ogg", ".flac")):
-                filename = file_path.split("/")[-1]
-                return f"feat(media): add {filename} audio file"
-            else:
-                filename = file_path.split("/")[-1]
-                return f"chore(assets): add {filename} binary file"
-
-        # Fallback for binary files without clear context
-        if "Binary files /dev/null and" in diff:
-            return "chore(assets): add binary file"
-        else:
-            return "chore(assets): update binary file"
-
-    def _generate_minimal_commit_message(self, context: str, _style: str) -> str:
-        """Generate commit message when diff is empty or minimal."""
-        if context and "File:" in context:
-            file_path = context.split("File:", 1)[1].strip()
-            filename = file_path.split("/")[-1]
-
-            # Determine appropriate scope based on file path
-            if "test" in file_path.lower() or file_path.endswith(".test."):
-                return f"test(core): update {filename}"
-            elif file_path.endswith((".md", ".txt", ".rst")):
-                return f"docs(content): update {filename}"
-            elif file_path.endswith((".json", ".yaml", ".yml", ".toml", ".ini")):
-                # Use allowed conventional commit type 'chore'
-                return f"chore(config): update {filename}"
-            elif file_path.endswith((".css", ".scss", ".sass", ".less")):
-                return f"style(ui): update {filename}"
-            elif file_path.endswith((".js", ".ts", ".jsx", ".tsx")):
-                return f"refactor(core): update {filename}"
-            elif file_path.endswith((".py", ".java", ".cpp", ".c", ".go", ".rs")):
-                return f"refactor(core): update {filename}"
-            else:
-                return f"chore(misc): update {filename}"
-        return "chore(misc): minor update"
-
     # ------------------------------------------------------------------
     # Output sanitization / normalization
     # ------------------------------------------------------------------
@@ -819,13 +706,3 @@ class LLMClient:
         if not body:
             return header
         return header + "\n\n" + "\n".join(body)
-
-    # _heuristic_header_from_context removed per strict no-fallback policy
-
-    # _heuristic_header_from_context removed per strict no-fallback policy
-
-    # _heuristic_header_from_context removed per strict no-fallback policy
-
-    # _heuristic_header_from_context removed per strict no-fallback policy
-
-    # _heuristic_header_from_context removed per strict no-fallback policy
