@@ -40,19 +40,20 @@ def test_wrap_body(monkeypatch):
     assert any(len(line) <= 72 for line in wrapped.splitlines()[2:])
 
 
-def test_minimal_and_large_and_binary(monkeypatch):
+def test_generate_commit_message_always_uses_llm(monkeypatch):
     c = _client(monkeypatch)
-    minimal = c._generate_minimal_commit_message(  # noqa: SLF001
-        "File: something.py", "conventional"
+    # Minimal diff should still flow through the LLM path
+    minimal = c.generate_commit_message("x+y", context="File: something.py")
+    assert minimal.startswith("feat(core): add thing")
+
+    # Large diffs are truncated but still sent to the LLM
+    large_diff = "line\n" * 9000
+    large = c.generate_commit_message(large_diff, context="File: big.py")
+    assert large.startswith("feat(core): add thing")
+
+    # Binary diffs are summarised and then passed to the LLM
+    binary = c.generate_commit_message(
+        "Binary files /dev/null and b/image.png differ",
+        context="File: image.png",
     )
-    assert minimal.startswith("refactor(") or minimal.startswith("chore(")
-    large = c._generate_large_file_commit_message(  # noqa: SLF001
-        "new file mode", "File: big.py", "conventional"
-    )
-    assert large.startswith("feat(")
-    binary = c._generate_binary_commit_message(  # noqa: SLF001
-        "Binary files /dev/null and b differ",
-        "File: image.png",
-        "conventional",
-    )
-    assert binary.startswith("feat(")
+    assert binary.startswith("feat(core): add thing")
