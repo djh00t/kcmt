@@ -1,7 +1,11 @@
 """Git operations for kcmt."""
 
+import difflib
+import hashlib
 import os
+import shlex
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -309,7 +313,9 @@ class GitRepo:
 
         return deleted_files
 
-    def list_changed_files(self) -> list[tuple[str, str]]:
+    def list_changed_files(
+        self, status_entries: Optional[Sequence[tuple[str, str]]] = None
+    ) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
 
         return [(status, path) for status, path in self._run_git_porcelain() if path]
