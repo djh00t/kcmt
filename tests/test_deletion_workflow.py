@@ -17,9 +17,8 @@ def test_deletion_only_commit(tmp_path, monkeypatch):
     cfg = Config(
         provider="openai",
         model="gpt-test",
-        llm_endpoint=None,
+        llm_endpoint="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
-        allow_fallback=True,
         auto_push=False,
     )
     set_active_config(cfg)
