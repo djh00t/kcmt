@@ -77,14 +77,27 @@ jobs:
       - name: Mypy (type check)
         run: uv run mypy --config-file pyproject.toml
 
-      - name: Pytest (unit + coverage)
-        env:
-          # Do NOT stub or short-circuit LLM paths globally; tests control stubbing themselves
-          KCMT_TEST_DISABLE_OPENAI: ""
-          # Avoid provider auto-detection being influenced by Actions token during tests
-          GITHUB_TOKEN: ""
+      # Important: scrub env that could bias provider auto-detection in tests.
+      # Some runners or secrets may provide OPENAI_* or KCMT_PROVIDER which
+      # causes load_config() to prefer OpenAI over Anthropic even when tests
+      # set ANTHROPIC_* variables.
+      - name: Pytest (unit + coverage) with sanitized provider env
+        shell: bash
         run: |
-          uv run pytest -n auto -ra -vv \
-            -W default -W error::DeprecationWarning -W error::ResourceWarning \
-            --strict-config --strict-markers \
-            --cov=kcmt --cov-branch --cov-report=term-missing:skip-covered
+          python - <<'PY'
+          import os, sys, subprocess
+          # Remove variables that can force provider selection globally.
+          for k in list(os.environ):
+              if k.startswith("OPENAI_") or k == "KCMT_PROVIDER":
+                  os.environ.pop(k, None)
+          # Ensure GitHub token doesn't influence detection paths.
+          os.environ.pop("GITHUB_TOKEN", None)
+          # Do not globally disable OpenAI paths; tests control stubbing.
+          cmd = [
+              "uv","run","pytest","-n","auto","-ra","-vv",
+              "-W","default","-W","error::DeprecationWarning","-W","error::ResourceWarning",
+              "--strict-config","--strict-markers",
+              "--cov=kcmt","--cov-branch","--cov-report=term-missing:skip-covered",
+          ]
+          sys.exit(subprocess.call(cmd))
+          PY
