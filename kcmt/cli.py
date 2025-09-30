@@ -387,7 +387,7 @@ Examples:
                     )
                     return 2
 
-            self._print_banner(config)
+            self._print_banner(config, parsed_args)
 
             if parsed_args.single_file:
                 return self._execute_single_file(parsed_args, config)
@@ -755,7 +755,9 @@ Examples:
     # ------------------------------------------------------------------
     # Output helpers
     # ------------------------------------------------------------------
-    def _print_banner(self, config: Config) -> None:
+    def _print_banner(
+        self, config: Config, args: Optional[argparse.Namespace] = None
+    ) -> None:
         repo = Path(config.git_repo_path).resolve()
         banner = f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo {repo}{RESET}"
         print(banner)
@@ -781,20 +783,21 @@ Examples:
         errors = results.get("errors", [])
         pushed = results.get("pushed")
 
+        successful_deletions = [r for r in deletions if r.success]
+        failed_deletions = [r for r in deletions if not r.success]
+        successful_commits = [r for r in file_commits if r.success]
+        failed_commits = [r for r in file_commits if not r.success]
+
+        summary_rows: list[tuple[str, str, str]] = []
         if deletions:
-            successful_deletions = [r for r in deletions if r.success]
-            failed_deletions = [r for r in deletions if not r.success]
-            if successful_deletions:
-                self._print_success(
-                    f"Committed {len(successful_deletions)} deletion(s)"
-                )
-            if failed_deletions:
-                self._print_warning(
-                    f"Failed to commit {len(failed_deletions)} deletion(s)"
-                )
-                if verbose:
-                    for result in failed_deletions:
-                        self._print_error(f"  - {result.error}")
+            plain = (
+                f"{len(successful_deletions)} success / {len(failed_deletions)} fail"
+            )
+            styled = (
+                f"{GREEN}{len(successful_deletions):>3}{RESET} ✓  "
+                f"{RED}{len(failed_deletions):>3}{RESET} ✗"
+            )
+            summary_rows.append(("Deletions", plain, styled))
 
         if file_commits:
             successful_commits = [r for r in file_commits if r.success]
@@ -814,10 +817,10 @@ Examples:
             for error in errors:
                 self._print_error(f"  - {error}")
 
-        if pushed:
-            self._print_success("Pushed commits to remote (auto-push)")
+        summary_text = results.get("summary")
+        if summary_text:
+            self._print_info(summary_text)
 
-    # Success/failure counts already shown above; omit extra summary.
 
 
 def main(argv: Optional[list[str]] = None) -> int:
