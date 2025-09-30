@@ -1,10 +1,9 @@
 {
-  "provider": "openai",
-  "model": "gpt-5-mini-2025-08-07",
-  "llm_endpoint": "https://api.openai.com/v1",
-  "api_key_env": "OPENAI_API_KEY",
+  "provider": "xai",
+  "model": "grok-code-fast",
+  "llm_endpoint": "https://api.x.ai/v1",
+  "api_key_env": "XAI_API_KEY",
   "git_repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "max_commit_length": 72,
-  "allow_fallback": false,
   "auto_push": false
 }
