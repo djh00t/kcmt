@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, Dict
 
 import httpx
 
@@ -36,14 +37,41 @@ class AnthropicDriver(BaseDriver):
             "LLMClient orchestrates prompts."
         )
 
-    def invoke(self, prompt: str) -> str:
+    def invoke(self, prompt: str, request_timeout: float | None = None) -> str:
+        url, headers, payload = self._build_messages_request(prompt)
+        timeout = request_timeout or self._request_timeout
+        try:
+            response = httpx.post(
+                url, headers=headers, json=payload, timeout=timeout
+            )
+        except httpx.HTTPError as e:  # pragma: no cover - network handling
+            raise LLMError(
+                f"Anthropic network error during messages request: {e}"
+            ) from e
+        return self._handle_messages_response(response)
+
+    async def invoke_async(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
+        url, headers, payload = self._build_messages_request(prompt)
+        timeout = request_timeout or self._request_timeout
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+            except httpx.HTTPError as e:  # pragma: no cover - network handling
+                raise LLMError(
+                    f"Anthropic network error during messages request: {e}"
+                ) from e
+        return self._handle_messages_response(response)
+
+    def _build_messages_request(self, prompt: str) -> tuple[str, Dict[str, str], Dict[str, Any]]:
         url = self.config.llm_endpoint.rstrip("/") + "/v1/messages"
         headers = {
             "x-api-key": self._api_key or "",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        payload = {
+        payload: Dict[str, Any] = {
             "model": self.config.model,
             "max_output_tokens": 512,
             "messages": [
@@ -65,17 +93,9 @@ class AnthropicDriver(BaseDriver):
                 "Always respond with type(scope): description."
             ),
         }
-        try:
-            response = httpx.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=self._request_timeout,
-            )
-        except httpx.HTTPError as e:  # pragma: no cover - network handling
-            raise LLMError(
-                f"Anthropic network error during messages request: {e}"
-            ) from e
+        return url, headers, payload
+
+    def _handle_messages_response(self, response: httpx.Response) -> str:
         status = getattr(response, "status_code", 200)
         if status and int(status) >= 400:
             raise LLMError(
@@ -85,10 +105,10 @@ class AnthropicDriver(BaseDriver):
             )
         data = response.json()
         content = data.get("content") or []
-        texts = []
+        texts: list[str] = []
         for chunk in content:
-            if chunk.get("type") == "text":
-                texts.append(chunk.get("text", ""))
+            if isinstance(chunk, dict) and chunk.get("type") == "text":
+                texts.append(str(chunk.get("text", "")))
         return "\n".join(filter(None, texts))
 
     def list_models(self) -> list[dict[str, object]]:
