@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "timestamp": "2025-09-30T14:29:25Z",
+  "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
+  "provider": "xai",
+  "model": "grok-code-fast",
+  "endpoint": "https://api.x.ai/v1",
+  "max_retries": 3,
+  "file_limit": null,
+  "compact": false,
+  "duration_seconds": 12.488332,
+  "rate_commits_per_sec": 0.406879,
+  "counts": {
+    "files_total": 5,
+    "prepared_total": 5,
+    "processed_total": 5,
+    "prepared_failures": 0,
+    "commit_success": 5,
+    "commit_failure": 0,
+    "deletions_total": 0,
+    "deletions_success": 0,
+    "deletions_failure": 0,
+    "overall_success": 5,
+    "overall_failure": 0,
+    "errors": 0
+  },
+  "pushed": true,
+  "summary": "Successfully completed 5 commits. Committed 5 file change(s)",
+  "errors": [],
+  "commits": [
+    {
+      "success": true,
+      "commit_hash": "f1557b1",
+      "message": "feat(docs): add built-in metrics summary feature",
+      "error": null,
+      "file_path": "README.md"
+    },
+    {
+      "success": true,
+      "commit_hash": "fe0af44",
+      "message": "feat(cli): add status command and compact mode\n\nAdd a new \"status\" subcommand to display a formatted summary of the most\nrecent kcmt run, with options for raw JSON output and repository path\nspecification. Introduce compact mode for condensed output with a\nsummary table and checklist, including performance metrics. Implement\nrun snapshot persistence to enable status queries and improve user\nexperience for monitoring tool usage.",
+      "error": null,
+      "file_path": "kcmt/cli.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "1fa6467",
+      "message": "feat(core): add async commit preparation and performance metrics\n\nRefactor commit message preparation from threading to asyncio for better\nconcurrency control using semaphore. Introduce WorkflowMetrics dataclass\nto track and record timing for diffs, queue waits, LLM calls, and\ncommits, providing performance insights. Print metrics summary when\nprogress is disabled. Add new methods for exposing stats snapshot and\ncommit subjects. This improves efficiency and observability in the\nworkflow execution.",
+      "error": null,
+      "file_path": "kcmt/core.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "f198d0a",
+      "message": "test(tests): add CLI compact mode and status tests\n\n- Added test_cli_compact_mode_snapshot to verify compact output mode,\nincluding snapshot saving, status display, and subsequent status\ncommand. - Added test_cli_status_without_snapshot to handle missing run\nhistory. - Updated existing test mocks with stub methods\n(stats_snapshot, commit_subjects)   for improved workflow simulation and\ntest reliability.",
+      "error": null,
+      "file_path": "tests/test_cli.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "85c7943",
+      "message": "test(tests): update auto push display test stub\n\nAdd stats_snapshot and commit_subjects methods to _FakeWorkflow to\nproperly stub the interface. Update __init__ to accept repo_path and\ninitialize git_repo for consistency with the actual workflow class. This\nensures the test accurately simulates the workflow behavior without\nerrors.",
+      "error": null,
+      "file_path": "tests/test_cli_auto_push_display.py"
+    }
+  ],
+  "deletions": [],
+  "subjects": [
+    "feat(docs): add built-in metrics summary feature",
+    "feat(cli): add status command and compact mode",
+    "feat(core): add async commit preparation and performance metrics",
+    "test(tests): add CLI compact mode and status tests",
+    "test(tests): update auto push display test stub"
+  ],
+  "stats": {
+    "total_files": 5,
+    "prepared": 5,
+    "processed": 5,
+    "successes": 5,
+    "failures": 0,
+    "elapsed": 12.288653,
+    "rate": 0.406879
+  },
+  "auto_push_state": "pushed"
+}
