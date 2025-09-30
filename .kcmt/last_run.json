@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-09-30T16:01:20Z",
+  "timestamp": "2025-09-30T16:02:14Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast",
@@ -8,94 +8,46 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 35.458415,
-  "rate_commits_per_sec": 0.199046,
+  "duration_seconds": 15.752599,
+  "rate_commits_per_sec": 0.064761,
   "counts": {
-    "files_total": 7,
-    "prepared_total": 7,
-    "processed_total": 7,
+    "files_total": 1,
+    "prepared_total": 1,
+    "processed_total": 1,
     "prepared_failures": 0,
-    "commit_success": 7,
+    "commit_success": 1,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 7,
+    "overall_success": 1,
     "overall_failure": 0,
     "errors": 0
   },
   "pushed": null,
-  "summary": "Successfully completed 7 commits. Committed 7 file change(s)",
+  "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
   "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "f1e4636",
-      "message": "chore(config): disable auto push",
-      "error": null,
-      "file_path": ".kcmt/config.json"
-    },
-    {
-      "success": true,
-      "commit_hash": "542471b",
-      "message": "chore(config): update last run log with execution failure\n\nUpdated .kcmt/last_run.json to reflect a failed run where all 7 files\ntimed out after retries. Provider switched from xai to openai, model\nupdated to gpt-5-mini-2025-08-07, and duration increased significantly\ndue to timeouts. No commits or deletions succeeded, marking a full\nfailure compared to previous successful run. Errors cleared, indicating\nno push issues but persistent timeout problems.",
+      "commit_hash": "b1ed327",
+      "message": "chore(config): update last run log with successful execution\n\nUpdated .kcmt/last_run.json to reflect a successful run where all 7\ncommits succeeded after previous failures. Provider switched from OpenAI\nto xAI, model updated to grok-code-fast, duration decreased, and rate\nimproved. No more timeouts, with all files processed and committed\nsuccessfully. This indicates fixes for timeout issues in the commit\ngeneration process.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
-    },
-    {
-      "success": true,
-      "commit_hash": "c83a2e9",
-      "message": "feat(commit): add request_timeout parameter support\n\nAdd optional `request_timeout` parameter to `suggest_commit_message` and\n`suggest_commit_message_async` methods to allow specifying a timeout for\nLLM requests. Include helper function `_supports_request_timeout` using\n`inspect` to conditionally pass the timeout to the LLM client if its\nmethod supports it, enabling better control over request durations and\npreventing indefinite hangs.",
-      "error": null,
-      "file_path": "kcmt/commit.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "53f5b1d",
-      "message": "feat(cmt): add adaptive timeouts and timeout support to commit…\n\nImplement adaptive timeout logic that dynamically adjusts timeout values\nbased on failures, with an upper ceiling. Add optional request_timeout\nparameter to _prepare_single_change method to pass timeouts to the\nunderlying generator when supported. This improves reliability and\nperformance for long-running commit message generations, particularly\nwhen using external APIs like OpenAI, while disabling adaptiveness\nduring tests.",
-      "error": null,
-      "file_path": "kcmt/core.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "a239cff",
-      "message": "feat(llm): add request timeout support\n\nAdd optional `request_timeout` parameter to LLM client methods for\ncontrolling API call timeouts to OpenAI and Anthropic providers,\nimproving reliability in slow network conditions.",
-      "error": null,
-      "file_path": "kcmt/llm.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "5b8790b",
-      "message": "feat(anthropic): add async invoke and request timeout support\n\nRefactor invoke method to accept optional request_timeout parameter.\nExtract common logic into _build_messages_request and\n_handle_messages_response. Add async invoke_async method for\nasynchronous requests. Improve type hints and error handling for\nrobustness.",
-      "error": null,
-      "file_path": "kcmt/providers/anthropic_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "7354837",
-      "message": "feat(openai): add async client support\n\nAdd asynchronous client instantiation and invocation methods for\nimproved performance in async contexts. Refactor client factory logic to\nhandle timeout parameters robustly, reducing instantiation failures.\nExtract response parsing into helper methods for better maintainability.",
-      "error": null,
-      "file_path": "kcmt/providers/openai_driver.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "chore(config): disable auto push",
-    "chore(config): update last run log with execution failure",
-    "feat(commit): add request_timeout parameter support",
-    "feat(cmt): add adaptive timeouts and timeout support to commit…",
-    "feat(llm): add request timeout support",
-    "feat(anthropic): add async invoke and request timeout support",
-    "feat(openai): add async client support"
+    "chore(config): update last run log with successful execution"
   ],
   "stats": {
-    "total_files": 7,
-    "prepared": 7,
-    "processed": 7,
-    "successes": 7,
+    "total_files": 1,
+    "prepared": 1,
+    "processed": 1,
+    "successes": 1,
     "failures": 0,
-    "elapsed": 35.167669,
-    "rate": 0.199046
+    "elapsed": 15.441438,
+    "rate": 0.064761
   },
   "auto_push_state": ""
 }
