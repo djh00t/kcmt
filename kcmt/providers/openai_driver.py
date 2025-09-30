@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from typing import Any, Callable
@@ -32,38 +33,69 @@ class OpenAIDriver(BaseDriver):
             self._request_timeout = float(timeout_env) if timeout_env else 5.0
         except ValueError:
             self._request_timeout = 5.0
-        # Prefer factory from kcmt.llm so tests can monkeypatch kcmt.llm.OpenAI
+
+        api_key = config.resolve_api_key()
+
+        llm_module = None
         client_factory: Callable[..., Any] | None = None
         try:  # pragma: no cover - relies on package layout at runtime
             from kcmt import llm as _llm_mod
 
+            llm_module = _llm_mod
             client_factory = getattr(_llm_mod, "OpenAI", None)
         except Exception:  # pragma: no cover
             client_factory = None
 
+        def _instantiate(factory: Callable[..., Any]) -> Any:
+            base_kwargs = {
+                "base_url": config.llm_endpoint,
+                "api_key": api_key,
+            }
+            last_type_error: Exception | None = None
+            for include_timeout in (False, True):
+                kwargs = dict(base_kwargs)
+                if include_timeout:
+                    kwargs["timeout"] = self._request_timeout
+                try:
+                    return factory(**kwargs)
+                except TypeError as exc:
+                    last_type_error = exc
+                    continue
+            if last_type_error is not None:
+                raise LLMError("OpenAI client factory rejected provided arguments") from last_type_error
+            raise LLMError("Failed to instantiate OpenAI client")
+
         self._client: Any
+        self._client_async: Any | None = None
+
+        async_factory: Callable[..., Any] | None = None
         if client_factory is not None:
-            try:
-                # Keep kwargs minimal to support narrow test doubles
-                self._client = client_factory(
-                    base_url=config.llm_endpoint,
-                    api_key=config.resolve_api_key(),
-                )
-            except TypeError:
-                # Fall back to passing timeout when supported
-                self._client = client_factory(
-                    base_url=config.llm_endpoint,
-                    api_key=config.resolve_api_key(),
-                    timeout=self._request_timeout,
-                )
+            self._client = _instantiate(client_factory)
+            if llm_module is not None:
+                async_factory = getattr(llm_module, "AsyncOpenAI", None)
         elif _openai is not None:
-            self._client = _openai.OpenAI(
-                base_url=config.llm_endpoint,
-                api_key=config.resolve_api_key(),
-                timeout=self._request_timeout,
-            )
+            self._client = _instantiate(_openai.OpenAI)
+            async_factory = getattr(_openai, "AsyncOpenAI", None)
         else:  # pragma: no cover - missing dependency entirely
             raise LLMError("OpenAI SDK not available")
+
+        if async_factory is not None:
+            try:
+                self._client_async = _instantiate(async_factory)
+            except Exception as exc:  # pragma: no cover - defensive
+                if self.debug:
+                    msg = str(exc)
+                    if len(msg) > 200:
+                        msg = msg[:200] + "…"
+                    print(
+                        "DEBUG(Driver:OpenAI): failed to construct AsyncOpenAI client: "
+                        + msg
+                    )
+                self._client_async = None
+        elif self.debug:
+            print(
+                "DEBUG(Driver:OpenAI): Async client factory not available; using sync fallback"
+            )
         max_tokens_env = os.environ.get("KCMT_OPENAI_MAX_TOKENS")
         try:
             self._max_completion_tokens = int(max_tokens_env) if max_tokens_env else 512
@@ -72,16 +104,23 @@ class OpenAIDriver(BaseDriver):
         self._minimal_prompt = False  # orchestrator can flip; kept for compat
 
     # The message-building stays orchestrated; we accept already-built messages
-    def _invoke(self, messages: list[dict[str, Any]], minimal_ok: bool) -> str:
+    def _invoke(
+        self,
+        messages: list[dict[str, Any]],
+        minimal_ok: bool,
+        request_timeout: float | None = None,
+    ) -> str:
         max_tokens = getattr(self, "_max_completion_tokens", 512)
         model = self.config.model
         is_gpt5 = model.startswith("gpt-5")
         token_param = "max_completion_tokens" if is_gpt5 else "max_tokens"
+        timeout_value = request_timeout or self._request_timeout
 
         if self.debug:
             print("DEBUG(Driver:OpenAI): invoke")
             print(f"  model={model} token_param={token_param} value={max_tokens}")
             print(f"  minimal_prompt={self._minimal_prompt}")
+            print(f"  timeout={timeout_value:.2f}s")
 
         # Prepare kwargs; for gpt-5 try once WITHOUT token limit first
         base_kwargs: dict[str, Any] = {
@@ -94,16 +133,16 @@ class OpenAIDriver(BaseDriver):
             base_kwargs[token_param] = max_tokens
 
         def _call_with_kwargs(k: dict[str, Any]) -> Any:
+            call_kwargs = dict(k)
+            call_kwargs.setdefault("timeout", timeout_value)
             create_fn = self._client.chat.completions.create
-            return create_fn(**k)
+            return create_fn(**call_kwargs)
 
         try:
-            # For gpt-5, first attempt without token limit
             resp = _call_with_kwargs(base_kwargs)
         except Exception as e:  # noqa: BLE001 - broadened to support stubs
             msg = str(e)
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
-                # Some servers only accept max_completion_tokens
                 if self.debug:
                     print("DEBUG(Driver:OpenAI): fallback to max_completion_tokens")
                 base_kwargs.pop("max_tokens", None)
@@ -111,30 +150,9 @@ class OpenAIDriver(BaseDriver):
                 resp = _call_with_kwargs(base_kwargs)
             else:
                 raise LLMError(f"OpenAI client error: {e}") from e
-        try:
-            choice0 = resp.choices[0]
-        except (AttributeError, IndexError):  # pragma: no cover - defensive
-            raise LLMError("Missing choices in OpenAI response") from None
 
-        # Extract content robustly: handle string or list-of-fragments
-        raw_msg = getattr(choice0, "message", None)
-        content: str = ""
-        if raw_msg is not None:
-            msg_content = getattr(raw_msg, "content", "")
-            if isinstance(msg_content, str):
-                content = msg_content
-            elif isinstance(msg_content, list):  # new SDK list fragments
-                fragments: list[str] = []
-                for part in msg_content:
-                    if isinstance(part, dict):
-                        txt = part.get("text") or part.get("content") or ""
-                        fragments.append(str(txt))
-                    else:  # object with .text maybe
-                        txt = getattr(part, "text", "") or getattr(part, "content", "")
-                        if txt:
-                            fragments.append(str(txt))
-                content = "".join(fragments).strip()
-        finish_reason = getattr(choice0, "finish_reason", None)
+        choice0 = self._first_choice(resp)
+        content, finish_reason = self._extract_choice_content(choice0)
 
         if self.debug:
             print(
@@ -143,120 +161,57 @@ class OpenAIDriver(BaseDriver):
                 )
             )
             if not content:
-                # Deep diagnostic dump of first choice
-                diag = {}
-                for attr in [
-                    "index",
-                    "finish_reason",
-                    "logprobs",
-                    "message",
-                ]:
-                    diag[attr] = getattr(choice0, attr, "<missing>")
-                print("DEBUG(Driver:OpenAI): empty content diag keys=")
-                # Avoid huge output; truncate string repr
-                for k, v in diag.items():
-                    vs = str(v)
-                    if len(vs) > 400:
-                        vs = vs[:400] + "…"
-                    print(f"  {k}: {vs}")
+                self._debug_dump_choice(choice0)
 
-        # If gpt-5 chat yields empty content, try token-limited retry, then
-        # attempt Responses API fallback
         if not content and is_gpt5:
             if self.debug:
                 print("DEBUG(Driver:OpenAI): gpt-5 retry with token limit")
-            # Retry with explicit token limit first
             retry_kwargs = dict(base_kwargs)
             retry_kwargs["max_completion_tokens"] = max_tokens
             try:
                 resp_retry = _call_with_kwargs(retry_kwargs)
-                try:
-                    choice_r = resp_retry.choices[0]
-                    raw_r = getattr(choice_r, "message", None)
-                    msg_r = getattr(raw_r, "content", "")
-                    if isinstance(msg_r, str):
-                        content = msg_r
-                except (AttributeError, IndexError, TypeError):
-                    pass
-            except (ValueError, RuntimeError) as err:
+                choice_r = self._first_choice(resp_retry)
+                candidate, _finish_retry = self._extract_choice_content(choice_r)
+                if candidate:
+                    content = candidate
+            except Exception as err:  # noqa: BLE001 - broad for stubs
                 if self.debug:
                     print("DEBUG(Driver:OpenAI): token-limited retry error " + str(err))
+
             if not content:
                 if self.debug:
                     print("DEBUG(Driver:OpenAI): attempting responses API fallback")
-            # Combine messages into single prompt (preserve system parts)
-            system_parts: list[str] = []
-            user_parts: list[str] = []
-            for m in messages:
-                role = m.get("role")
-                c = m.get("content", "")
-                if isinstance(c, list):  # unlikely here but be safe
-                    c = "\n".join(str(x) for x in c)
-                if role == "system":
-                    system_parts.append(str(c))
-                else:
-                    user_parts.append(str(c))
-            combined_input = (
-                ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
-            ) + "\n\n".join(user_parts)
-            try:
-                resp_create = self._client.responses.create
-                resp_alt = resp_create(
-                    model=model,
-                    input=combined_input,
-                    max_output_tokens=max_tokens,
-                    temperature=1,
-                )
-                # Attempt to extract text from various potential attributes
-                alt_content = ""
-                for attr in ["output_text", "content", "text"]:
-                    val = getattr(resp_alt, attr, None)
-                    if isinstance(val, str) and val.strip():
-                        alt_content = val.strip()
-                        break
-                if not alt_content:
-                    # Newer SDK: .output -> list of content blocks
-                    blocks = getattr(resp_alt, "output", None)
-                    if isinstance(blocks, list):
-                        resp_fragments: list[str] = []
-                        for b in blocks:
-                            if isinstance(b, dict):
-                                txt = (
-                                    b.get("text")
-                                    or b.get("content")
-                                    or b.get("value")
-                                    or ""
-                                )
-                                if txt:
-                                    resp_fragments.append(str(txt))
-                            else:
-                                txt = getattr(b, "text", "") or getattr(
-                                    b, "content", ""
-                                )
-                                if txt:
-                                    resp_fragments.append(str(txt))
-                        if resp_fragments:
-                            alt_content = "".join(resp_fragments).strip()
-                if self.debug:
-                    prev_len = len(content)
-                    print(
-                        (
-                            "DEBUG(Driver:OpenAI): responses fallback "
-                            "prev_len={} new_len={}"
-                        ).format(prev_len, len(alt_content))
+                combined_input = self._combine_messages(messages)
+                try:
+                    resp_create = getattr(self._client, "responses", None)
+                    if resp_create is None:
+                        raise AttributeError("responses API not available")
+                    resp_alt = resp_create.create(
+                        model=model,
+                        input=combined_input,
+                        max_output_tokens=max_tokens,
+                        temperature=1,
+                        timeout=timeout_value,
                     )
-                if alt_content:
-                    content = alt_content
-            except Exception as resp_err:  # noqa: BLE001 - support stubs
-                if self.debug:
-                    msg = str(resp_err)
-                    if len(msg) > 200:
-                        msg = msg[:200] + "…"
-                    print("DEBUG(Driver:OpenAI): responses fallback error " + msg)
+                    alt_content = self._extract_responses_content(resp_alt)
+                    if self.debug:
+                        prev_len = len(content)
+                        print(
+                            (
+                                "DEBUG(Driver:OpenAI): responses fallback "
+                                "prev_len={} new_len={}"
+                            ).format(prev_len, len(alt_content))
+                        )
+                    if alt_content:
+                        content = alt_content
+                except Exception as resp_err:  # noqa: BLE001 - support stubs
+                    if self.debug:
+                        msg = str(resp_err)
+                        if len(msg) > 200:
+                            msg = msg[:200] + "…"
+                        print("DEBUG(Driver:OpenAI): responses fallback error " + msg)
 
-        # Adaptive strategies
         if not content and finish_reason == "length":
-            # Path A: non-gpt5 -> signal minimal prompt retry
             if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
                 if self.debug:
                     print(
@@ -265,7 +220,6 @@ class OpenAIDriver(BaseDriver):
                 self._minimal_prompt = True
                 self._max_completion_tokens = max(64, max_tokens // 2)
                 raise LLMError("RETRY_MINIMAL_PROMPT")
-            # Path B: gpt-5 cannot use minimal prompt; reduce tokens & retry
             if is_gpt5:
                 if self.debug:
                     print(
@@ -275,51 +229,265 @@ class OpenAIDriver(BaseDriver):
                 reduced = max(64, max_tokens // 2)
                 if reduced < max_tokens:
                     self._max_completion_tokens = reduced
-                    # Ensure kwargs carry the reduced token param
                     base_kwargs.pop("max_tokens", None)
                     base_kwargs["max_completion_tokens"] = reduced
                     try:
                         resp2 = _call_with_kwargs(base_kwargs)
-                        try:
-                            choice2 = resp2.choices[0]
-                            raw_msg2 = getattr(choice2, "message", None)
-                            msg_content2 = getattr(raw_msg2, "content", "")
-                            if isinstance(msg_content2, str):
-                                content = msg_content2
-                            elif isinstance(msg_content2, list):
-                                frags2: list[str] = []
-                                for part in msg_content2:
-                                    if isinstance(part, dict):
-                                        frags2.append(
-                                            str(
-                                                part.get("text")
-                                                or part.get("content")
-                                                or ""
-                                            )
-                                        )
-                                    else:
-                                        frags2.append(
-                                            str(
-                                                getattr(part, "text", "")
-                                                or getattr(part, "content", "")
-                                            )
-                                        )
-                                content = "".join(frags2).strip()
-                            if self.debug:
-                                print(
-                                    "DEBUG(Driver:OpenAI): second attempt "
-                                    f"len={len(content)}"
-                                )
-                        except (AttributeError, TypeError):
-                            pass
-                    except (ValueError, RuntimeError) as retry_err:
+                        choice2 = self._first_choice(resp2)
+                        candidate2, _finish2 = self._extract_choice_content(choice2)
+                        if candidate2:
+                            content = candidate2
+                        if self.debug:
+                            print(
+                                "DEBUG(Driver:OpenAI): second attempt "
+                                f"len={len(content)}"
+                            )
+                    except Exception as retry_err:  # noqa: BLE001
                         if self.debug:
                             print(f"DEBUG(Driver:OpenAI): retry error {retry_err}")
-                        # fall through; content still empty -> final raise
+        if not content:
+            if is_gpt5:
+                raise LLMError("RETRY_SIMPLE_PROMPT")
+            raise LLMError("Empty OpenAI response")
+        return str(content)
+
+    def _first_choice(self, resp: Any) -> Any:
+        try:
+            return resp.choices[0]
+        except (AttributeError, IndexError):  # pragma: no cover - defensive
+            raise LLMError("Missing choices in OpenAI response") from None
+
+    def _combine_messages(self, messages: list[dict[str, Any]]) -> str:
+        system_parts: list[str] = []
+        user_parts: list[str] = []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content", "")
+            if isinstance(content, list):
+                content = "\n".join(str(chunk) for chunk in content)
+            if role == "system":
+                system_parts.append(str(content))
+            else:
+                user_parts.append(str(content))
+        system_block = ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
+        return system_block + "\n\n".join(user_parts)
+
+    def _extract_choice_content(self, choice: Any) -> tuple[str, Any]:
+        raw_msg = getattr(choice, "message", None)
+        if raw_msg is None and isinstance(choice, dict):
+            raw_msg = choice.get("message")
+        content_field: Any = ""
+        if raw_msg is not None:
+            content_field = getattr(raw_msg, "content", None)
+            if content_field is None and isinstance(raw_msg, dict):
+                content_field = raw_msg.get("content")
+        content = self._coerce_content_field(content_field)
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason is None and isinstance(choice, dict):
+            finish_reason = choice.get("finish_reason")
+        return content, finish_reason
+
+    def _coerce_content_field(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            fragments: list[str] = []
+            for part in content:
+                if isinstance(part, dict):
+                    txt = part.get("text") or part.get("content") or part.get("value") or ""
+                else:
+                    txt = getattr(part, "text", "") or getattr(part, "content", "")
+                if txt:
+                    fragments.append(str(txt))
+            return "".join(fragments).strip()
+        if content is None:
+            return ""
+        return str(content)
+
+    def _extract_responses_content(self, response: Any) -> str:
+        for attr in ("output_text", "content", "text"):
+            val = getattr(response, attr, None)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        output = getattr(response, "output", None)
+        if isinstance(output, list):
+            fragments: list[str] = []
+            for item in output:
+                if isinstance(item, dict):
+                    txt = item.get("text") or item.get("content") or item.get("value") or ""
+                else:
+                    txt = getattr(item, "text", "") or getattr(item, "content", "")
+                if txt:
+                    fragments.append(str(txt))
+            if fragments:
+                return "".join(fragments).strip()
+        return ""
+
+    def _debug_dump_choice(self, choice: Any) -> None:
+        if not self.debug:
+            return
+        diag: dict[str, Any] = {}
+        for attr in ["index", "finish_reason", "logprobs", "message"]:
+            diag[attr] = getattr(choice, attr, "<missing>")
+        print("DEBUG(Driver:OpenAI): empty content diag keys=")
+        for key, value in diag.items():
+            text = str(value)
+            if len(text) > 400:
+                text = text[:400] + "…"
+            print(f"  {key}: {text}")
+
+    async def _invoke_async(
+        self,
+        messages: list[dict[str, Any]],
+        minimal_ok: bool,
+        request_timeout: float | None = None,
+    ) -> str:
+        if self._client_async is None:
+            return await asyncio.to_thread(
+                self._invoke,
+                messages,
+                minimal_ok,
+                request_timeout=request_timeout,
+            )
+
+        max_tokens = getattr(self, "_max_completion_tokens", 512)
+        model = self.config.model
+        is_gpt5 = model.startswith("gpt-5")
+        token_param = "max_completion_tokens" if is_gpt5 else "max_tokens"
+        timeout_value = request_timeout or self._request_timeout
+
+        if self.debug:
+            print("DEBUG(Driver:OpenAI): invoke_async")
+            print(f"  model={model} token_param={token_param} value={max_tokens}")
+            print(f"  minimal_prompt={self._minimal_prompt}")
+            print(f"  timeout={timeout_value:.2f}s")
+
+        base_kwargs: dict[str, Any] = {
+            "messages": messages,
+            "model": model,
+        }
+        if is_gpt5:
+            base_kwargs["temperature"] = 1
+        else:
+            base_kwargs[token_param] = max_tokens
+
+        async def _call_with_kwargs_async(k: dict[str, Any]) -> Any:
+            call_kwargs = dict(k)
+            call_kwargs.setdefault("timeout", timeout_value)
+            create_fn = self._client_async.chat.completions.create
+            return await create_fn(**call_kwargs)
+
+        try:
+            resp = await _call_with_kwargs_async(base_kwargs)
+        except Exception as e:  # noqa: BLE001 - stubs
+            msg = str(e)
+            if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
+                if self.debug:
+                    print("DEBUG(Driver:OpenAI): async fallback to max_completion_tokens")
+                base_kwargs.pop("max_tokens", None)
+                base_kwargs["max_completion_tokens"] = max_tokens
+                resp = await _call_with_kwargs_async(base_kwargs)
+            else:
+                raise LLMError(f"OpenAI async client error: {e}") from e
+
+        choice0 = self._first_choice(resp)
+        content, finish_reason = self._extract_choice_content(choice0)
+
+        if self.debug:
+            print(
+                "DEBUG(Driver:OpenAI): async finish_reason={} len={}".format(
+                    finish_reason, len(content)
+                )
+            )
+            if not content:
+                self._debug_dump_choice(choice0)
+
+        if not content and is_gpt5:
+            if self.debug:
+                print("DEBUG(Driver:OpenAI): async gpt-5 retry with token limit")
+            retry_kwargs = dict(base_kwargs)
+            retry_kwargs["max_completion_tokens"] = max_tokens
+            try:
+                resp_retry = await _call_with_kwargs_async(retry_kwargs)
+                choice_r = self._first_choice(resp_retry)
+                candidate, _finish_retry = self._extract_choice_content(choice_r)
+                if candidate:
+                    content = candidate
+            except Exception as err:  # noqa: BLE001
+                if self.debug:
+                    print("DEBUG(Driver:OpenAI): async token-limited error " + str(err))
 
             if not content:
-                # Signal orchestrator to rebuild with simplified system prompt
-                # for gpt-5 specifically, once.
+                if self.debug:
+                    print("DEBUG(Driver:OpenAI): async attempting responses fallback")
+                combined_input = self._combine_messages(messages)
+                try:
+                    responses_attr = getattr(self._client_async, "responses", None)
+                    if responses_attr is None:
+                        raise AttributeError("responses API not available on async client")
+                    resp_alt = await responses_attr.create(
+                        model=model,
+                        input=combined_input,
+                        max_output_tokens=max_tokens,
+                        temperature=1,
+                        timeout=timeout_value,
+                    )
+                    alt_content = self._extract_responses_content(resp_alt)
+                    if self.debug:
+                        prev_len = len(content)
+                        print(
+                            (
+                                "DEBUG(Driver:OpenAI): async responses fallback "
+                                "prev_len={} new_len={}"
+                            ).format(prev_len, len(alt_content))
+                        )
+                    if alt_content:
+                        content = alt_content
+                except Exception as resp_err:  # noqa: BLE001
+                    if self.debug:
+                        msg = str(resp_err)
+                        if len(msg) > 200:
+                            msg = msg[:200] + "…"
+                        print("DEBUG(Driver:OpenAI): async responses error " + msg)
+
+        if not content and finish_reason == "length":
+            if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
+                if self.debug:
+                    print(
+                        "DEBUG(Driver:OpenAI): async enabling minimal prompt"
+                    )
+                self._minimal_prompt = True
+                self._max_completion_tokens = max(64, max_tokens // 2)
+                raise LLMError("RETRY_MINIMAL_PROMPT")
+            if is_gpt5:
+                if self.debug:
+                    print(
+                        "DEBUG(Driver:OpenAI): async gpt-5 shrink tokens for retry"
+                    )
+                reduced = max(64, max_tokens // 2)
+                if reduced < max_tokens:
+                    self._max_completion_tokens = reduced
+                    base_kwargs.pop("max_tokens", None)
+                    base_kwargs["max_completion_tokens"] = reduced
+                    try:
+                        resp2 = await _call_with_kwargs_async(base_kwargs)
+                        choice2 = self._first_choice(resp2)
+                        candidate2, _finish2 = self._extract_choice_content(choice2)
+                        if candidate2:
+                            content = candidate2
+                        if self.debug:
+                            print(
+                                "DEBUG(Driver:OpenAI): async second attempt len={}"
+                                .format(len(content))
+                            )
+                    except Exception as retry_err:  # noqa: BLE001
+                        if self.debug:
+                            print(
+                                "DEBUG(Driver:OpenAI): async retry error {}".format(
+                                    retry_err
+                                )
+                            )
+            if not content:
                 if is_gpt5:
                     raise LLMError("RETRY_SIMPLE_PROMPT")
                 raise LLMError("Empty OpenAI response")
@@ -327,9 +495,26 @@ class OpenAIDriver(BaseDriver):
 
     # Public wrapper to avoid accessing a protected member from orchestrator
     def invoke_messages(
-        self, messages: list[dict[str, Any]], *, minimal_ok: bool
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        minimal_ok: bool,
+        request_timeout: float | None = None,
     ) -> str:
-        return self._invoke(messages, minimal_ok)
+        return self._invoke(messages, minimal_ok, request_timeout=request_timeout)
+
+    async def invoke_messages_async(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        minimal_ok: bool,
+        request_timeout: float | None = None,
+    ) -> str:
+        return await self._invoke_async(
+            messages,
+            minimal_ok,
+            request_timeout=request_timeout,
+        )
 
     def generate(self, diff: str, context: str, style: str) -> str:  # noqa: D401,E501
         # The higher-level orchestration (messages building, sanitation,
