@@ -572,6 +572,10 @@ class KlingonCMTWorkflow:
                 )
                 mark_prepared(idx, prepared_commit)
 
+        if self._prepare_failure_limit_hit and self._prepare_failure_limit_message:
+            self._clear_progress_line()
+            print(f"\n{RED}{self._prepare_failure_limit_message}{RESET}")
+            self._refresh_progress_line()
         flush_log()
         return prepared
     def _get_thread_commit_generator(self) -> CommitGenerator:
