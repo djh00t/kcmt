@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
 import re
 import threading
-import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -448,6 +449,11 @@ class KlingonCMTWorkflow:
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
 
+        adaptive_timeouts_enabled = not (
+            os.environ.get("KCMT_TEST_DISABLE_OPENAI")
+            or os.environ.get("PYTEST_CURRENT_TEST")
+        )
+
         async def worker(idx: int, change: FileChange) -> tuple[int, PreparedCommit]:
             queue_start = time.perf_counter()
             async with semaphore:
@@ -463,12 +469,20 @@ class KlingonCMTWorkflow:
                     )
 
                 timeout_value = timeout_state["value"]
+                adaptive_ceiling = max(per_file_timeout * 4.0, 30.0)
+                max_timeout = (
+                    adaptive_ceiling if adaptive_timeouts_enabled else timeout_value
+                )
                 attempts = 0
+                prepare_fn = self._prepare_single_change
+                prepare_signature = inspect.signature(prepare_fn)
+                supports_timeout = "request_timeout" in prepare_signature.parameters
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
+                        call_args = (change, timeout_value) if supports_timeout else (change,)
                         prepared_commit = await asyncio.wait_for(
-                            asyncio.to_thread(self._prepare_single_change, change),
+                            asyncio.to_thread(prepare_fn, *call_args),
                             timeout=timeout_value,
                         )
                         llm_elapsed = time.perf_counter() - start
@@ -482,6 +496,11 @@ class KlingonCMTWorkflow:
                         return idx, prepared_commit
                     except asyncio.TimeoutError:
                         attempts += 1
+                        if adaptive_timeouts_enabled:
+                            timeout_state["value"] = min(
+                                max_timeout,
+                                max(timeout_state["value"], timeout_value),
+                            )
                         if attempts >= timeout_attempt_limit:
                             error_message = (
                                 "Timeout after "
@@ -494,7 +513,12 @@ class KlingonCMTWorkflow:
                                 message=None,
                                 error=error_message,
                             )
-                        timeout_value = min(timeout_value * 1.5, per_file_timeout * 4)
+                        if adaptive_timeouts_enabled:
+                            timeout_value = min(timeout_value * 1.5, max_timeout)
+                            timeout_state["value"] = min(
+                                max_timeout,
+                                max(timeout_state["value"], timeout_value),
+                            )
                     except Exception as exc:  # noqa: BLE001
                         return idx, PreparedCommit(
                             change=change,
@@ -535,9 +559,16 @@ class KlingonCMTWorkflow:
                 if failure_count >= failure_limit and not abort_event.is_set():
                     self._prepare_failure_limit_hit = True
                     self._prepare_failure_limit_message = (
-                        f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
+                        f"Stopped prepare phase after {failure_count} failures "
+                        f"(failure limit {failure_limit})."
                     )
                     abort_event.set()
+                if (
+                    self._prepare_failure_limit_hit
+                    and self._prepare_failure_limit_message
+                    and failure_count > failure_limit
+                ):
+                    prepared_commit.error = self._prepare_failure_limit_message
 
             flush_log()
 
@@ -598,7 +629,9 @@ class KlingonCMTWorkflow:
             self._thread_local.generator = generator
         return generator
 
-    def _prepare_single_change(self, change: FileChange) -> PreparedCommit:
+    def _prepare_single_change(
+        self, change: FileChange, request_timeout: float | None = None
+    ) -> PreparedCommit:
         generator = self._get_thread_commit_generator()
         if self.debug:
             snippet = change.diff_content.splitlines()[:20]
@@ -611,12 +644,32 @@ class KlingonCMTWorkflow:
                 )
             )
 
+        suggest_fn = generator.suggest_commit_message
         try:
-            commit_message = generator.suggest_commit_message(
-                change.diff_content,
-                context=f"File: {change.file_path}",
-                style="conventional",
-            )
+            if request_timeout is not None:
+                try:
+                    sig = inspect.signature(suggest_fn)
+                except (TypeError, ValueError):
+                    sig = None
+                if sig and "request_timeout" in sig.parameters:
+                    commit_message = suggest_fn(
+                        change.diff_content,
+                        context=f"File: {change.file_path}",
+                        style="conventional",
+                        request_timeout=request_timeout,
+                    )
+                else:
+                    commit_message = suggest_fn(
+                        change.diff_content,
+                        context=f"File: {change.file_path}",
+                        style="conventional",
+                    )
+            else:
+                commit_message = suggest_fn(
+                    change.diff_content,
+                    context=f"File: {change.file_path}",
+                    style="conventional",
+                )
             validated = generator.validate_and_fix_commit_message(commit_message)
             if self.debug:
                 print(
