@@ -8,6 +8,8 @@ import json
 import os
 import sys
 import time
+from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -109,6 +111,8 @@ class CLI:
     def __init__(self) -> None:
         self.parser = self._create_parser()
         self._profile_enabled = False
+        self._compact_mode = False
+        self._repo_root: Optional[Path] = None
 
     # ------------------------------------------------------------------
     # Argument parsing
@@ -126,6 +130,22 @@ Examples:
   kcmt --configure                      # interactive provider & model setup
     kcmt --provider openai --model gpt-5-mini-2025-08-07
             """,
+        )
+
+        subparsers = parser.add_subparsers(dest="command")
+        status_parser = subparsers.add_parser(
+            "status",
+            help="Show a formatted summary of the most recent kcmt run",
+        )
+        status_parser.add_argument(
+            "--repo-path",
+            default=".",
+            help="Path to the target Git repo (default: current dir)",
+        )
+        status_parser.add_argument(
+            "--raw",
+            action="store_true",
+            help="Emit the saved run snapshot JSON instead of formatted output",
         )
 
         parser.add_argument(
@@ -220,6 +240,15 @@ Examples:
                 "(or set KLINGON_CMT_AUTO_PUSH=1)"
             ),
         )
+        parser.add_argument(
+            "--compact",
+            "--summary",
+            dest="compact",
+            action="store_true",
+            help=(
+                "Use condensed output with a summary table and checklist"
+            ),
+        )
 
         return parser
 
@@ -274,9 +303,17 @@ Examples:
                 detected_root = find_git_repo_root(requested_path)
 
             repo_root = (detected_root or requested_path).resolve(strict=False)
+            self._repo_root = repo_root
             non_interactive = (
                 bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
             )
+
+            self._compact_mode = bool(getattr(parsed_args, "compact", False))
+            if self._compact_mode and hasattr(parsed_args, "no_progress"):
+                parsed_args.no_progress = True
+
+            if getattr(parsed_args, "command", None) == "status":
+                return self._execute_status(parsed_args, repo_root)
 
             # Allow providing the token via CLI for this run
             if getattr(parsed_args, "github_token", None):
@@ -522,15 +559,19 @@ Examples:
     # Execution modes
     # ------------------------------------------------------------------
     def _execute_workflow(self, args: argparse.Namespace, config: Config) -> int:
-        self._print_info(f"Provider: {config.provider}")
-        self._print_info(f"Model: {config.model}")
-        self._print_info(f"Endpoint: {config.llm_endpoint}")
-        self._print_info(f"Max retries: {args.max_retries}")
-        if hasattr(args, "limit") and args.limit:
-            self._print_info(f"File limit: {args.limit}")
-        self._print_info("")
+        if self._compact_mode:
+            self._print_compact_header(config, args)
+        else:
+            self._print_info(f"Provider: {config.provider}")
+            self._print_info(f"Model: {config.model}")
+            self._print_info(f"Endpoint: {config.llm_endpoint}")
+            self._print_info(f"Max retries: {args.max_retries}")
+            if hasattr(args, "limit") and args.limit:
+                self._print_info(f"File limit: {args.limit}")
+            self._print_info("")
 
         workflow = None
+        run_started = time.perf_counter()
 
         def _wf_extra() -> str:
             if workflow is None:
@@ -571,7 +612,10 @@ Examples:
             ),
         ):
             results = workflow.execute_workflow()
-        self._display_results(results, args.verbose)
+        duration = time.perf_counter() - run_started
+        snapshot = self._build_run_snapshot(args, config, results, duration, workflow)
+        self._display_results(results, args.verbose, snapshot)
+        self._persist_run_snapshot(snapshot)
         return 0
 
     def _execute_oneshot(self, args: argparse.Namespace, config: Config) -> int:
@@ -738,6 +782,335 @@ Examples:
         return 0
 
     # ------------------------------------------------------------------
+    # Run snapshot & formatting helpers
+    # ------------------------------------------------------------------
+    def _print_compact_header(
+        self, config: Config, args: argparse.Namespace
+    ) -> None:
+        parts = [
+            f"{CYAN}provider{RESET} {config.provider}",
+            f"{CYAN}model{RESET} {config.model}",
+            f"{CYAN}retries{RESET} {args.max_retries}",
+        ]
+        limit_value = getattr(args, "limit", None)
+        if limit_value:
+            parts.append(f"{CYAN}limit{RESET} {limit_value}")
+        print("  ".join(parts))
+        print()
+
+    def _safe_stats_snapshot(self, workflow: Any) -> dict[str, Any]:
+        if workflow and hasattr(workflow, "stats_snapshot"):
+            try:
+                snapshot = workflow.stats_snapshot()
+            except Exception:  # pragma: no cover - defensive
+                return {}
+            if isinstance(snapshot, dict):
+                return snapshot
+        return {}
+
+    def _safe_commit_subjects(self, workflow: Any) -> list[str]:
+        if workflow and hasattr(workflow, "commit_subjects"):
+            try:
+                subjects = workflow.commit_subjects()
+            except Exception:  # pragma: no cover - defensive
+                return []
+            if isinstance(subjects, list):
+                return list(subjects)
+        return []
+
+    def _result_to_dict(self, result: Any) -> dict[str, Any]:
+        if is_dataclass(result):
+            return asdict(result)
+        if isinstance(result, dict):
+            return dict(result)
+        payload: dict[str, Any] = {}
+        for key in ("success", "commit_hash", "message", "error", "file_path"):
+            if hasattr(result, key):
+                payload[key] = getattr(result, key)
+        return payload
+
+    def _build_run_snapshot(
+        self,
+        args: argparse.Namespace,
+        config: Config,
+        results: dict[str, Any],
+        duration: float,
+        workflow: KlingonCMTWorkflow,
+    ) -> dict[str, Any]:
+        stats = self._safe_stats_snapshot(workflow)
+        commit_subjects = self._safe_commit_subjects(workflow)
+
+        file_commits = list(results.get("file_commits", []) or [])
+        deletions = list(results.get("deletions_committed", []) or [])
+        errors = [str(err) for err in (results.get("errors", []) or []) if err]
+
+        commit_success = sum(1 for item in file_commits if getattr(item, "success", False))
+        commit_failure = len(file_commits) - commit_success
+        deletion_success = sum(1 for item in deletions if getattr(item, "success", False))
+        deletion_failure = len(deletions) - deletion_success
+
+        total_files = int(stats.get("total_files", len(file_commits)) or 0)
+        prepared_total = int(stats.get("prepared", len(file_commits)) or 0)
+        processed_total = int(stats.get("processed", len(file_commits)) or 0)
+        prepared_failures = max(total_files - prepared_total, 0)
+
+        safe_duration = max(float(duration or 0.0), 0.0)
+        rate_value = stats.get("rate", 0.0)
+        if isinstance(rate_value, (int, float)):
+            rate = float(rate_value)
+        else:
+            rate = 0.0
+        if rate <= 0.0 and safe_duration > 0.0:
+            overall_success = commit_success + deletion_success
+            if overall_success:
+                rate = overall_success / safe_duration
+
+        repo_display = str(self._repo_root) if self._repo_root else config.git_repo_path
+
+        snapshot = {
+            "schema_version": 1,
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "repo_path": repo_display,
+            "provider": config.provider,
+            "model": config.model,
+            "endpoint": config.llm_endpoint,
+            "max_retries": args.max_retries,
+            "file_limit": getattr(args, "limit", None),
+            "compact": self._compact_mode,
+            "duration_seconds": safe_duration,
+            "rate_commits_per_sec": rate,
+            "counts": {
+                "files_total": total_files,
+                "prepared_total": prepared_total,
+                "processed_total": processed_total,
+                "prepared_failures": prepared_failures,
+                "commit_success": commit_success,
+                "commit_failure": commit_failure,
+                "deletions_total": len(deletions),
+                "deletions_success": deletion_success,
+                "deletions_failure": deletion_failure,
+                "overall_success": commit_success + deletion_success,
+                "overall_failure": commit_failure + deletion_failure,
+                "errors": len(errors),
+            },
+            "pushed": results.get("pushed"),
+            "summary": results.get("summary", ""),
+            "errors": errors,
+            "commits": [self._result_to_dict(entry) for entry in file_commits],
+            "deletions": [self._result_to_dict(entry) for entry in deletions],
+            "subjects": commit_subjects,
+            "stats": stats,
+        }
+        snapshot["auto_push_state"] = self._describe_auto_push(snapshot["pushed"])
+        return snapshot
+
+    def _describe_auto_push(self, pushed: Any) -> str:
+        if pushed is True:
+            return "pushed"
+        if pushed is False:
+            return "not triggered"
+        return ""
+
+    def _persist_run_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if not self._repo_root:
+            return
+        try:
+            history_dir = self._repo_root / ".kcmt"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            path = history_dir / "last_run.json"
+            with path.open("w", encoding="utf-8") as handle:
+                json.dump(
+                    snapshot,
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                    cls=DecimalFriendlyJSONEncoder,
+                )
+        except OSError:  # pragma: no cover - best effort persistence
+            pass
+
+    def _load_run_snapshot(self, repo_root: Path) -> Optional[dict[str, Any]]:
+        path = repo_root / ".kcmt" / "last_run.json"
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt snapshot
+            return None
+
+    def _fmt_column(self, value: Optional[int], color: str) -> str:
+        raw = "-" if value is None else str(int(value))
+        padded = f"{raw:>6}"
+        return f"{color}{padded}{RESET}"
+
+    def _fmt_rate(self, value: Optional[float]) -> str:
+        if value is None or value <= 0.0:
+            raw = "-/s"
+        else:
+            raw = f"{value:.2f}/s"
+        return f"{MAGENTA}{raw:>8}{RESET}"
+
+    def _format_summary_row(
+        self,
+        label: str,
+        total: int,
+        ready: Optional[int],
+        success: Optional[int],
+        failure: Optional[int],
+        rate: Optional[float],
+    ) -> str:
+        return (
+            f"{BOLD}{label:<10}{RESET} "
+            f"{self._fmt_column(total, CYAN)} "
+            f"{self._fmt_column(ready, CYAN)} "
+            f"{self._fmt_column(success, GREEN)} "
+            f"{self._fmt_column(failure, RED)} "
+            f"{self._fmt_rate(rate)}"
+        )
+
+    def _build_summary_table(self, snapshot: dict[str, Any]) -> list[str]:
+        counts = snapshot.get("counts", {})
+        total = int(counts.get("files_total", 0) or 0)
+        prepared = int(counts.get("prepared_total", 0) or 0)
+        processed = int(counts.get("processed_total", 0) or 0)
+        prepared_failures = int(counts.get("prepared_failures", max(total - prepared, 0)))
+        commit_success = int(counts.get("commit_success", 0) or 0)
+        commit_failure = int(counts.get("commit_failure", 0) or 0)
+        deletions_total = int(counts.get("deletions_total", 0) or 0)
+        deletion_success = int(counts.get("deletions_success", 0) or 0)
+        deletion_failure = int(counts.get("deletions_failure", 0) or 0)
+        rate = float(snapshot.get("rate_commits_per_sec", 0.0) or 0.0)
+
+        lines = [
+            f"{BOLD}{CYAN}{'Phase':<10} {'Total':>6} {'Ready':>6} {'✓':>6} {'✗':>6} {'Rate':>8}{RESET}",
+            self._format_summary_row("Prepare", total, prepared, prepared, prepared_failures, None),
+            self._format_summary_row("Commit", processed, None, commit_success, commit_failure, rate),
+        ]
+        if deletions_total or deletion_success or deletion_failure:
+            lines.append(
+                self._format_summary_row(
+                    "Deletions",
+                    deletions_total,
+                    None,
+                    deletion_success,
+                    deletion_failure,
+                    None,
+                )
+            )
+        return lines
+
+    def _format_overall_status(self, snapshot: dict[str, Any]) -> str:
+        counts = snapshot.get("counts", {})
+        success = int(counts.get("overall_success", 0) or 0)
+        failure = int(counts.get("overall_failure", 0) or 0)
+        return f"{GREEN}{success}✓{RESET} / {RED}{failure}✗{RESET}"
+
+    def _render_snapshot_summary(
+        self,
+        snapshot: dict[str, Any],
+        heading: str = "Run Summary",
+        *,
+        verbose: bool = False,
+    ) -> None:
+        if heading:
+            print(f"{BOLD}{CYAN}{heading}{RESET}")
+        for line in self._build_summary_table(snapshot):
+            print(line)
+
+        duration = float(snapshot.get("duration_seconds", 0.0) or 0.0)
+        rate = float(snapshot.get("rate_commits_per_sec", 0.0) or 0.0)
+        print(
+            f"{CYAN}Duration{RESET} {duration:.2f}s  "
+            f"{CYAN}Rate{RESET} {rate:.2f}/s"
+        )
+
+        checklist: list[tuple[str, str]] = [
+            ("Provider", snapshot.get("provider", "-")),
+            ("Model", snapshot.get("model", "-")),
+            ("Retries", str(snapshot.get("max_retries", "-"))),
+            ("Commit status", self._format_overall_status(snapshot)),
+        ]
+        auto_push_state = snapshot.get("auto_push_state")
+        if auto_push_state:
+            checklist.append(("Auto-push", auto_push_state))
+        width = max(len(label) for label, _ in checklist)
+        for label, value in checklist:
+            print(f"{CYAN}{label:<{width}}{RESET} {value}")
+
+        summary_line = snapshot.get("summary")
+        if summary_line:
+            print()
+            self._print_info(summary_line)
+
+        errors = snapshot.get("errors") or []
+        if errors:
+            print()
+            self._print_warning("Errors:")
+            for err in errors:
+                self._print_error(f"  - {err}")
+
+        if verbose and snapshot.get("commits"):
+            print()
+            self._print_heading("Commits")
+            for entry in snapshot["commits"]:
+                if not isinstance(entry, dict):
+                    continue
+                label = entry.get("file_path") or entry.get("message") or "(commit)"
+                if entry.get("success"):
+                    self._print_success(f"✓ {label}")
+                else:
+                    message = entry.get("error") or "failed"
+                    self._print_warning(f"✗ {label}: {message}")
+
+        subjects = snapshot.get("subjects") or []
+        if subjects:
+            print()
+            self._print_success(f"Latest commit: {subjects[-1]}")
+
+    def _display_compact_results(self, snapshot: dict[str, Any], verbose: bool) -> None:
+        print()
+        self._render_snapshot_summary(snapshot, verbose=verbose)
+
+    def _execute_status(self, args: argparse.Namespace, repo_root: Path) -> int:
+        snapshot = self._load_run_snapshot(repo_root)
+        if not snapshot:
+            self._print_warning("No kcmt run history found for this repository.")
+            return 1
+        if getattr(args, "raw", False):
+            print(
+                json.dumps(
+                    snapshot,
+                    indent=2,
+                    ensure_ascii=False,
+                    cls=DecimalFriendlyJSONEncoder,
+                )
+            )
+            return 0
+
+        verbose_flag = bool(getattr(args, "verbose", False))
+        self._display_status_summary(snapshot, verbose_flag)
+        return 0
+
+    def _display_status_summary(self, snapshot: dict[str, Any], verbose: bool) -> None:
+        repo_display = snapshot.get("repo_path") or (
+            str(self._repo_root) if self._repo_root else "<unknown>"
+        )
+        header = f"{BOLD}{CYAN}kcmt status{RESET} :: {CYAN}{repo_display}{RESET}"
+        print(header)
+        timestamp = snapshot.get("timestamp")
+        duration = float(snapshot.get("duration_seconds", 0.0) or 0.0)
+        if timestamp:
+            print(
+                f"{CYAN}Run time{RESET} {timestamp}  "
+                f"{CYAN}Duration{RESET} {duration:.2f}s"
+            )
+        else:
+            print(f"{CYAN}Duration{RESET} {duration:.2f}s")
+        print()
+        self._render_snapshot_summary(snapshot, heading="Summary", verbose=verbose)
+
+    # ------------------------------------------------------------------
     # Output helpers
     # ------------------------------------------------------------------
     def _print_banner(
@@ -762,7 +1135,16 @@ Examples:
     def _print_error(self, message: str) -> None:
         print(f"{RED}{message}{RESET}", file=sys.stderr)
 
-    def _display_results(self, results: dict[str, Any], verbose: bool) -> None:
+    def _display_results(
+        self,
+        results: dict[str, Any],
+        verbose: bool,
+        snapshot: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if self._compact_mode and snapshot is not None:
+            self._display_compact_results(snapshot, verbose)
+            return
+
         deletions = results.get("deletions_committed", [])
         file_commits = results.get("file_commits", [])
         errors = results.get("errors", [])
