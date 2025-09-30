@@ -10,7 +10,7 @@ import httpx
 from kcmt._optional import OpenAIModule, import_openai
 from kcmt.config import Config
 from kcmt.exceptions import LLMError
-from kcmt.providers.base import BaseDriver
+from kcmt.providers.base import BaseDriver, resolve_default_request_timeout
 
 # Optional dependency: import module, not symbols, for easier test stubbing
 _openai: OpenAIModule | None = import_openai()
@@ -29,10 +29,14 @@ class OpenAIDriver(BaseDriver):
     def __init__(self, config: Config, debug: bool = False) -> None:
         super().__init__(config, debug)
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
+        provider = getattr(config, "provider", None)
+        default_timeout = resolve_default_request_timeout(provider)
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 5.0
+            self._request_timeout = (
+                float(timeout_env) if timeout_env else default_timeout
+            )
         except ValueError:
-            self._request_timeout = 5.0
+            self._request_timeout = default_timeout
 
         api_key = config.resolve_api_key()
 
