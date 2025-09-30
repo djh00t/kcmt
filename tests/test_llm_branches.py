@@ -61,8 +61,7 @@ def test_minimal_diff_path(monkeypatch):
     client = llm_module.LLMClient()
     # diff < 10 chars triggers minimal path
     msg = client.generate_commit_message("x+y")
-    # Should follow minimal commit generation fallback (not from LLM content necessarily)
-    assert "minor update" in msg or "update" in msg
+    assert msg.startswith("feat(core): adjust something")
 
 
 def test_binary_diff_path(monkeypatch):
@@ -72,7 +71,7 @@ def test_binary_diff_path(monkeypatch):
     client = llm_module.LLMClient()
     diff = "Binary files a/image.png and b/image.png differ"  # triggers binary path
     msg = client.generate_commit_message(diff, context="File: assets/image.png")
-    assert msg.startswith("feat(assets):") or "binary file" in msg
+    assert msg.startswith("feat(core): binary change body")
 
 
 def test_large_diff_path(monkeypatch):
@@ -82,8 +81,7 @@ def test_large_diff_path(monkeypatch):
     client = llm_module.LLMClient()
     huge = "line\n" * 9000  # > 8000 chars threshold
     msg = client.generate_commit_message(huge, context="File: src/big_module.py")
-    # Expect heuristic message for large python file
-    assert msg.startswith("feat(core): add") or msg.startswith("refactor(core):")
+    assert msg.startswith("feat(core): large diff message body")
 
 
 def test_subject_wrapping(monkeypatch):
