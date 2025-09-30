@@ -371,6 +371,11 @@ class KlingonCMTWorkflow:
             # Track start times for each future so we can enforce a wall-clock
             # timeout per submitted job without a brittle global timeout.
             start_times = {f: time.time() for f in future_map}
+            # When running with --debug we periodically emit heartbeat logs so
+            # the caller can see which file is still being processed (useful
+            # when the LLM call stalls and eventually triggers the timeout).
+            pending_debug_log: dict[Any, float] = {}
+            debug_log_interval = 5.0
             remaining = set(future_map.keys())
 
             # Poll until all futures handled (either completed or timed out)
@@ -398,6 +403,7 @@ class KlingonCMTWorkflow:
                     self._stats.mark_prepared()
                     self._print_progress(stage="prepare")
                     remaining.discard(fut)
+                    pending_debug_log.pop(fut, None)
 
                 # Check for per-file timeout on still running futures
                 now = time.time()
@@ -420,6 +426,25 @@ class KlingonCMTWorkflow:
                         self._stats.mark_prepared()
                         self._print_progress(stage="prepare")
                         remaining.discard(fut)
+                        pending_debug_log.pop(fut, None)
+                        continue
+
+                    if self.debug:
+                        last_logged = pending_debug_log.get(fut, 0.0)
+                        if now - last_logged >= debug_log_interval:
+                            idx = future_map[fut]
+                            change = file_changes[idx]
+                            diff_len = len(change.diff_content)
+                            print(
+                                (
+                                    "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
+                                ).format(
+                                    change.file_path,
+                                    now - start_times[fut],
+                                    diff_len,
+                                )
+                            )
+                            pending_debug_log[fut] = now
 
         return prepared
 
