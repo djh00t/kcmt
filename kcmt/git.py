@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 from .config import Config, get_active_config
 from .exceptions import GitError
@@ -301,11 +301,14 @@ class GitRepo:
 
         return entries
 
-    def process_deletions_first(self) -> list[str]:
+    def process_deletions_first(
+        self, status_entries: Optional[Sequence[tuple[str, str]]] = None
+    ) -> list[str]:
         """Process deletions first by staging all deleted files."""
 
+        entries = list(status_entries) if status_entries is not None else self._run_git_porcelain()
         deleted_files: list[str] = []
-        for status, file_path in self._run_git_porcelain():
+        for status, file_path in entries:
             if "D" not in status:
                 continue
             deleted_files.append(file_path)
@@ -318,7 +321,8 @@ class GitRepo:
     ) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
 
-        return [(status, path) for status, path in self._run_git_porcelain() if path]
+        entries = status_entries if status_entries is not None else self._run_git_porcelain()
+        return [(status, path) for status, path in entries if path]
 
     def get_worktree_diff_for_path(self, file_path: str) -> str:
         """Return a unified diff for ``file_path`` without touching the index."""
@@ -390,3 +394,12 @@ class GitRepo:
             )  # pragma: no cover - requires simulating git failure
 
         return no_index_result.stdout
+
+    # ------------------------------------------------------------------
+    # Status helpers
+    # ------------------------------------------------------------------
+
+    def scan_status(self) -> list[tuple[str, str]]:
+        """Return porcelain status entries as ``(status, path)`` tuples."""
+
+        return self._run_git_porcelain()
