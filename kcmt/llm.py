@@ -20,7 +20,7 @@ from ._optional import OpenAIModule, import_openai
 from .config import Config, get_active_config
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
-from .providers.base import BaseDriver
+from .providers.base import BaseDriver, resolve_default_request_timeout
 from .providers.openai_driver import OpenAIDriver
 from .providers.xai_driver import XAIDriver
 
@@ -88,10 +88,13 @@ class LLMClient:
 
         # Per-request timeout (seconds) configurable; default 5s.
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
+        default_timeout = resolve_default_request_timeout(self.provider)
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 5.0
+            self._request_timeout = (
+                float(timeout_env) if timeout_env else default_timeout
+            )
         except ValueError:
-            self._request_timeout = 5.0
+            self._request_timeout = default_timeout
 
         # Provider driver setup (strategy pattern)
         self._driver: BaseDriver
