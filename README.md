@@ -15,6 +15,7 @@ Key features
 - LLM-assisted messages: conventional commit style with validation, retries, and auto-fixes.
 - Strict failure on repeated invalid/empty LLM responses (no heuristic commit synthesis).
 - Prepare phase aborts after 25 per-file failures/timeouts to avoid wasting additional requests.
+- Built-in metrics summary (diff, queue, LLM, commit timings) to diagnose performance quickly.
 - Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
 - Parallel preparation: generate per-file commit messages concurrently with live stats.
 - Optional automatic push (`--auto-push`) after a successful run.
