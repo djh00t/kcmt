@@ -29,9 +29,9 @@ class OpenAIDriver(BaseDriver):
         super().__init__(config, debug)
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 60.0
+            self._request_timeout = float(timeout_env) if timeout_env else 5.0
         except ValueError:
-            self._request_timeout = 60.0
+            self._request_timeout = 5.0
         # Prefer factory from kcmt.llm so tests can monkeypatch kcmt.llm.OpenAI
         client_factory: Callable[..., Any] | None = None
         try:  # pragma: no cover - relies on package layout at runtime
