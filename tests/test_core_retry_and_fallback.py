@@ -24,7 +24,6 @@ def test_retry_exhaustion_without_fallback(monkeypatch, tmp_path):
         llm_endpoint="http://local",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo_dir),
-        allow_fallback=False,
     )
     set_active_config(cfg)
     monkeypatch.setenv("OPENAI_API_KEY", "X")
@@ -63,7 +62,6 @@ def test_empty_responses_raise_llmerror(monkeypatch, tmp_path):
         llm_endpoint="http://local",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo_dir),
-        allow_fallback=False,
     )
     set_active_config(cfg)
     os.environ["OPENAI_API_KEY"] = "X"
