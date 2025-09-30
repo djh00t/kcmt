@@ -1,72 +1,93 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-09-30T15:07:24Z",
+  "timestamp": "2025-09-30T15:54:51Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "xai",
-  "model": "grok-code-fast",
-  "endpoint": "https://api.x.ai/v1",
+  "provider": "openai",
+  "model": "gpt-5-mini-2025-08-07",
+  "endpoint": "https://api.openai.com/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 6.487057,
-  "rate_commits_per_sec": 0.317692,
+  "duration_seconds": 60.871556,
+  "rate_commits_per_sec": 0.115544,
   "counts": {
-    "files_total": 2,
-    "prepared_total": 2,
-    "processed_total": 2,
+    "files_total": 7,
+    "prepared_total": 7,
+    "processed_total": 7,
     "prepared_failures": 0,
-    "commit_success": 2,
-    "commit_failure": 0,
-    "deletions_total": 1,
-    "deletions_success": 1,
+    "commit_success": 0,
+    "commit_failure": 7,
+    "deletions_total": 0,
+    "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 3,
-    "overall_failure": 0,
-    "errors": 1
+    "overall_success": 0,
+    "overall_failure": 7,
+    "errors": 0
   },
   "pushed": null,
-  "summary": "Successfully completed 3 commits. Committed 1 deletion(s). Committed 2 file change(s)",
-  "errors": [
-    "Auto-push failed: Git command failed: push origin main\nTo https://github.com/djh00t/kcmt.git\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs to 'https://github.com/djh00t/kcmt.git'\nhint: Updates were rejected because the tip of your current branch is behind\nhint: its remote counterpart. If you want to integrate the remote changes,\nhint: use 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.\n"
-  ],
+  "summary": "No commits were made. Committed 0 file change(s)",
+  "errors": [],
   "commits": [
     {
-      "success": true,
-      "commit_hash": "bdf3c53",
-      "message": "feat(commit): add async method for LLM-based commit message generation\n\nImplement suggest_commit_message_async to generate conventional commit\nmessages using an LLM client with retry logic, validation, and debug\noutput. This enhances the CommitGenerator class by providing\nasynchronous capabilities for better performance in concurrent\nenvironments. Includes error handling for empty or invalid responses,\nensuring robust message creation.",
-      "error": null,
-      "file_path": "kcmt/commit.py"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for .kcmt/config.json (attempt 4/4)",
+      "file_path": null
     },
     {
-      "success": true,
-      "commit_hash": "0739baf",
-      "message": "feat(llm): add async support for LLM providers\n\nAdded AsyncOpenAI compatibility wrapper for async OpenAI usage in tests.\nRefactored generate_commit_message into helper methods _prepare_prompt\nand _postprocess_message. Introduced async version\ngenerate_commit_message_async. Added async provider call methods\n_call_provider_async, _call_openai_async, _call_anthropic_async to\nenable asynchronous LLM interactions. This improves performance and\nresponsiveness in environments supporting async operations.",
-      "error": null,
-      "file_path": "kcmt/llm.py"
-    }
-  ],
-  "deletions": [
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for .kcmt/last_run.json (attempt 4/4)",
+      "file_path": null
+    },
     {
-      "success": true,
-      "commit_hash": "1e97d85",
-      "message": "chore: remove deleted files\n\nRemoved files:\n- tmp-config-test/.kcmt/config.json\n- tmp-config-test2/.kcmt/config.json\n- tmp-config-test3/.kcmt/config.json",
-      "error": null,
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for kcmt/commit.py (attempt 4/4)",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for kcmt/core.py (attempt 4/4)",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for kcmt/llm.py (attempt 4/4)",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for kcmt/providers/anthropic_driver.py (attempt 4/4)",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Timeout after 5.0s waiting for kcmt/providers/openai_driver.py (attempt 4/4)",
       "file_path": null
     }
   ],
-  "subjects": [
-    "chore: remove deleted files",
-    "feat(commit): add async method for LLM-based commit message generation",
-    "feat(llm): add async support for LLM providers"
-  ],
+  "deletions": [],
+  "subjects": [],
   "stats": {
-    "total_files": 2,
-    "prepared": 2,
-    "processed": 2,
-    "successes": 2,
-    "failures": 0,
-    "elapsed": 6.295411,
-    "rate": 0.317692
+    "total_files": 7,
+    "prepared": 7,
+    "processed": 7,
+    "successes": 0,
+    "failures": 7,
+    "elapsed": 60.583023,
+    "rate": 0.115544
   },
   "auto_push_state": ""
 }
