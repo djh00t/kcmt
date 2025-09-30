@@ -139,11 +139,20 @@ class KlingonCMTWorkflow:
 
         workflow_start = time.perf_counter()
 
+        status_entries: Optional[list[tuple[str, str]]] = None
         try:
-            deletion_results = self._process_deletions_first()
+            status_start = time.perf_counter()
+            status_entries = self.git_repo.scan_status()
+            self._profile(
+                "git-status",
+                time.perf_counter() - status_start,
+                extra=f"entries={len(status_entries)}",
+            )
+
+            deletion_results = self._process_deletions_first(status_entries)
             results["deletions_committed"] = deletion_results
 
-            file_results = self._process_per_file_commits()
+            file_results = self._process_per_file_commits(status_entries)
             results["file_commits"] = file_results
 
             results["summary"] = self._generate_summary(results)
@@ -182,12 +191,14 @@ class KlingonCMTWorkflow:
 
         return results
 
-    def _process_deletions_first(self) -> List[CommitResult]:
+    def _process_deletions_first(
+        self, status_entries: Optional[list[tuple[str, str]]] = None
+    ) -> List[CommitResult]:
         """Process all deletions first with a single commit."""
         results: List[CommitResult] = []
 
         deletions_start = time.perf_counter()
-        deleted_files = self.git_repo.process_deletions_first()
+        deleted_files = self.git_repo.process_deletions_first(status_entries)
         self._profile(
             "process-deletions",
             time.perf_counter() - deletions_start,
@@ -220,7 +231,9 @@ class KlingonCMTWorkflow:
             return f"chore: remove {deleted_files[0]}"
         return f"chore: remove {len(deleted_files)} files"
 
-    def _process_per_file_commits(self) -> List[CommitResult]:
+    def _process_per_file_commits(
+        self, status_entries: Optional[list[tuple[str, str]]] = None
+    ) -> List[CommitResult]:
         """Process remaining changes with per-file commits."""
         results: List[CommitResult] = []
 
@@ -285,9 +298,10 @@ class KlingonCMTWorkflow:
             "collect-diffs",
             time.perf_counter() - collect_start,
             extra=(
-                "candidates={} collected={}".format(
+                "candidates={} collected={} unique_paths={}".format(
                     len(non_deletion_files),
                     len(file_changes),
+                    len(diff_map),
                 )
             ),
         )
