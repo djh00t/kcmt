@@ -5,5 +5,5 @@
   "api_key_env": "XAI_API_KEY",
   "git_repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "max_commit_length": 72,
-  "auto_push": true
+  "auto_push": false
 }
