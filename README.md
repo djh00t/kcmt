@@ -14,6 +14,7 @@ Key features
 - Atomic workflow: stage and commit per-file, with deletions handled first.
 - LLM-assisted messages: conventional commit style with validation, retries, and auto-fixes.
 - Strict failure on repeated invalid/empty LLM responses (no heuristic commit synthesis).
+- Prepare phase aborts after 25 per-file failures/timeouts to avoid wasting additional requests.
 - Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
 - Parallel preparation: generate per-file commit messages concurrently with live stats.
 - Optional automatic push (`--auto-push`) after a successful run.
@@ -83,7 +84,7 @@ message. The variable is ignored if set.
   
 Additional LLM behaviour environment variables:
 
-- `KCMT_LLM_REQUEST_TIMEOUT` – per-request HTTP timeout (seconds, default 60)
+- `KCMT_LLM_REQUEST_TIMEOUT` – per-request HTTP timeout (seconds, default 5)
 - `KCMT_PREPARE_PER_FILE_TIMEOUT` – per-file generation timeout in atomic workflow
 - `KCMT_OPENAI_DISABLE_REASONING` – disable reasoning / chain-of-thought (default on)
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
@@ -114,8 +115,6 @@ Exit codes
 - `--provider`, `--model`, `--endpoint`, `--api-key-env` – override saved provider details.
 - `--repo-path PATH` – target repository (defaults to current working directory).
 - `--max-commit-length INT` – validate (not hard truncate) the subject line length (default 72 for legacy compatibility; body is preserved).
-Removed flag: `--allow-fallback` is retained for backward compatibility but
-no longer performs heuristic commit generation.
 - `--auto-push` – push the current branch after successful commits (or set `KLINGON_CMT_AUTO_PUSH=1`).
 - `--max-retries INT` – retries when Git rejects (default 3).
 - `--oneshot` – stage all changes, pick one file, and commit it once.
@@ -190,7 +189,7 @@ Exceptions
 Configuration
 
 - kcmt.config.Config
-  - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, allow_fallback, auto_push
+  - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push
 - kcmt.config.load_config(overrides=None)
   - Merge repo `.kcmt/config.json`, environment, and optional overrides.
 - kcmt.config.save_config(config, repo_root=None)
@@ -296,7 +295,7 @@ Security notes
 - 0.1.2 — Update default OpenAI model to `gpt-5-mini-2025-08-07` (automatic
   migration from legacy `gpt-5-mini`), test helper env var
   `KCMT_TEST_DISABLE_OPENAI` to bypass real API calls in isolated tests.
-- 0.1.1 — Auto-push option, heuristic fallback flag, improved retries, subject-only length enforcement.
+- 0.1.1 — Auto-push option, improved retries, subject-only length enforcement.
 - 0.1.0 — Initial release: CLI + atomic workflow + LLM commit generation.
 
 ## License
