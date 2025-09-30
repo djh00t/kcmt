@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 import re
 import threading
+import asyncio
 import time
-from collections import deque
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,6 +52,48 @@ class PreparedCommit:
     change: FileChange
     message: Optional[str]
     error: Optional[str] = None
+
+
+
+
+@dataclass
+class WorkflowMetrics:
+    diff_count: int = 0
+    diff_total: float = 0.0
+    queue_total: float = 0.0
+    queue_samples: int = 0
+    llm_count: int = 0
+    llm_total: float = 0.0
+    commit_total: float = 0.0
+
+    def record_diff(self, elapsed: float) -> None:
+        self.diff_count += 1
+        self.diff_total += elapsed
+
+    def record_queue(self, elapsed: float) -> None:
+        self.queue_samples += 1
+        self.queue_total += elapsed
+
+    def record_llm(self, elapsed: float) -> None:
+        self.llm_count += 1
+        self.llm_total += elapsed
+
+    def record_commit(self, elapsed: float) -> None:
+        self.commit_total += elapsed
+
+    def summary(self) -> str:
+        parts = []
+        if self.diff_count:
+            parts.append(f"diffs={self.diff_count} ({self.diff_total:.2f}s)")
+        if self.queue_samples:
+            avg_queue = self.queue_total / max(1, self.queue_samples)
+            parts.append(f"avg queue={avg_queue:.2f}s")
+        if self.llm_count:
+            avg_llm = self.llm_total / self.llm_count
+            parts.append(f"LLM avg={avg_llm:.2f}s across {self.llm_count}")
+        if self.commit_total:
+            parts.append(f"commit total={self.commit_total:.2f}s")
+        return "; ".join(parts)
 
 
 class WorkflowStats:
@@ -129,6 +170,7 @@ class KlingonCMTWorkflow:
         self._last_progress_stage: Optional[str] = None
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
+        self._metrics = WorkflowMetrics()
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -147,6 +189,7 @@ class KlingonCMTWorkflow:
             "summary": "",
         }
 
+        self._metrics = WorkflowMetrics()
         workflow_start = time.perf_counter()
 
         status_entries: Optional[list[tuple[str, str]]] = None
@@ -178,6 +221,10 @@ class KlingonCMTWorkflow:
             raise KlingonCMTError(f"Workflow failed: {e}") from e
         finally:
             self._finalize_progress()
+            if not self._show_progress:
+                metrics_summary = self._metrics.summary()
+                if metrics_summary:
+                    print(f"{DIM}metrics: {metrics_summary}{RESET}")
 
         # Auto-push if enabled and we actually committed something
         any_success = any(r.success for r in results.get("file_commits", [])) or any(
@@ -287,7 +334,10 @@ class KlingonCMTWorkflow:
 
         for status, file_path in non_deletion_files:
             try:
+                diff_start = time.perf_counter()
                 single_diff = self.git_repo.get_worktree_diff_for_path(file_path)
+                diff_elapsed = time.perf_counter() - diff_start
+                self._metrics.record_diff(diff_elapsed)
                 if not single_diff.strip():
                     continue
                 change_type = self._change_type_from_status(status)
@@ -355,29 +405,23 @@ class KlingonCMTWorkflow:
             return "A"
         return "M"
 
+
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
         if not file_changes:
             return []
+        return asyncio.run(self._prepare_commit_messages_async(file_changes))
 
+    async def _prepare_commit_messages_async(
+        self, file_changes: List[FileChange]
+    ) -> List[Tuple[int, PreparedCommit]]:
         cpu_hint = os.cpu_count() or 4
         workers = max(1, min(len(file_changes), 8, cpu_hint))
-
         print(
             f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
             f"{len(file_changes)} file(s){RESET}"
         )
-
-        prepared: List[Tuple[int, PreparedCommit]] = []
-        log_queue: dict[int, PreparedCommit] = {}
-        next_log_index = 0
-        completed: set[int] = set()
-
-        failure_limit = 25
-        failure_count = 0
-        self._prepare_failure_limit_hit = False
-        self._prepare_failure_limit_message = ""
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
         try:
@@ -389,28 +433,85 @@ class KlingonCMTWorkflow:
 
         timeout_retry_limit = 3
         timeout_attempt_limit = timeout_retry_limit + 1
+        timeout_state = {"value": per_file_timeout}
 
-        executor = ThreadPoolExecutor(max_workers=workers)
-        future_map: dict[Any, int] = {}
-        remaining: set[Any] = set()
-        retry_queue: deque[int] = deque()
+        semaphore = asyncio.Semaphore(workers)
+        abort_event = asyncio.Event()
 
-        start_times: dict[int, Optional[float]] = {}
-        pending_debug_log: dict[int, float] = {}
-        attempt_counts: dict[int, int] = {idx: 1 for idx in range(len(file_changes))}
-        changes_by_idx = {idx: change for idx, change in enumerate(file_changes)}
+        prepared: list[tuple[int, PreparedCommit]] = []
+        log_queue: dict[int, PreparedCommit] = {}
+        next_log_index = 0
+        completed: set[int] = set()
 
-        def submit(idx: int) -> None:
-            change = changes_by_idx[idx]
+        failure_limit = 25
+        failure_count = 0
+        self._prepare_failure_limit_hit = False
+        self._prepare_failure_limit_message = ""
 
-            def task(change=change, idx=idx) -> PreparedCommit:
-                start_times[idx] = time.time()
-                return self._prepare_single_change(change)
+        async def worker(idx: int, change: FileChange) -> tuple[int, PreparedCommit]:
+            queue_start = time.perf_counter()
+            async with semaphore:
+                queue_elapsed = time.perf_counter() - queue_start
+                self._metrics.record_queue(queue_elapsed)
 
-            future = executor.submit(task)
-            future_map[future] = idx
-            remaining.add(future)
-            pending_debug_log[idx] = 0.0
+                if abort_event.is_set():
+                    return idx, PreparedCommit(
+                        change=change,
+                        message=None,
+                        error=self._prepare_failure_limit_message
+                        or "Stopped prepare phase after failure limit.",
+                    )
+
+                timeout_value = timeout_state["value"]
+                attempts = 0
+                while attempts < timeout_attempt_limit:
+                    start = time.perf_counter()
+                    try:
+                        prepared_commit = await asyncio.wait_for(
+                            asyncio.to_thread(self._prepare_single_change, change),
+                            timeout=timeout_value,
+                        )
+                        llm_elapsed = time.perf_counter() - start
+                        if prepared_commit.message:
+                            self._metrics.record_llm(llm_elapsed)
+                            avg_llm = self._metrics.llm_total / max(1, self._metrics.llm_count)
+                            timeout_state["value"] = max(
+                                per_file_timeout,
+                                min(per_file_timeout * 4, avg_llm * 2),
+                            )
+                        return idx, prepared_commit
+                    except asyncio.TimeoutError:
+                        attempts += 1
+                        if attempts >= timeout_attempt_limit:
+                            error_message = (
+                                "Timeout after "
+                                f"{timeout_value:.1f}s waiting for "
+                                f"{change.file_path} "
+                                f"(attempt {attempts}/{timeout_attempt_limit})"
+                            )
+                            return idx, PreparedCommit(
+                                change=change,
+                                message=None,
+                                error=error_message,
+                            )
+                        timeout_value = min(timeout_value * 1.5, per_file_timeout * 4)
+                    except Exception as exc:  # noqa: BLE001
+                        return idx, PreparedCommit(
+                            change=change,
+                            message=None,
+                            error=f"Error preparing {change.file_path}: {exc}",
+                        )
+                error_message = (
+                    "Timeout after "
+                    f"{timeout_value:.1f}s waiting for "
+                    f"{change.file_path} "
+                    f"(attempt {timeout_attempt_limit}/{timeout_attempt_limit})"
+                )
+                return idx, PreparedCommit(
+                    change=change,
+                    message=None,
+                    error=error_message,
+                )
 
         def flush_log() -> None:
             nonlocal next_log_index
@@ -428,156 +529,62 @@ class KlingonCMTWorkflow:
             self._print_progress(stage="prepare")
             log_queue[idx] = prepared_commit
             completed.add(idx)
-            start_times.pop(idx, None)
-            pending_debug_log.pop(idx, None)
-            attempt_counts.pop(idx, None)
 
             if prepared_commit.error:
                 failure_count += 1
-                if failure_count >= failure_limit and not self._prepare_failure_limit_hit:
+                if failure_count >= failure_limit and not abort_event.is_set():
                     self._prepare_failure_limit_hit = True
                     self._prepare_failure_limit_message = (
                         f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
                     )
+                    abort_event.set()
 
             flush_log()
 
-        def process_done(done_set: set[Any]) -> None:
-            for fut in done_set:
-                idx = future_map.pop(fut, None)
-                remaining.discard(fut)
-                if idx is None:
-                    continue
-                try:
-                    prepared_commit = fut.result()
-                except Exception as exc:  # noqa: BLE001
-                    change = changes_by_idx[idx]
-                    prepared_commit = PreparedCommit(
-                        change=change,
-                        message=None,
-                        error=f"Error preparing {change.file_path}: {exc}",
-                    )
-                mark_prepared(idx, prepared_commit)
-                if self._prepare_failure_limit_hit:
-                    break
+        tasks = {
+            idx: asyncio.create_task(worker(idx, change))
+            for idx, change in enumerate(file_changes)
+        }
 
-        def process_timeouts(pending_futures: set[Any], now: float) -> None:
-            nonlocal failure_count
-            for fut in list(pending_futures):
-                idx = future_map.get(fut)
-                if idx is None:
-                    continue
-                start_time = start_times.get(idx)
-                if start_time is None:
-                    continue
-                elapsed = now - start_time
-                if elapsed <= per_file_timeout:
-                    if self.debug:
-                        last_logged = pending_debug_log.get(idx, 0.0)
-                        if now - last_logged >= 5.0:
-                            change = changes_by_idx[idx]
-                            diff_len = len(change.diff_content)
-                            print(
-                                (
-                                    "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
-                                ).format(
-                                    change.file_path,
-                                    elapsed,
-                                    diff_len,
-                                )
-                            )
-                            pending_debug_log[idx] = now
-                    continue
-
-                attempts = attempt_counts.get(idx, 1)
-                fut.cancel()
-                remaining.discard(fut)
-                future_map.pop(fut, None)
-                start_times.pop(idx, None)
-                pending_debug_log.pop(idx, None)
-
-                if attempts < timeout_attempt_limit:
-                    attempt_counts[idx] = attempts + 1
-                    retry_queue.append(idx)
-                    continue
-
-                change = changes_by_idx[idx]
-                error_message = (
-                    "Timeout after "
-                    f"{per_file_timeout:.1f}s waiting for "
-                    f"{change.file_path} "
-                    f"(attempt {attempts}/{timeout_attempt_limit})"
-                )
-                prepared_commit = PreparedCommit(
-                    change=change,
-                    message=None,
-                    error=error_message,
-                )
-                mark_prepared(idx, prepared_commit)
-                if self._prepare_failure_limit_hit:
-                    break
-
-        def drain_once(timeout: float = 0.05) -> None:
-            if not remaining:
-                return
-            done, not_done = wait(
-                remaining,
-                timeout=timeout,
-                return_when=FIRST_COMPLETED,
-            )
-            if done:
-                process_done(done)
-            if self._prepare_failure_limit_hit:
-                return
-            if not_done:
-                process_timeouts(not_done, time.time())
-
-        idx_iter = iter(range(len(file_changes)))
         try:
-            for idx in idx_iter:
-                while len(remaining) >= workers and not self._prepare_failure_limit_hit:
-                    drain_once()
-                    if self._prepare_failure_limit_hit:
-                        break
-                    while (
-                        retry_queue
-                        and len(remaining) < workers
-                        and not self._prepare_failure_limit_hit
-                    ):
-                        retry_idx = retry_queue.popleft()
-                        submit(retry_idx)
-                if self._prepare_failure_limit_hit:
-                    break
-                submit(idx)
-
-            while (remaining or retry_queue) and not self._prepare_failure_limit_hit:
-                if retry_queue and len(remaining) < workers:
-                    retry_idx = retry_queue.popleft()
-                    submit(retry_idx)
-                    continue
-                drain_once()
-        finally:
-            for fut in list(remaining):
-                fut.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        if self._prepare_failure_limit_hit:
-            outstanding = set(range(len(file_changes))) - completed
-            for idx in sorted(outstanding):
-                change = changes_by_idx[idx]
-                prepared_commit = PreparedCommit(
-                    change=change,
-                    message=None,
-                    error=self._prepare_failure_limit_message,
+            while tasks:
+                done, pending = await asyncio.wait(
+                    tasks.values(), return_when=asyncio.FIRST_COMPLETED
                 )
-                mark_prepared(idx, prepared_commit)
+                for finished in done:
+                    idx, prepared_commit = await finished
+                    tasks.pop(idx, None)
+                    mark_prepared(idx, prepared_commit)
+
+                if abort_event.is_set():
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    for idx in set(range(len(file_changes))) - completed:
+                        change = file_changes[idx]
+                        prepared_commit = PreparedCommit(
+                            change=change,
+                            message=None,
+                            error=self._prepare_failure_limit_message,
+                        )
+                        mark_prepared(idx, prepared_commit)
+                    break
+
+        finally:
+            for task in tasks.values():
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
 
         if self._prepare_failure_limit_hit and self._prepare_failure_limit_message:
             self._clear_progress_line()
             print(f"\n{RED}{self._prepare_failure_limit_message}{RESET}")
             self._refresh_progress_line()
+
         flush_log()
-        return prepared
+        return sorted(prepared, key=lambda item: item[0])
+
+
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""
 
@@ -728,6 +735,10 @@ class KlingonCMTWorkflow:
             print()
             for subject in self._commit_subjects:
                 print(f"{GREEN}{subject}{RESET}")
+
+        metrics_summary = self._metrics.summary()
+        if metrics_summary:
+            print(f"{DIM}metrics: {metrics_summary}{RESET}")
 
         print()
 
@@ -895,11 +906,13 @@ class KlingonCMTWorkflow:
                 file_path=change.file_path,
             )
 
+        commit_start = time.perf_counter()
         result = self._attempt_commit(
             validated_message,
             max_retries=self.max_retries,
             file_path=change.file_path,
         )
+        self._metrics.record_commit(time.perf_counter() - commit_start)
         return result
 
     def _generate_file_commit_message(self, change: FileChange) -> str:
@@ -1100,3 +1113,13 @@ class KlingonCMTWorkflow:
             summary_parts.insert(0, "No commits were made")
 
         return ". ".join(summary_parts)
+
+    def stats_snapshot(self) -> Dict[str, float]:
+        """Expose workflow statistics collected during execution."""
+
+        return self._stats.snapshot()
+
+    def commit_subjects(self) -> List[str]:
+        """Return the list of commit subjects generated this run."""
+
+        return list(self._commit_subjects)
