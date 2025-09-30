@@ -23,7 +23,6 @@ def test_deletion_diff_path(tmp_path):
         llm_endpoint="http://local",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo),
-        allow_fallback=False,  # deprecated behavior (strict mode)
     )
     set_active_config(cfg)
 
