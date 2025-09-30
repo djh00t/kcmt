@@ -322,6 +322,9 @@ Run tests
 - Basic: uv run pytest -ra -vv tests
 - Strict CI-like run (parallel, warnings as errors, coverage):
   uv run pytest -n auto -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers --cov=kcmt --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=85 tests
+  - On Windows/PowerShell use a single line (no trailing `\`) or replace the
+    line continuation with a backtick (`` ` ``); PowerShell treats ``\`` as a
+    literal character and will otherwise break up the arguments.
 
 Make targets
 
