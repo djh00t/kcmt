@@ -39,8 +39,8 @@ def test_per_file_timeout(monkeypatch, tmp_path):
     real_suggest = commit_module.CommitGenerator.suggest_commit_message
 
     def slow_suggest(self, *a, **k):  # noqa: D401, ARG002
-        time.sleep(0.5)  # exceed the timeout
-        return real_suggest(self, *a, **k)
+        time.sleep(0.2)  # exceed the timeout without heavy LLM work
+        return "feat(test): stubbed commit message"
 
     monkeypatch.setattr(
         commit_module.CommitGenerator,
