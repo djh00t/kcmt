@@ -43,6 +43,21 @@ class OpenAI:  # noqa: D401
             self.chat = type("_Chat", (), {"completions": object()})()
 
 
+class AsyncOpenAI:  # noqa: D401
+    """Compatibility wrapper for async OpenAI usage in tests."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401, ARG002
+        if _openai is not None:
+            client_factory = getattr(_openai, "AsyncOpenAI", None)
+            if client_factory is None:  # pragma: no cover - older SDKs
+                raise RuntimeError("AsyncOpenAI not available in openai package")
+            self._client = client_factory(*args, **kwargs)
+            self.chat = self._client.chat
+            self.responses = getattr(self._client, "responses", None)
+        else:
+            raise RuntimeError("openai package not available")
+
+
 # Removed direct OpenAI/httpx usage here (delegated to drivers)
 
 
@@ -118,13 +133,68 @@ class LLMClient:
         context: str = "",
         style: str = "conventional",
     ) -> str:
+        cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
+        raw_message = self._call_provider(prompt)
+        try:
+            return self._postprocess_message(raw_message, cleaned_diff, context)
+        except LLMError as e:
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode == "openai"
+                and not getattr(self, "_minimal_prompt", False)
+            ):
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry -> enabling minimal prompt "
+                        "after header parse failure"
+                    )
+                if not self.model.startswith("gpt-5"):
+                    self._minimal_prompt = True
+                elif self.debug:
+                    print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
+                retry_raw = self._call_provider(prompt)
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
+            raise
+
+    async def generate_commit_message_async(
+        self,
+        diff: str,
+        context: str = "",
+        style: str = "conventional",
+    ) -> str:
+        cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
+        raw_message = await self._call_provider_async(prompt)
+        try:
+            return self._postprocess_message(raw_message, cleaned_diff, context)
+        except LLMError as e:
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode == "openai"
+                and not getattr(self, "_minimal_prompt", False)
+            ):
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry(async) -> enabling minimal prompt "
+                        "after header parse failure"
+                    )
+                if not self.model.startswith("gpt-5"):
+                    self._minimal_prompt = True
+                elif self.debug:
+                    print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
+                retry_raw = await self._call_provider_async(prompt)
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
+            raise
+
+
+    def _prepare_prompt(
+        self, diff: str, context: str, style: str
+    ) -> tuple[str, str]:
         if self.debug:
             print("DEBUG: generate_commit_message called")
             print(f"  Diff length: {len(diff)} characters")
             print(f"  Context: {context}")
             print(f"  Provider: {self.provider}")
 
-        # Handle binary files (but NEVER treat known text files as binary)
         file_path_hint = ""
         if context and "File:" in context:
             file_path_hint = context.split("File:", 1)[1].strip()
@@ -140,9 +210,7 @@ class LLMClient:
                 "Git reported: " + (snippet or "<no additional details>")
             )
 
-        # Clean up diff and apply truncation if too large for prompt budgets
         if len(diff_for_prompt) > 12000:
-            # Keep head and tail to provide context while limiting size
             head = diff_for_prompt[:8000]
             tail = diff_for_prompt[-2000:]
             diff_for_prompt = head + "\n...\n" + tail
@@ -154,51 +222,21 @@ class LLMClient:
             print(f"DEBUG: Cleaned diff length: {len(cleaned_diff)} characters")
 
         prompt = self._build_prompt(cleaned_diff, context, style)
+        return cleaned_diff, prompt
 
-        if self._mode == "openai":
-            message = self._call_openai(prompt)
-        else:
-            message = self._call_anthropic(prompt)
-
-        if not message:
+    def _postprocess_message(
+        self, raw_message: str, cleaned_diff: str, context: str
+    ) -> str:
+        if not raw_message:
             raise LLMError("Empty response from LLM")
-        raw_message = message.strip()
-        # Sanitize & coerce to conventional commit if possible. If sanitization
-        # fails due to missing header, perform a one-time adaptive retry with
-        # minimal prompt enabled for OpenAI-like providers.
-        try:
-            sanitized = self._sanitize_commit_output(raw_message, context)
-        except LLMError as e:
-            missing_hdr = "missing conventional commit header" in str(e)
-            if (
-                missing_hdr
-                and self._mode == "openai"
-                and not getattr(self, "_minimal_prompt", False)
-            ):
-                if self.debug:
-                    print(
-                        "DEBUG: sanitize.retry -> enabling minimal prompt "
-                        "after header parse failure"
-                    )
-                if not self.model.startswith("gpt-5"):
-                    self._minimal_prompt = True
-                elif self.debug:
-                    print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
-                retry_raw = self._call_openai(prompt)
-                sanitized = self._sanitize_commit_output(retry_raw.strip(), context)
-            else:
-                raise
+        raw_message = raw_message.strip()
+        sanitized = self._sanitize_commit_output(raw_message, context)
 
-        # Enrichment pass: if substantial changes & only single-line output,
-        # attempt to obtain a body explaining WHAT and WHY.
         try:
             changed_lines = self._count_changed_lines(cleaned_diff)
         except (ValueError, TypeError):  # pragma: no cover - defensive
             changed_lines = 0
-        if (
-            changed_lines >= 10  # threshold for meaningful body
-            and "\n" not in sanitized.strip()
-        ):
+        if changed_lines >= 10 and "\n" not in sanitized.strip():
             if self.debug:
                 print(
                     "DEBUG: enrichment.trigger changed_lines={}".format(changed_lines)
@@ -231,7 +269,6 @@ class LLMClient:
             else:
                 print("DEBUG: sanitize.header unchanged '{}'".format(raw_first[:120]))
 
-        # Post-process: enforce subject line length only, then wrap body.
         processed = self._enforce_subject_length(sanitized)
         processed = self._wrap_body(processed)
 
@@ -251,6 +288,15 @@ class LLMClient:
             print("  --- FINAL MESSAGE END ---")
         return processed
 
+    def _call_provider(self, prompt: str) -> str:
+        if self._mode == "openai":
+            return self._call_openai(prompt)
+        return self._call_anthropic(prompt)
+
+    async def _call_provider_async(self, prompt: str) -> str:
+        if self._mode == "openai":
+            return await self._call_openai_async(prompt)
+        return await self._call_anthropic_async(prompt)
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
@@ -312,11 +358,67 @@ class LLMClient:
             raise LLMError("Empty OpenAI response after driver invocation")
         return content
 
+    async def _call_openai_async(self, prompt: str) -> str:
+        if os.environ.get("KCMT_TEST_DISABLE_OPENAI"):
+            return "feat(test): stubbed commit message"
+        if self._mode != "openai":  # defensive
+            raise LLMError("_call_openai_async invoked for non-openai provider")
+        messages = self._build_messages(prompt)
+        minimal_allowed = not self.model.startswith("gpt-5")
+        driver = cast(OpenAIDriver, self._driver)
+        try:
+            content = await driver.invoke_messages_async(
+                messages,
+                minimal_ok=minimal_allowed,
+            )
+        except LLMError as e:
+            msg = str(e)
+            if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
+                if self.debug:
+                    print(
+                        "DEBUG: driver signalled minimal prompt retry (async); "
+                        "rebuilding messages"
+                    )
+                if not self.model.startswith("gpt-5"):
+                    self._minimal_prompt = True
+                messages = self._build_messages(prompt)
+                content = await driver.invoke_messages_async(
+                    messages,
+                    minimal_ok=False,
+                )
+            elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
+                if self.debug:
+                    print(
+                        "DEBUG: driver signalled simplified prompt retry (async); "
+                        "rebuilding system message for gpt-5"
+                    )
+                simple_messages = self._build_messages_simple_gpt5(prompt)
+                content = await driver.invoke_messages_async(
+                    simple_messages,
+                    minimal_ok=False,
+                )
+            else:
+                raise
+        if self.debug:
+            preview = content[:300].replace("\n", "\\n")
+            print("DEBUG: OpenAI-like API Response (driver, async):")
+            print(f"  Length: {len(content)} characters")
+            print(f"  Preview: '{preview}'")
+        if not content:
+            raise LLMError("Empty OpenAI response after driver invocation")
+        return content
+
     def _call_anthropic(self, prompt: str) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
         return driver.invoke(prompt)
+
+    async def _call_anthropic_async(self, prompt: str) -> str:
+        if self._mode != "anthropic":  # defensive
+            raise LLMError("_call_anthropic_async invoked for non-anthropic provider")
+        driver = cast(AnthropicDriver, self._driver)
+        return await driver.invoke_async(prompt)
 
     # ------------------------------------------------------------------
     # Prompt helpers
