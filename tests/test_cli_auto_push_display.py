@@ -6,8 +6,8 @@ def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
 
     # Fake workflow to simulate successful commit + push flag
     class _FakeWorkflow:
-        def __init__(self, *_, **__):
-            pass
+        def __init__(self, repo_path=None, **__):
+            self.git_repo = type("Repo", (), {"repo_path": repo_path})()
 
         def execute_workflow(self):  # noqa: D401
             return {
@@ -17,6 +17,12 @@ def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
                 "summary": "Done",
                 "pushed": True,
             }
+
+        def stats_snapshot(self):  # pragma: no cover - stubbed
+            return {}
+
+        def commit_subjects(self):  # pragma: no cover - stubbed
+            return []
 
     monkeypatch.setenv("KLINGON_CMT_AUTO_PUSH", "1")
     monkeypatch.setattr("kcmt.cli.KlingonCMTWorkflow", _FakeWorkflow)
