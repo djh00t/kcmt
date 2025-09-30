@@ -83,3 +83,5 @@ venv.bak/
 # macOS metadata in subfolders
 **/.DS_Store
 **/._*
+
+test-
