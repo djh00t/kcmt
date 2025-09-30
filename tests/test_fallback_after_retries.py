@@ -63,9 +63,7 @@ def test_heuristic_fallback_after_invalid_llm(tmp_path, monkeypatch):
     )
     set_active_config(cfg)
 
-    wf = KlingonCMTWorkflow(
-        repo_path=str(tmp_path), show_progress=False, config=cfg
-    )
+    wf = KlingonCMTWorkflow(repo_path=str(tmp_path), show_progress=False, config=cfg)
     results = wf.execute_workflow()
 
     file_commits = [r for r in results.get("file_commits", []) if r.success]

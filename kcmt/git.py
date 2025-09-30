@@ -3,7 +3,7 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from .config import Config, get_active_config
 from .exceptions import GitError
@@ -67,26 +67,35 @@ class GitRepo:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
-    def _run_git_command(self, args: list[str]) -> str:
+    def _run_git_command(
+        self, args: list[str], *, env: Optional[Dict[str, str]] = None
+    ) -> str:
         """Run a Git command and return its output."""
         try:
-            result = subprocess.run(
-                ["git"] + args,
-                cwd=self.repo_path,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            result: subprocess.CompletedProcess[str]
+            if env is None:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            else:
+                result = subprocess.run(
+                    ["git", *args],
+                    cwd=self.repo_path,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env=env,
+                )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             cmd = " ".join(args)
-            raise GitError(
-                f"Git command failed: {cmd}\n{e.stderr}"
-            ) from e
+            raise GitError(f"Git command failed: {cmd}\n{e.stderr}") from e
         except FileNotFoundError as exc:
-            raise GitError(
-                "Git command not found. Please install Git."
-            ) from exc
+            raise GitError("Git command not found. Please install Git.") from exc
 
     def is_ignored(self, rel_path: str) -> bool:
         """Return True if path is ignored by gitignore.
@@ -106,7 +115,7 @@ class GitRepo:
         except FileNotFoundError:
             return False
         return result.returncode == 0
-    
+
     def get_staged_diff(self) -> str:
         """Get the diff of staged changes."""
         return self._run_git_command(["diff", "--cached"])
@@ -151,20 +160,20 @@ class GitRepo:
 
     def get_commit_diff(self, commit_hash: str) -> str:
         """Get the diff for a specific commit."""
-        return self._run_git_command(
-            ["show", "--no-patch", "--format=", commit_hash]
-        )
+        return self._run_git_command(["show", "--no-patch", "--format=", commit_hash])
 
     def get_recent_commits(self, count: int = 5) -> list[str]:
         """Get recent commit messages."""
         # Use a custom pretty format that always includes abbreviated hash
         # followed by a single space and the subject line. Avoid combining
         # --oneline with --format which discards the hash.
-        output = self._run_git_command([
-            "log",
-            f"-{count}",
-            "--pretty=%h %s",
-        ])
+        output = self._run_git_command(
+            [
+                "log",
+                f"-{count}",
+                "--pretty=%h %s",
+            ]
+        )
         return output.split("\n") if output else []
 
     def stage_file(self, file_path: str) -> None:
@@ -175,9 +184,29 @@ class GitRepo:
         """Stage all changes (including new and deleted files)."""
         self._run_git_command(["add", "-A"])
 
+    def _commit_env(self) -> Dict[str, str]:
+        """Return environment ensuring Git has an identity for commits."""
+
+        env = os.environ.copy()
+
+        author_name = env.get("GIT_AUTHOR_NAME") or env.get("KCMT_GIT_AUTHOR_NAME")
+        author_email = env.get("GIT_AUTHOR_EMAIL") or env.get("KCMT_GIT_AUTHOR_EMAIL")
+
+        if not author_name:
+            author_name = "kcmt-bot"
+        if not author_email:
+            author_email = "kcmt@example.com"
+
+        env.setdefault("GIT_AUTHOR_NAME", author_name)
+        env.setdefault("GIT_COMMITTER_NAME", author_name)
+        env.setdefault("GIT_AUTHOR_EMAIL", author_email)
+        env.setdefault("GIT_COMMITTER_EMAIL", author_email)
+
+        return env
+
     def commit(self, message: str) -> None:
         """Create a commit with the given message."""
-        self._run_git_command(["commit", "-m", message])
+        self._run_git_command(["commit", "-m", message], env=self._commit_env())
 
     def commit_file(self, message: str, file_path: str) -> None:
         """Create a commit including ONLY the specified file.
@@ -186,22 +215,24 @@ class GitRepo:
         are staged (intentionally or accidentally) they are not part of this
         commit. Ensures true per-file atomic commits.
         """
-        self._run_git_command(["commit", "-m", message, "--", file_path])
+        self._run_git_command(
+            ["commit", "-m", message, "--", file_path], env=self._commit_env()
+        )
 
-    def push(
-        self, remote: str = "origin", branch: Optional[str] = None
-    ) -> str:
+    def push(self, remote: str = "origin", branch: Optional[str] = None) -> str:
         """Push current branch to remote.
 
         If branch is None, determine it via 'git rev-parse --abbrev-ref HEAD'.
         Returns the stdout from git push.
         """
         if branch is None:
-            branch = self._run_git_command([
-                "rev-parse",
-                "--abbrev-ref",
-                "HEAD",
-            ])
+            branch = self._run_git_command(
+                [
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ]
+            )
         return self._run_git_command(["push", remote, branch])
 
     def reset_index(self) -> None:
@@ -216,22 +247,62 @@ class GitRepo:
         """Unstage a specific file."""
         self._run_git_command(["reset", "HEAD", file_path])
 
+    def _run_git_porcelain(self) -> list[tuple[str, str]]:
+        """Return ``git status`` entries parsed from porcelain ``-z`` output."""
+
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                cwd=self.repo_path,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - git
+            raise GitError(
+                f"Git command failed: status --porcelain\n{exc.stderr}"
+            ) from exc
+        except FileNotFoundError as exc:  # pragma: no cover - env
+            raise GitError("Git command not found. Please install Git.") from exc
+
+        data = result.stdout.decode("utf-8", "surrogateescape")
+        raw_entries = data.split("\0")
+
+        entries: list[tuple[str, str]] = []
+        idx = 0
+        while idx < len(raw_entries):
+            entry = raw_entries[idx]
+            idx += 1
+            if not entry:
+                continue
+
+            status = entry[:2]
+            if len(entry) > 3 and entry[2] == " ":
+                primary_path = entry[3:]
+            else:
+                primary_path = entry[2:]
+
+            path = primary_path
+            rename_status = {status[0], status[1]} & {"R", "C"}
+            if rename_status and idx < len(raw_entries):
+                path = raw_entries[idx]
+                idx += 1
+
+            entries.append((status, path))
+
+        return entries
+
     def process_deletions_first(self) -> list[str]:
         """Process deletions first by staging all deleted files."""
-        status_output = self._run_git_command(["status", "--porcelain"])
 
-        deleted_files = []
-        for line in status_output.split("\n"):
-            if not line:
-                continue
-            status = line[:2]
+        deleted_files: list[str] = []
+        for status, file_path in self._run_git_porcelain():
             if "D" not in status:
-                continue
-            raw_path = (
-                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
-            )
-            file_path = raw_path.strip()
-            if not file_path:
                 continue
             deleted_files.append(file_path)
             self.stage_file(file_path)
@@ -240,41 +311,76 @@ class GitRepo:
 
     def list_changed_files(self) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
-        status_output = self._run_git_command(["status", "--porcelain"])
 
-        entries: list[tuple[str, str]] = []
-        for line in status_output.split("\n"):
-            if not line:
-                continue
-            status = line[:2]
-            raw_path = (
-                line[3:] if len(line) > 3 and line[2] == " " else line[2:]
+        return [(status, path) for status, path in self._run_git_porcelain() if path]
+
+    def get_worktree_diff_for_path(self, file_path: str) -> str:
+        """Return a unified diff for ``file_path`` without touching the index."""
+
+        head_diff_cmd = ["git", "diff", "--patch", "HEAD", "--", file_path]
+        head_result = subprocess.run(
+            head_diff_cmd,
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        diff_output = head_result.stdout if head_result.returncode in {0, 1} else ""
+        if diff_output.strip():
+            return diff_output
+
+        # Fall back to plain working-tree diff when HEAD is unavailable (e.g.,
+        # an empty repository) or produced no output. ``git diff`` returns 129
+        # when HEAD cannot be resolved; treat that like ``git diff`` with no
+        # base revision.
+        if head_result.returncode not in {0, 1} or not diff_output.strip():
+            worktree_cmd = ["git", "diff", "--patch", "--", file_path]
+            worktree_result = subprocess.run(
+                worktree_cmd,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                check=False,
             )
-            path = raw_path.strip()
-            if not path:
-                continue
-            if " -> " in path:
-                path = path.split(" -> ", 1)[1].strip()
-            if path.startswith('"') and path.endswith('"') and len(path) >= 2:
-                path = path[1:-1]
-            # Expand untracked directories (Git collapses them in porcelain)
-            if path.endswith("/") and status.startswith("??"):
-                dir_rel = path.rstrip("/")
-                dir_full = self.repo_path / dir_rel
-                if dir_full.is_dir():
-                    for root, _dirs, files in os.walk(dir_full):
-                        for f in files:
-                            full_path = Path(root) / f
-                            rel_path = str(
-                                full_path.relative_to(self.repo_path)
-                            )
-                            if self.is_ignored(rel_path):
-                                continue
-                            entries.append((status, rel_path))
-                continue
-            # Skip ignored standalone paths
-            if self.is_ignored(path):
-                continue
-            entries.append((status, path))
+            if worktree_result.returncode not in {0, 1}:
+                raise GitError(
+                    f"Git command failed: diff --patch --\n{worktree_result.stderr}"
+                )  # pragma: no cover - requires simulating git failure
+            diff_output = worktree_result.stdout
+            if diff_output.strip():
+                return diff_output
 
-        return entries
+        # If both diffs returned nothing, the file is likely untracked.
+        tracked_check = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", file_path],
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tracked_check.returncode == 0:
+            return diff_output
+
+        abs_path = str((self.repo_path / file_path).resolve())
+        no_index_cmd = [
+            "git",
+            "diff",
+            "--patch",
+            "--no-index",
+            "/dev/null",
+            abs_path,
+        ]
+        no_index_result = subprocess.run(
+            no_index_cmd,
+            cwd=self.repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if no_index_result.returncode not in {0, 1}:
+            raise GitError(
+                f"Git command failed: diff --no-index\n{no_index_result.stderr}"
+            )  # pragma: no cover - requires simulating git failure
+
+        return no_index_result.stdout

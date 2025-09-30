@@ -1,4 +1,3 @@
-
 import subprocess
 
 from kcmt import llm as llm_module
@@ -27,9 +26,7 @@ def test_auto_push_persist_env(monkeypatch, tmp_path):
     # Monkeypatch LLM to avoid network & ensure valid commit message
     stub_msg = "chore(config): update configuration"
 
-    def stub_generate(
-        diff, context="", style="conventional"
-    ):  # noqa: D401, ARG001
+    def stub_generate(diff, context="", style="conventional"):  # noqa: D401, ARG001
         return stub_msg
 
     monkeypatch.setattr(
@@ -38,14 +35,16 @@ def test_auto_push_persist_env(monkeypatch, tmp_path):
         staticmethod(stub_generate),
     )
 
-    code = cli.run([
-        "--provider",
-        "openai",
-        "--repo-path",
-        str(tmp_path),
-        "--no-progress",
-        "--allow-fallback",
-    ])
+    code = cli.run(
+        [
+            "--provider",
+            "openai",
+            "--repo-path",
+            str(tmp_path),
+            "--no-progress",
+            "--allow-fallback",
+        ]
+    )
     # Expect success (0) now that repo exists
     assert code == 0
 
@@ -56,14 +55,16 @@ def test_auto_push_persist_env(monkeypatch, tmp_path):
     # Unset env and run again; auto_push should remain True due to persistence
     monkeypatch.delenv("KLINGON_CMT_AUTO_PUSH", raising=False)
     cli2 = CLI()
-    code2 = cli2.run([
-        "--provider",
-        "openai",
-        "--repo-path",
-        str(tmp_path),
-        "--no-progress",
-        "--allow-fallback",
-    ])
+    code2 = cli2.run(
+        [
+            "--provider",
+            "openai",
+            "--repo-path",
+            str(tmp_path),
+            "--no-progress",
+            "--allow-fallback",
+        ]
+    )
     assert code2 == 0
     cfg2 = load_persisted_config(tmp_path)
     assert cfg2.auto_push is True

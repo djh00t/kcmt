@@ -15,6 +15,15 @@ from .config import Config, get_active_config
 from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
 from .git import GitRepo
 
+RESET = "\033[0m"
+BOLD = "\033[1m"
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+MAGENTA = "\033[95m"
+DIM = "\033[2m"
+RED = "\033[91m"
+
 
 @dataclass
 class FileChange:
@@ -103,23 +112,21 @@ class KlingonCMTWorkflow:
         """Initialize the workflow."""
         self._config = config or get_active_config()
         self.git_repo = GitRepo(repo_path, self._config)
-        self.commit_generator = CommitGenerator(
-            repo_path, self._config, debug=debug
-        )
+        self.commit_generator = CommitGenerator(repo_path, self._config, debug=debug)
         self.max_retries = max_retries
         self._stats = WorkflowStats()
         self._show_progress = show_progress
         self.file_limit = file_limit
         self.debug = debug
         self.profile = profile
+        self._thread_local = threading.local()
+        self._thread_local.generator = self.commit_generator
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
             return
         details = f" {extra}" if extra else ""
-        print(
-            f"[kcmt-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}"
-        )
+        print(f"[kcmt-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}")
 
     def execute_workflow(self) -> Dict[str, Any]:
         """Execute the complete kcmt workflow."""
@@ -151,21 +158,15 @@ class KlingonCMTWorkflow:
             self._finalize_progress()
 
         # Auto-push if enabled and we actually committed something
-        any_success = (
-            any(r.success for r in results.get("file_commits", []))
-            or any(
-                r.success
-                for r in results.get("deletions_committed", [])
-            )
+        any_success = any(r.success for r in results.get("file_commits", [])) or any(
+            r.success for r in results.get("deletions_committed", [])
         )
         if any_success and getattr(self._config, "auto_push", False):
             try:
                 self.git_repo.push()
                 results["pushed"] = True
             except GitError as e:  # pragma: no cover - network dependent
-                results.setdefault("errors", []).append(
-                    f"Auto-push failed: {e}"
-                )
+                results.setdefault("errors", []).append(f"Auto-push failed: {e}")
 
         total_elapsed = time.perf_counter() - workflow_start
         self._profile(
@@ -195,22 +196,16 @@ class KlingonCMTWorkflow:
         if not deleted_files:
             return results
 
-        commit_message = (
-            "chore: remove deleted files\n\nRemoved files:\n" + "\n".join(
-                f"- {f}" for f in deleted_files
-            )
+        commit_message = "chore: remove deleted files\n\nRemoved files:\n" + "\n".join(
+            f"- {f}" for f in deleted_files
         )
 
         try:
-            validated_message = (
-                self.commit_generator.validate_and_fix_commit_message(
-                    commit_message
-                )
+            validated_message = self.commit_generator.validate_and_fix_commit_message(
+                commit_message
             )
         except ValidationError:
-            validated_message = self._generate_deletion_commit_message(
-                deleted_files
-            )
+            validated_message = self._generate_deletion_commit_message(deleted_files)
 
         result = self._attempt_commit(
             validated_message,
@@ -219,9 +214,7 @@ class KlingonCMTWorkflow:
         results.append(result)
         return results
 
-    def _generate_deletion_commit_message(
-        self, deleted_files: List[str]
-    ) -> str:
+    def _generate_deletion_commit_message(self, deleted_files: List[str]) -> str:
         """Generate a commit message for deleted files."""
         if len(deleted_files) == 1:
             return f"chore: remove {deleted_files[0]}"
@@ -239,7 +232,7 @@ class KlingonCMTWorkflow:
             time.perf_counter() - status_start,
             extra=f"entries={len(all_changed_files)}",
         )
-        
+
         # Filter out deletions (they're handled separately)
         non_deletion_files = [
             entry for entry in all_changed_files if "D" not in entry[0]
@@ -250,45 +243,34 @@ class KlingonCMTWorkflow:
         # .gitignore to be ignored). These can still be committed manually
         # via --file if desired.
         META_SKIP = {".gitignore", ".gitattributes", ".gitmodules"}
-        non_deletion_files = [
-            e for e in non_deletion_files if e[1] not in META_SKIP
-        ]
-        
+        non_deletion_files = [e for e in non_deletion_files if e[1] not in META_SKIP]
+
         if not non_deletion_files:
             return results
 
         # Apply file limit if specified
         if self.file_limit and self.file_limit > 0:
-            non_deletion_files = non_deletion_files[:self.file_limit]
-        # Build per-file diffs WITHOUT staging all files at once. This avoids
-        # the previous behaviour where the first commit would include every
-        # file that had been pre-staged. We stage each file temporarily just
-        # to capture its diff (so new/untracked files produce a diff), then
-        # immediately unstage it. Commit generation later will re-stage only
-        # that file for its own atomic commit.
+            non_deletion_files = non_deletion_files[: self.file_limit]
+        # Build per-file diffs WITHOUT staging files at all. Instead of the
+        # previous add/diff/reset loop (which spawned three git commands per
+        # file), we read the worktree diff directly so large repositories do
+        # not thrash the index or pay the subprocess overhead. Each commit is
+        # staged only at the last moment inside _commit_single_file.
         file_changes: List[FileChange] = []
         collect_start = time.perf_counter()
-        for _status, file_path in non_deletion_files:
+        for status, file_path in non_deletion_files:
             try:
-                # Stage the file to obtain a reliable diff (untracked files
-                # won't appear in plain working diff output otherwise)
-                self.git_repo.stage_file(file_path)
-                single_diff = self.git_repo.get_file_diff(
-                    file_path, staged=True
-                )
-                # Unstage so subsequent commits are atomic
-                try:
-                    self.git_repo.unstage(file_path)
-                except GitError:
-                    # Non-fatal; if unstage fails we still proceed
-                    pass
+                single_diff = self.git_repo.get_worktree_diff_for_path(file_path)
                 if not single_diff.strip():
                     continue
-                parsed = self._parse_git_diff(single_diff)
-                if parsed:
-                    # _parse_git_diff returns a list; for a single-file diff
-                    # we take the first element.
-                    file_changes.append(parsed[0])
+                change_type = self._change_type_from_status(status)
+                file_changes.append(
+                    FileChange(
+                        file_path=file_path,
+                        change_type=change_type,
+                        diff_content=single_diff,
+                    )
+                )
             except GitError as e:
                 results.append(
                     CommitResult(
@@ -327,15 +309,23 @@ class KlingonCMTWorkflow:
                     pass  # Don't fail if unstaging fails
                 result = CommitResult(success=False, error=prepared.error)
             else:
-                result = self._commit_single_file(
-                    prepared.change, prepared.message
-                )
+                result = self._commit_single_file(prepared.change, prepared.message)
 
             results.append(result)
             self._stats.mark_result(result.success)
             self._print_progress(stage="commit")
 
         return results
+
+    def _change_type_from_status(self, status: str) -> str:
+        """Map a porcelain status code to FileChange.change_type."""
+
+        trimmed = status.strip()
+        if "D" in trimmed:
+            return "D"
+        if trimmed == "??" or "A" in trimmed:
+            return "A"
+        return "M"
 
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
@@ -346,17 +336,14 @@ class KlingonCMTWorkflow:
         prepared: List[Tuple[int, PreparedCommit]] = []
 
         print(
-            "Using {} concurrent threads for {} files".format(
-                workers, len(file_changes)
-            )
+            f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
+            f"{len(file_changes)} file(s){RESET}"
         )
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
         try:
             per_file_timeout = (
-                float(per_file_timeout_env)
-                if per_file_timeout_env
-                else 45.0
+                float(per_file_timeout_env) if per_file_timeout_env else 45.0
             )
         except ValueError:
             per_file_timeout = 45.0
@@ -390,8 +377,7 @@ class KlingonCMTWorkflow:
                             change=file_changes[idx],
                             message=None,
                             error=(
-                                "Error preparing "
-                                f"{file_changes[idx].file_path}: {exc}"
+                                f"Error preparing {file_changes[idx].file_path}: {exc}"
                             ),
                         )
                     prepared.append((idx, prepared_commit))
@@ -423,20 +409,26 @@ class KlingonCMTWorkflow:
 
         return prepared
 
+    def _get_thread_commit_generator(self) -> CommitGenerator:
+        """Return a per-thread CommitGenerator instance."""
+
+        generator = getattr(self._thread_local, "generator", None)
+        if generator is None:
+            generator = CommitGenerator(
+                repo_path=str(self.git_repo.repo_path),
+                config=self._config,
+                debug=self.debug,
+            )
+            self._thread_local.generator = generator
+        return generator
+
     def _prepare_single_change(self, change: FileChange) -> PreparedCommit:
-        generator = CommitGenerator(
-            repo_path=str(self.git_repo.repo_path),
-            config=self._config,
-            debug=self.debug,
-        )
+        generator = self._get_thread_commit_generator()
         if self.debug:
             snippet = change.diff_content.splitlines()[:20]
             preview = "\n".join(snippet)
             print(
-                (
-                    "DEBUG: prepare.file path={} change_type={} "
-                    "diff_preview=\n{}"
-                ).format(
+                ("DEBUG: prepare.file path={} change_type={} diff_preview=\n{}").format(
                     change.file_path,
                     change.change_type,
                     preview,
@@ -449,9 +441,7 @@ class KlingonCMTWorkflow:
                 context=f"File: {change.file_path}",
                 style="conventional",
             )
-            validated = generator.validate_and_fix_commit_message(
-                commit_message
-            )
+            validated = generator.validate_and_fix_commit_message(commit_message)
             self._print_commit_generated(change.file_path, validated)
             if self.debug:
                 print(
@@ -509,13 +499,26 @@ class KlingonCMTWorkflow:
         failures = snapshot["failures"]
         rate = snapshot["rate"]
 
-        bar = (
-            f"[kcmt] stage={stage:<7} | files {processed}/{total} "
-            f"| prepared {prepared}/{total} | ok {success} | fail {failures} "
-            f"| {rate:.2f} commits/s"
+        stage_styles = {
+            "prepare": ("🧠", CYAN),
+            "commit": ("🚀", GREEN),
+            "done": ("🏁", YELLOW),
+        }
+        icon, color = stage_styles.get(stage, ("🔄", CYAN))
+        stage_label = stage.upper()
+
+        status_line = (
+            "\r"
+            f"{BOLD}{icon} kcmt{RESET} "
+            f"{color}{stage_label:<7}{RESET} │ "
+            f"{GREEN}{processed:>3}{RESET}/{total:>3} files │ "
+            f"{CYAN}{prepared:>3}{RESET}/{total:>3} ready │ "
+            f"{GREEN}✓ {success:>3}{RESET} │ "
+            f"{RED}✗ {failures:>3}{RESET} │ "
+            f"{DIM}{rate:5.2f} commits/s{RESET}   "
         )
 
-        print("\r" + bar, end="", flush=True)
+        print(status_line, end="", flush=True)
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
@@ -523,15 +526,13 @@ class KlingonCMTWorkflow:
         self._print_progress(stage="done")
         print()
 
-    def _print_commit_generated(
-        self, file_path: str, commit_message: str
-    ) -> None:
+    def _print_commit_generated(self, file_path: str, commit_message: str) -> None:
         """Display the generated commit message for a file."""
         # Colors for consistency with CLI
         CYAN = "\033[96m"
         GREEN = "\033[92m"
         RESET = "\033[0m"
-        
+
         print(f"\n{CYAN}Generated for {file_path}:{RESET}")
         # Show the full commit message without truncation
         print(f"{GREEN}{commit_message}{RESET}")
@@ -553,9 +554,7 @@ class KlingonCMTWorkflow:
                     changes.append(
                         FileChange(
                             file_path=current_file,
-                            change_type=self._determine_change_type(
-                                current_diff
-                            ),
+                            change_type=self._determine_change_type(current_diff),
                             diff_content="\n".join(current_diff),
                         )
                     )
@@ -604,14 +603,10 @@ class KlingonCMTWorkflow:
         deleted_markers = ("deleted file mode", "+++ /dev/null")
 
         added = any(
-            line.startswith(marker)
-            for line in diff_lines
-            for marker in added_markers
+            line.startswith(marker) for line in diff_lines for marker in added_markers
         )
         deleted = any(
-            line.startswith(marker)
-            for line in diff_lines
-            for marker in deleted_markers
+            line.startswith(marker) for line in diff_lines for marker in deleted_markers
         )
 
         if added and not deleted:
@@ -693,9 +688,7 @@ class KlingonCMTWorkflow:
                 else:
                     self.git_repo.commit(message)
                 recent_commits = self.git_repo.get_recent_commits(1)
-                commit_hash = (
-                    recent_commits[0].split()[0] if recent_commits else None
-                )
+                commit_hash = recent_commits[0].split()[0] if recent_commits else None
                 return CommitResult(
                     success=True,
                     commit_hash=commit_hash,
@@ -756,10 +749,8 @@ class KlingonCMTWorkflow:
 
         # Try LLM first, then fallback to local synthesis if empty/invalid
         try:
-            candidate = (
-                self.commit_generator.llm_client.generate_commit_message(
-                    "Fix commit message", prompt, "conventional"
-                )
+            candidate = self.commit_generator.llm_client.generate_commit_message(
+                "Fix commit message", prompt, "conventional"
             )
             if candidate and candidate.strip():
                 return candidate.strip()
@@ -804,9 +795,9 @@ class KlingonCMTWorkflow:
             subject = m_scope.group(3)
         else:
             m_type = re.match(type_pattern, header)
-            if m_type and ':' in header:
+            if m_type and ":" in header:
                 msg_type = m_type.group(1)
-                after_colon = header.split(':', 1)[1].strip()
+                after_colon = header.split(":", 1)[1].strip()
                 subject = after_colon
             else:
                 # No valid type prefix; treat whole header as subject
@@ -816,16 +807,16 @@ class KlingonCMTWorkflow:
             scope = "core"
 
         # Remove trailing period from subject
-        if subject.endswith('.'):
+        if subject.endswith("."):
             subject = subject[:-1]
 
         # Enforce length 50 chars on subject
         max_len = 50
         if len(subject) > max_len:
-            cut = subject.rfind(' ', 0, max_len)
+            cut = subject.rfind(" ", 0, max_len)
             if cut == -1 or cut < max_len * 0.6:
                 cut = max_len - 1
-            subject = subject[:cut].rstrip() + '…'
+            subject = subject[:cut].rstrip() + "…"
 
         rebuilt = f"{msg_type}({scope}): {subject}"
 
@@ -849,15 +840,11 @@ class KlingonCMTWorkflow:
 
         if deletions:
             successful_deletions = [r for r in deletions if r.success]
-            summary_parts.append(
-                f"Committed {len(successful_deletions)} deletion(s)"
-            )
+            summary_parts.append(f"Committed {len(successful_deletions)} deletion(s)")
 
         if file_commits:
             successful_commits = [r for r in file_commits if r.success]
-            summary_parts.append(
-                f"Committed {len(successful_commits)} file change(s)"
-            )
+            summary_parts.append(f"Committed {len(successful_commits)} file change(s)")
 
         if errors:
             summary_parts.append(f"Encountered {len(errors)} error(s)")
@@ -865,9 +852,7 @@ class KlingonCMTWorkflow:
         total_commits = len([r for r in deletions + file_commits if r.success])
 
         if total_commits > 0:
-            summary_parts.insert(
-                0, f"Successfully completed {total_commits} commits"
-            )
+            summary_parts.insert(0, f"Successfully completed {total_commits} commits")
         else:
             summary_parts.insert(0, "No commits were made")
 
