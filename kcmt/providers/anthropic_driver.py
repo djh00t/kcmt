@@ -24,9 +24,9 @@ class AnthropicDriver(BaseDriver):
         super().__init__(config, debug)
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 60.0
+            self._request_timeout = float(timeout_env) if timeout_env else 5.0
         except ValueError:
-            self._request_timeout = 60.0
+            self._request_timeout = 5.0
         self._api_key = config.resolve_api_key()
 
     def generate(self, diff: str, context: str, style: str) -> str:  # noqa: D401,E501
