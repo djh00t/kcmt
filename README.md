@@ -269,6 +269,7 @@ Set up
 
 Run tests (from project root)
 
+- make test                  # quiet pytest run via Makefile
 - uv run -m pytest tests     # or: pytest
 
 Lint/format (recommendations)
