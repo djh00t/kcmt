@@ -1,53 +1,72 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-09-30T14:32:09Z",
+  "timestamp": "2025-09-30T15:07:24Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast",
   "endpoint": "https://api.x.ai/v1",
   "max_retries": 3,
   "file_limit": null,
-  "compact": true,
-  "duration_seconds": 22.727107,
-  "rate_commits_per_sec": 0.044337,
+  "compact": false,
+  "duration_seconds": 6.487057,
+  "rate_commits_per_sec": 0.317692,
   "counts": {
-    "files_total": 1,
-    "prepared_total": 1,
-    "processed_total": 1,
+    "files_total": 2,
+    "prepared_total": 2,
+    "processed_total": 2,
     "prepared_failures": 0,
-    "commit_success": 1,
+    "commit_success": 2,
     "commit_failure": 0,
-    "deletions_total": 0,
-    "deletions_success": 0,
+    "deletions_total": 1,
+    "deletions_success": 1,
     "deletions_failure": 0,
-    "overall_success": 1,
+    "overall_success": 3,
     "overall_failure": 0,
-    "errors": 0
+    "errors": 1
   },
-  "pushed": true,
-  "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
-  "errors": [],
+  "pushed": null,
+  "summary": "Successfully completed 3 commits. Committed 1 deletion(s). Committed 2 file change(s)",
+  "errors": [
+    "Auto-push failed: Git command failed: push origin main\nTo https://github.com/djh00t/kcmt.git\n ! [rejected]        main -> main (non-fast-forward)\nerror: failed to push some refs to 'https://github.com/djh00t/kcmt.git'\nhint: Updates were rejected because the tip of your current branch is behind\nhint: its remote counterpart. If you want to integrate the remote changes,\nhint: use 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.\n"
+  ],
   "commits": [
     {
       "success": true,
-      "commit_hash": "9c999fb",
-      "message": "feat(core): update last run snapshot\n\nUpdated .kcmt/last_run.json with data from a new kcmt run, including a\nlater timestamp, enabled compact mode, reduced processed files from 5 to\n2, updated commit list with 2 new entries, and refreshed stats. This\nreflects the most recent tool execution and persistence of run metrics.",
+      "commit_hash": "bdf3c53",
+      "message": "feat(commit): add async method for LLM-based commit message generation\n\nImplement suggest_commit_message_async to generate conventional commit\nmessages using an LLM client with retry logic, validation, and debug\noutput. This enhances the CommitGenerator class by providing\nasynchronous capabilities for better performance in concurrent\nenvironments. Includes error handling for empty or invalid responses,\nensuring robust message creation.",
       "error": null,
-      "file_path": ".kcmt/last_run.json"
+      "file_path": "kcmt/commit.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "0739baf",
+      "message": "feat(llm): add async support for LLM providers\n\nAdded AsyncOpenAI compatibility wrapper for async OpenAI usage in tests.\nRefactored generate_commit_message into helper methods _prepare_prompt\nand _postprocess_message. Introduced async version\ngenerate_commit_message_async. Added async provider call methods\n_call_provider_async, _call_openai_async, _call_anthropic_async to\nenable asynchronous LLM interactions. This improves performance and\nresponsiveness in environments supporting async operations.",
+      "error": null,
+      "file_path": "kcmt/llm.py"
     }
   ],
-  "deletions": [],
+  "deletions": [
+    {
+      "success": true,
+      "commit_hash": "1e97d85",
+      "message": "chore: remove deleted files\n\nRemoved files:\n- tmp-config-test/.kcmt/config.json\n- tmp-config-test2/.kcmt/config.json\n- tmp-config-test3/.kcmt/config.json",
+      "error": null,
+      "file_path": null
+    }
+  ],
   "subjects": [
-    "feat(core): update last run snapshot"
+    "chore: remove deleted files",
+    "feat(commit): add async method for LLM-based commit message generation",
+    "feat(llm): add async support for LLM providers"
   ],
   "stats": {
-    "total_files": 1,
-    "prepared": 1,
-    "processed": 1,
-    "successes": 1,
+    "total_files": 2,
+    "prepared": 2,
+    "processed": 2,
+    "successes": 2,
     "failures": 0,
-    "elapsed": 22.554741,
-    "rate": 0.044337
+    "elapsed": 6.295411,
+    "rate": 0.317692
   },
-  "auto_push_state": "pushed"
+  "auto_push_state": ""
 }
