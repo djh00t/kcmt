@@ -213,14 +213,6 @@ Examples:
             help=("List available models for each provider using your API keys"),
         )
         parser.add_argument(
-            "--allow-fallback",
-            action="store_true",
-            help=(
-                "Allow local heuristic commit message fallback after all LLM "
-                "attempts fail or produce invalid format"
-            ),
-        )
-        parser.add_argument(
             "--auto-push",
             action="store_true",
             help=(
@@ -351,18 +343,12 @@ Examples:
             # Persist when flags explicitly overridden OR when env enabled a
             # feature not yet persisted (so subsequent plain runs inherit it)
             should_persist = False
-            if any(k in overrides for k in ("auto_push", "allow_fallback")):
+            if "auto_push" in overrides:
                 should_persist = True
-            else:
-                if config.auto_push and (
-                    not persisted_cfg or not getattr(persisted_cfg, "auto_push", False)
-                ):
-                    should_persist = True
-                if config.allow_fallback and (
-                    not persisted_cfg
-                    or not getattr(persisted_cfg, "allow_fallback", False)
-                ):
-                    should_persist = True
+            elif config.auto_push and (
+                not persisted_cfg or not getattr(persisted_cfg, "auto_push", False)
+            ):
+                should_persist = True
             if should_persist:
                 try:  # pragma: no cover - trivial persistence path
                     with self._profile_timer("persist-flags"):
@@ -429,8 +415,6 @@ Examples:
             overrides["max_commit_length"] = str(args.max_commit_length)
         if args.repo_path:
             overrides["repo_path"] = str(repo_root.expanduser().resolve(strict=False))
-        if getattr(args, "allow_fallback", False):
-            overrides["allow_fallback"] = "1"
         if getattr(args, "auto_push", False):
             overrides["auto_push"] = "1"
         return overrides
@@ -561,6 +545,7 @@ Examples:
             "file_limit": getattr(args, "limit", None),
             "debug": getattr(args, "debug", False),
             "profile": self._profile_enabled,
+            "verbose": getattr(args, "verbose", False),
         }
         signature = inspect.signature(KlingonCMTWorkflow)
         filtered_kwargs = {
@@ -783,6 +768,8 @@ Examples:
         errors = results.get("errors", [])
         pushed = results.get("pushed")
 
+        self._print_heading("Workflow Summary")
+
         successful_deletions = [r for r in deletions if r.success]
         failed_deletions = [r for r in deletions if not r.success]
         successful_commits = [r for r in file_commits if r.success]
@@ -816,6 +803,11 @@ Examples:
             self._print_warning("Encountered errors:")
             for error in errors:
                 self._print_error(f"  - {error}")
+
+        if pushed is True:
+            self._print_success("Auto-push: pushed")
+        elif pushed is False:
+            self._print_info("Auto-push: not triggered")
 
         summary_text = results.get("summary")
         if summary_text:
