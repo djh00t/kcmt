@@ -358,6 +358,9 @@ class KlingonCMTWorkflow:
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
+        if not file_changes:
+            return []
+
         cpu_hint = os.cpu_count() or 4
         workers = max(1, min(len(file_changes), 8, cpu_hint))
 
@@ -371,10 +374,10 @@ class KlingonCMTWorkflow:
         next_log_index = 0
         completed: set[int] = set()
 
-        self._prepare_failure_limit_hit = False
-        self._prepare_failure_limit_message = ""
         failure_limit = 25
         failure_count = 0
+        self._prepare_failure_limit_hit = False
+        self._prepare_failure_limit_message = ""
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
         try:
@@ -394,194 +397,183 @@ class KlingonCMTWorkflow:
 
         start_times: dict[int, Optional[float]] = {}
         pending_debug_log: dict[int, float] = {}
-        attempt_counts: dict[int, int] = {}
+        attempt_counts: dict[int, int] = {idx: 1 for idx in range(len(file_changes))}
+        changes_by_idx = {idx: change for idx, change in enumerate(file_changes)}
 
-        def submit_future(idx: int, change: FileChange) -> None:
-            start_times[idx] = None
-            pending_debug_log[idx] = 0.0
-            attempt_counts[idx] = attempt_counts.get(idx, 1)
+        def submit(idx: int) -> None:
+            change = changes_by_idx[idx]
 
-            def task() -> PreparedCommit:
+            def task(change=change, idx=idx) -> PreparedCommit:
                 start_times[idx] = time.time()
                 return self._prepare_single_change(change)
 
             future = executor.submit(task)
             future_map[future] = idx
             remaining.add(future)
+            pending_debug_log[idx] = 0.0
 
-        for idx, change in enumerate(file_changes):
-            submit_future(idx, change)
-            if idx and idx < workers:
-                time.sleep(0.5)
-
-        try:
-            while (remaining or retry_queue) and not self._prepare_failure_limit_hit:
-                if remaining:
-                    done, not_done = wait(
-                        remaining,
-                        timeout=0.05,
-                        return_when=FIRST_COMPLETED,
-                    )
-                else:
-                    done, not_done = set(), set()
-
-                for fut in done:
-                    idx = future_map.pop(fut, None)
-                    remaining.discard(fut)
-                    if idx is None:
-                        continue
-                    pending_debug_log.pop(idx, None)
-                    start_times.pop(idx, None)
-                    try:
-                        prepared_commit = fut.result()
-                    except Exception as exc:  # noqa: BLE001
-                        change = file_changes[idx]
-                        prepared_commit = PreparedCommit(
-                            change=change,
-                            message=None,
-                            error=(
-                                f"Error preparing {change.file_path}: {exc}"
-                            ),
-                        )
-                    prepared.append((idx, prepared_commit))
-                    self._stats.mark_prepared()
-                    self._print_progress(stage="prepare")
-                    log_queue[idx] = prepared_commit
-                    completed.add(idx)
-                    attempt_counts.pop(idx, None)
-
-                    if prepared_commit.error:
-                        failure_count += 1
-                        if failure_count >= failure_limit:
-                            self._prepare_failure_limit_hit = True
-                            self._prepare_failure_limit_message = (
-                                f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
-                            )
-                            break
-
-                    while next_log_index in log_queue:
-                        entry = log_queue.pop(next_log_index)
-                        self._log_prepared_result(entry)
-                        next_log_index += 1
-
-                if self._prepare_failure_limit_hit:
-                    break
-
-                if remaining:
-                    now = time.time()
-                    for fut in list(not_done):
-                        idx = future_map.get(fut)
-                        if idx is None:
-                            continue
-                        start_time = start_times.get(idx)
-                        if start_time is None:
-                            continue
-                        elapsed = now - start_time
-                        if elapsed <= per_file_timeout:
-                            if self.debug:
-                                last_logged = pending_debug_log.get(idx, 0.0)
-                                if now - last_logged >= 5.0:
-                                    change = file_changes[idx]
-                                    diff_len = len(change.diff_content)
-                                    print(
-                                        (
-                                            "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
-                                        ).format(
-                                            change.file_path,
-                                            elapsed,
-                                            diff_len,
-                                        )
-                                    )
-                                    pending_debug_log[idx] = now
-                            continue
-
-                        attempts = attempt_counts.get(idx, 1)
-                        fut.cancel()
-                        remaining.discard(fut)
-                        future_map.pop(fut, None)
-                        start_times.pop(idx, None)
-                        pending_debug_log.pop(idx, None)
-                        if attempts < timeout_attempt_limit:
-                            attempt_counts[idx] = attempts + 1
-                            retry_queue.append(idx)
-                            continue
-
-                        change = file_changes[idx]
-                        error_message = (
-                            "Timeout after "
-                            f"{per_file_timeout:.1f}s waiting for "
-                            f"{change.file_path} "
-                            f"(attempt {attempts}/{timeout_attempt_limit})"
-                        )
-                        prepared_commit = PreparedCommit(
-                            change=change,
-                            message=None,
-                            error=error_message,
-                        )
-                        prepared.append((idx, prepared_commit))
-                        self._stats.mark_prepared()
-                        self._print_progress(stage="prepare")
-                        log_queue[idx] = prepared_commit
-                        completed.add(idx)
-                        attempt_counts.pop(idx, None)
-                        failure_count += 1
-
-                        while next_log_index in log_queue:
-                            entry = log_queue.pop(next_log_index)
-                            self._log_prepared_result(entry)
-                            next_log_index += 1
-
-                        if failure_count >= failure_limit:
-                            self._prepare_failure_limit_hit = True
-                            self._prepare_failure_limit_message = (
-                                f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
-                            )
-                            break
-
-                if self._prepare_failure_limit_hit:
-                    break
-
-                if retry_queue:
-                    time.sleep(1.0)
-                    while retry_queue and not self._prepare_failure_limit_hit:
-                        idx = retry_queue.popleft()
-                        change = file_changes[idx]
-                        submit_future(idx, change)
-
-        finally:
-            for fut in list(remaining):
-                fut.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        if self._prepare_failure_limit_hit and self._prepare_failure_limit_message:
-            self._clear_progress_line()
-            print(f"\n{RED}{self._prepare_failure_limit_message}{RESET}")
-            self._refresh_progress_line()
-
-        if self._prepare_failure_limit_hit:
-            outstanding = set(range(len(file_changes))) - completed
-            for idx in sorted(outstanding):
-                change = file_changes[idx]
-                prepared_commit = PreparedCommit(
-                    change=change,
-                    message=None,
-                    error=self._prepare_failure_limit_message,
-                )
-                prepared.append((idx, prepared_commit))
-                log_queue[idx] = prepared_commit
-                while next_log_index in log_queue:
-                    entry = log_queue.pop(next_log_index)
-                    self._log_prepared_result(entry)
-                    next_log_index += 1
-
-        else:
+        def flush_log() -> None:
+            nonlocal next_log_index
             while next_log_index in log_queue:
                 entry = log_queue.pop(next_log_index)
                 self._log_prepared_result(entry)
                 next_log_index += 1
 
-        return prepared
+        def mark_prepared(idx: int, prepared_commit: PreparedCommit) -> None:
+            nonlocal failure_count
+            if idx in completed:
+                return
+            prepared.append((idx, prepared_commit))
+            self._stats.mark_prepared()
+            self._print_progress(stage="prepare")
+            log_queue[idx] = prepared_commit
+            completed.add(idx)
+            start_times.pop(idx, None)
+            pending_debug_log.pop(idx, None)
+            attempt_counts.pop(idx, None)
 
+            if prepared_commit.error:
+                failure_count += 1
+                if failure_count >= failure_limit and not self._prepare_failure_limit_hit:
+                    self._prepare_failure_limit_hit = True
+                    self._prepare_failure_limit_message = (
+                        f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
+                    )
+
+            flush_log()
+
+        def process_done(done_set: set[Any]) -> None:
+            for fut in done_set:
+                idx = future_map.pop(fut, None)
+                remaining.discard(fut)
+                if idx is None:
+                    continue
+                try:
+                    prepared_commit = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    change = changes_by_idx[idx]
+                    prepared_commit = PreparedCommit(
+                        change=change,
+                        message=None,
+                        error=f"Error preparing {change.file_path}: {exc}",
+                    )
+                mark_prepared(idx, prepared_commit)
+                if self._prepare_failure_limit_hit:
+                    break
+
+        def process_timeouts(pending_futures: set[Any], now: float) -> None:
+            nonlocal failure_count
+            for fut in list(pending_futures):
+                idx = future_map.get(fut)
+                if idx is None:
+                    continue
+                start_time = start_times.get(idx)
+                if start_time is None:
+                    continue
+                elapsed = now - start_time
+                if elapsed <= per_file_timeout:
+                    if self.debug:
+                        last_logged = pending_debug_log.get(idx, 0.0)
+                        if now - last_logged >= 5.0:
+                            change = changes_by_idx[idx]
+                            diff_len = len(change.diff_content)
+                            print(
+                                (
+                                    "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
+                                ).format(
+                                    change.file_path,
+                                    elapsed,
+                                    diff_len,
+                                )
+                            )
+                            pending_debug_log[idx] = now
+                    continue
+
+                attempts = attempt_counts.get(idx, 1)
+                fut.cancel()
+                remaining.discard(fut)
+                future_map.pop(fut, None)
+                start_times.pop(idx, None)
+                pending_debug_log.pop(idx, None)
+
+                if attempts < timeout_attempt_limit:
+                    attempt_counts[idx] = attempts + 1
+                    retry_queue.append(idx)
+                    continue
+
+                change = changes_by_idx[idx]
+                error_message = (
+                    "Timeout after "
+                    f"{per_file_timeout:.1f}s waiting for "
+                    f"{change.file_path} "
+                    f"(attempt {attempts}/{timeout_attempt_limit})"
+                )
+                prepared_commit = PreparedCommit(
+                    change=change,
+                    message=None,
+                    error=error_message,
+                )
+                mark_prepared(idx, prepared_commit)
+                if self._prepare_failure_limit_hit:
+                    break
+
+        def drain_once(timeout: float = 0.05) -> None:
+            if not remaining:
+                return
+            done, not_done = wait(
+                remaining,
+                timeout=timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if done:
+                process_done(done)
+            if self._prepare_failure_limit_hit:
+                return
+            if not_done:
+                process_timeouts(not_done, time.time())
+
+        idx_iter = iter(range(len(file_changes)))
+        try:
+            for idx in idx_iter:
+                while len(remaining) >= workers and not self._prepare_failure_limit_hit:
+                    drain_once()
+                    if self._prepare_failure_limit_hit:
+                        break
+                    while (
+                        retry_queue
+                        and len(remaining) < workers
+                        and not self._prepare_failure_limit_hit
+                    ):
+                        retry_idx = retry_queue.popleft()
+                        submit(retry_idx)
+                if self._prepare_failure_limit_hit:
+                    break
+                submit(idx)
+
+            while (remaining or retry_queue) and not self._prepare_failure_limit_hit:
+                if retry_queue and len(remaining) < workers:
+                    retry_idx = retry_queue.popleft()
+                    submit(retry_idx)
+                    continue
+                drain_once()
+        finally:
+            for fut in list(remaining):
+                fut.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        if self._prepare_failure_limit_hit:
+            outstanding = set(range(len(file_changes))) - completed
+            for idx in sorted(outstanding):
+                change = changes_by_idx[idx]
+                prepared_commit = PreparedCommit(
+                    change=change,
+                    message=None,
+                    error=self._prepare_failure_limit_message,
+                )
+                mark_prepared(idx, prepared_commit)
+
+        flush_log()
+        return prepared
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""
 
