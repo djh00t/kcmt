@@ -17,6 +17,7 @@ def test_cli_executes_workflow_success(monkeypatch, tmp_path):
             self.max_retries = max_retries
             self.config = config
             self.show_progress = show_progress
+            self.git_repo = type("Repo", (), {"repo_path": repo_path})()
 
         def execute_workflow(self):
             return {
@@ -25,6 +26,12 @@ def test_cli_executes_workflow_success(monkeypatch, tmp_path):
                 "errors": [],
                 "summary": "No commits were made.",
             }
+
+        def stats_snapshot(self):  # pragma: no cover - stubbed
+            return {}
+
+        def commit_subjects(self):  # pragma: no cover - stubbed
+            return []
 
     monkeypatch.setattr(cli_module, "KlingonCMTWorkflow", _FakeWorkflow)
 
@@ -55,6 +62,12 @@ def test_cli_handles_workflow_failure(monkeypatch):
 
         def execute_workflow(self):
             raise KlingonCMTError("boom")
+
+        def stats_snapshot(self):  # pragma: no cover - stubbed
+            return {}
+
+        def commit_subjects(self):  # pragma: no cover - stubbed
+            return []
 
     # Set a fake API key to pass validation
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
@@ -144,3 +157,88 @@ def test_cli_configure_writes_file(monkeypatch, tmp_path):
     data = json.loads(config_path.read_text())
     assert data["provider"] == "anthropic"
     assert data["model"] == "my-model"
+
+
+def test_cli_compact_mode_snapshot(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class _FakeWorkflow:
+        def __init__(
+            self, repo_path=None, max_retries=3, config=None, show_progress=True, **_
+        ):
+            self.git_repo = type("Repo", (), {"repo_path": repo_path})()
+
+        def execute_workflow(self):
+            class _Result:
+                def __init__(self):
+                    self.success = True
+                    self.commit_hash = "abc12345"
+                    self.message = "feat(core): add tests"
+                    self.error = None
+                    self.file_path = "kcmt/core.py"
+
+            return {
+                "deletions_committed": [],
+                "file_commits": [_Result()],
+                "errors": [],
+                "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
+                "pushed": True,
+            }
+
+        def stats_snapshot(self):
+            return {
+                "total_files": 1,
+                "prepared": 1,
+                "processed": 1,
+                "successes": 1,
+                "failures": 0,
+                "elapsed": 1.0,
+                "rate": 1.0,
+            }
+
+        def commit_subjects(self):
+            return ["feat(core): add tests"]
+
+    monkeypatch.setattr(cli_module, "KlingonCMTWorkflow", _FakeWorkflow)
+
+    cli = cli_module.CLI()
+    args = [
+        "--provider",
+        "openai",
+        "--model",
+        "test-model",
+        "--endpoint",
+        "http://localhost",
+        "--api-key-env",
+        "OPENAI_API_KEY",
+        "--repo-path",
+        str(tmp_path),
+        "--compact",
+    ]
+    assert cli.run(args) == 0
+
+    output = capsys.readouterr().out
+    assert "Phase" in output
+    assert "Commit status" in output
+    assert "Latest commit" in output
+
+    snapshot_path = tmp_path / ".kcmt" / "last_run.json"
+    assert snapshot_path.exists()
+    snapshot = json.loads(snapshot_path.read_text())
+    assert snapshot["counts"]["commit_success"] == 1
+
+    cli_status = cli_module.CLI()
+    status_code = cli_status.run(["status", "--repo-path", str(tmp_path)])
+    status_output = capsys.readouterr().out
+    assert status_code == 0
+    assert "kcmt status" in status_output
+    assert "Summary" in status_output
+    assert "Commit status" in status_output
+
+
+def test_cli_status_without_snapshot(monkeypatch, tmp_path, capsys):
+    cli = cli_module.CLI()
+    code = cli.run(["status", "--repo-path", str(tmp_path)])
+    output = capsys.readouterr().out
+    assert code == 1
+    assert "No kcmt run history" in output
