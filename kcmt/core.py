@@ -109,6 +109,7 @@ class KlingonCMTWorkflow:
         file_limit: Optional[int] = None,
         debug: bool = False,
         profile: bool = False,
+        verbose: bool = False,
     ) -> None:
         """Initialize the workflow."""
         self._config = config or get_active_config()
@@ -120,10 +121,14 @@ class KlingonCMTWorkflow:
         self.file_limit = file_limit
         self.debug = debug
         self.profile = profile
+        self.verbose = verbose
         self._thread_local = threading.local()
         self._thread_local.generator = self.commit_generator
         self._progress_snapshots: dict[str, str] = {}
         self._commit_subjects: list[str] = []
+        self._last_progress_stage: Optional[str] = None
+        self._prepare_failure_limit_hit = False
+        self._prepare_failure_limit_message = ""
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -133,6 +138,8 @@ class KlingonCMTWorkflow:
 
     def execute_workflow(self) -> Dict[str, Any]:
         """Execute the complete kcmt workflow."""
+        self._prepare_failure_limit_hit = False
+        self._prepare_failure_limit_message = ""
         results: Dict[str, Any] = {
             "deletions_committed": [],
             "file_commits": [],
@@ -157,6 +164,9 @@ class KlingonCMTWorkflow:
 
             file_results = self._process_per_file_commits(status_entries)
             results["file_commits"] = file_results
+
+            if self._prepare_failure_limit_hit and self._prepare_failure_limit_message:
+                results["errors"].append(self._prepare_failure_limit_message)
 
             results["summary"] = self._generate_summary(results)
         except (
@@ -242,7 +252,7 @@ class KlingonCMTWorkflow:
 
         # First, get all changed files from git status (both staged/unstaged)
         status_start = time.perf_counter()
-        all_changed_files = self.git_repo.list_changed_files()
+        all_changed_files = self.git_repo.list_changed_files(status_entries)
         self._profile(
             "git-status",
             time.perf_counter() - status_start,
@@ -274,29 +284,29 @@ class KlingonCMTWorkflow:
         # staged only at the last moment inside _commit_single_file.
         file_changes: List[FileChange] = []
         collect_start = time.perf_counter()
+
         for status, file_path in non_deletion_files:
             try:
                 single_diff = self.git_repo.get_worktree_diff_for_path(file_path)
                 if not single_diff.strip():
                     continue
                 change_type = self._change_type_from_status(status)
-                file_changes.append(
-                    FileChange(
-                        file_path=file_path,
-                        change_type=change_type,
-                        diff_content=single_diff,
-                    )
+                change = FileChange(
+                    file_path=file_path,
+                    change_type=change_type,
+                    diff_content=single_diff,
                 )
+                file_changes.append(change)
             except GitError as e:
-                results.append(
-                    CommitResult(
-                        success=False,
-                        error=f"Failed to capture diff for {file_path}: {e}",
-                        file_path=file_path,
-                    )
+                result = CommitResult(
+                    success=False,
+                    error=f"Failed to capture diff for {file_path}: {e}",
+                    file_path=file_path,
                 )
+                results.append(result)
                 continue
 
+        unique_paths = {change.file_path for change in file_changes}
         self._profile(
             "collect-diffs",
             time.perf_counter() - collect_start,
@@ -304,7 +314,7 @@ class KlingonCMTWorkflow:
                 "candidates={} collected={} unique_paths={}".format(
                     len(non_deletion_files),
                     len(file_changes),
-                    len(diff_map),
+                    len(unique_paths),
                 )
             ),
         )
@@ -313,6 +323,7 @@ class KlingonCMTWorkflow:
             return results
 
         self._stats.set_total(len(file_changes))
+
         prepared_commits = self._prepare_commit_messages(file_changes)
 
         ordered_prepared = sorted(prepared_commits, key=lambda item: item[0])
@@ -348,15 +359,22 @@ class KlingonCMTWorkflow:
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
         cpu_hint = os.cpu_count() or 4
-        # Limit concurrent threads to be more API-friendly while respecting
-        # the configured staggered start requirement.
         workers = max(1, min(len(file_changes), 8, cpu_hint))
-        prepared: List[Tuple[int, PreparedCommit]] = []
 
         print(
             f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
             f"{len(file_changes)} file(s){RESET}"
         )
+
+        prepared: List[Tuple[int, PreparedCommit]] = []
+        log_queue: dict[int, PreparedCommit] = {}
+        next_log_index = 0
+        completed: set[int] = set()
+
+        self._prepare_failure_limit_hit = False
+        self._prepare_failure_limit_message = ""
+        failure_limit = 25
+        failure_count = 0
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
         try:
@@ -371,131 +389,196 @@ class KlingonCMTWorkflow:
 
         executor = ThreadPoolExecutor(max_workers=workers)
         future_map: dict[Any, int] = {}
-        start_times: dict[Any, float] = {}
+        remaining: set[Any] = set()
+        retry_queue: deque[int] = deque()
+
+        start_times: dict[int, Optional[float]] = {}
+        pending_debug_log: dict[int, float] = {}
+        attempt_counts: dict[int, int] = {}
+
+        def submit_future(idx: int, change: FileChange) -> None:
+            start_times[idx] = None
+            pending_debug_log[idx] = 0.0
+            attempt_counts[idx] = attempt_counts.get(idx, 1)
+
+            def task() -> PreparedCommit:
+                start_times[idx] = time.time()
+                return self._prepare_single_change(change)
+
+            future = executor.submit(task)
+            future_map[future] = idx
+            remaining.add(future)
 
         for idx, change in enumerate(file_changes):
+            submit_future(idx, change)
             if idx and idx < workers:
                 time.sleep(0.5)
-            future = executor.submit(self._prepare_single_change, change)
-            future_map[future] = idx
-            start_times[future] = time.time()
-
-        attempt_counts = {idx: 1 for idx in range(len(file_changes))}
-
-        # When running with --debug we periodically emit heartbeat logs so
-        # the caller can see which file is still being processed (useful
-        # when the LLM call stalls and eventually triggers the timeout).
-        pending_debug_log: dict[Any, float] = {}
-        debug_log_interval = 5.0
-        remaining = set(future_map.keys())
-        retry_queue: deque[int] = deque()
-        retry_backoff = 1.0
 
         try:
-            # Poll until all futures handled (either completed or timed out)
-            while remaining:
-                done, not_done = wait(
-                    remaining, timeout=0.05, return_when=FIRST_COMPLETED
-                )
+            while (remaining or retry_queue) and not self._prepare_failure_limit_hit:
+                if remaining:
+                    done, not_done = wait(
+                        remaining,
+                        timeout=0.05,
+                        return_when=FIRST_COMPLETED,
+                    )
+                else:
+                    done, not_done = set(), set()
 
-                # Process any newly completed futures
                 for fut in done:
                     idx = future_map.pop(fut, None)
+                    remaining.discard(fut)
                     if idx is None:
-                        start_times.pop(fut, None)
-                        pending_debug_log.pop(fut, None)
-                        remaining.discard(fut)
                         continue
-                    start_times.pop(fut, None)
+                    pending_debug_log.pop(idx, None)
+                    start_times.pop(idx, None)
                     try:
                         prepared_commit = fut.result()
-                    # Broad catch: ensure a single file failure does not
-                    # abort the entire workflow.
                     except Exception as exc:  # noqa: BLE001
+                        change = file_changes[idx]
                         prepared_commit = PreparedCommit(
-                            change=file_changes[idx],
+                            change=change,
                             message=None,
                             error=(
-                                f"Error preparing {file_changes[idx].file_path}: {exc}"
+                                f"Error preparing {change.file_path}: {exc}"
                             ),
                         )
                     prepared.append((idx, prepared_commit))
                     self._stats.mark_prepared()
                     self._print_progress(stage="prepare")
-                    remaining.discard(fut)
-                    pending_debug_log.pop(fut, None)
+                    log_queue[idx] = prepared_commit
+                    completed.add(idx)
                     attempt_counts.pop(idx, None)
 
-                # Check for per-file timeout on still running futures
-                now = time.time()
-                for fut in list(not_done):
-                    idx = future_map.get(fut)
-                    if idx is None:
-                        continue
-                    start_time = start_times.get(fut)
-                    if start_time is None:
-                        continue
-                    if now - start_time > per_file_timeout:
+                    if prepared_commit.error:
+                        failure_count += 1
+                        if failure_count >= failure_limit:
+                            self._prepare_failure_limit_hit = True
+                            self._prepare_failure_limit_message = (
+                                f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
+                            )
+                            break
+
+                    while next_log_index in log_queue:
+                        entry = log_queue.pop(next_log_index)
+                        self._log_prepared_result(entry)
+                        next_log_index += 1
+
+                if self._prepare_failure_limit_hit:
+                    break
+
+                if remaining:
+                    now = time.time()
+                    for fut in list(not_done):
+                        idx = future_map.get(fut)
+                        if idx is None:
+                            continue
+                        start_time = start_times.get(idx)
+                        if start_time is None:
+                            continue
+                        elapsed = now - start_time
+                        if elapsed <= per_file_timeout:
+                            if self.debug:
+                                last_logged = pending_debug_log.get(idx, 0.0)
+                                if now - last_logged >= 5.0:
+                                    change = file_changes[idx]
+                                    diff_len = len(change.diff_content)
+                                    print(
+                                        (
+                                            "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
+                                        ).format(
+                                            change.file_path,
+                                            elapsed,
+                                            diff_len,
+                                        )
+                                    )
+                                    pending_debug_log[idx] = now
+                            continue
+
                         attempts = attempt_counts.get(idx, 1)
                         fut.cancel()
                         remaining.discard(fut)
                         future_map.pop(fut, None)
-                        start_times.pop(fut, None)
-                        pending_debug_log.pop(fut, None)
+                        start_times.pop(idx, None)
+                        pending_debug_log.pop(idx, None)
                         if attempts < timeout_attempt_limit:
                             attempt_counts[idx] = attempts + 1
                             retry_queue.append(idx)
                             continue
 
+                        change = file_changes[idx]
                         error_message = (
                             "Timeout after "
                             f"{per_file_timeout:.1f}s waiting for "
-                            f"{file_changes[idx].file_path} "
+                            f"{change.file_path} "
                             f"(attempt {attempts}/{timeout_attempt_limit})"
                         )
                         prepared_commit = PreparedCommit(
-                            change=file_changes[idx],
+                            change=change,
                             message=None,
                             error=error_message,
                         )
                         prepared.append((idx, prepared_commit))
                         self._stats.mark_prepared()
                         self._print_progress(stage="prepare")
+                        log_queue[idx] = prepared_commit
+                        completed.add(idx)
                         attempt_counts.pop(idx, None)
+                        failure_count += 1
 
-                    if self.debug:
-                        last_logged = pending_debug_log.get(fut, 0.0)
-                        if now - last_logged >= debug_log_interval:
-                            idx = future_map[fut]
-                            change = file_changes[idx]
-                            diff_len = len(change.diff_content)
-                            print(
-                                (
-                                    "DEBUG: prepare.pending path={} elapsed={:.1f}s diff_len={}"
-                                ).format(
-                                    change.file_path,
-                                    now - start_times[fut],
-                                    diff_len,
-                                )
+                        while next_log_index in log_queue:
+                            entry = log_queue.pop(next_log_index)
+                            self._log_prepared_result(entry)
+                            next_log_index += 1
+
+                        if failure_count >= failure_limit:
+                            self._prepare_failure_limit_hit = True
+                            self._prepare_failure_limit_message = (
+                                f"Stopped prepare phase after {failure_count} failures (limit {failure_limit})."
                             )
-                            pending_debug_log[fut] = now
+                            break
 
-                while retry_queue:
-                    idx = retry_queue.popleft()
-                    time.sleep(retry_backoff)
-                    new_future = executor.submit(
-                        self._prepare_single_change, file_changes[idx]
-                    )
-                    future_map[new_future] = idx
-                    start_times[new_future] = time.time()
-                    remaining.add(new_future)
+                if self._prepare_failure_limit_hit:
+                    break
+
+                if retry_queue:
+                    time.sleep(1.0)
+                    while retry_queue and not self._prepare_failure_limit_hit:
+                        idx = retry_queue.popleft()
+                        change = file_changes[idx]
+                        submit_future(idx, change)
+
         finally:
-            # Ensure any in-flight futures are best-effort cancelled so the
-            # executor shutdown doesn't block on slow LLM calls after we
-            # already surfaced a timeout result to the user.
             for fut in list(remaining):
                 fut.cancel()
             executor.shutdown(wait=False, cancel_futures=True)
+
+        if self._prepare_failure_limit_hit and self._prepare_failure_limit_message:
+            self._clear_progress_line()
+            print(f"\n{RED}{self._prepare_failure_limit_message}{RESET}")
+            self._refresh_progress_line()
+
+        if self._prepare_failure_limit_hit:
+            outstanding = set(range(len(file_changes))) - completed
+            for idx in sorted(outstanding):
+                change = file_changes[idx]
+                prepared_commit = PreparedCommit(
+                    change=change,
+                    message=None,
+                    error=self._prepare_failure_limit_message,
+                )
+                prepared.append((idx, prepared_commit))
+                log_queue[idx] = prepared_commit
+                while next_log_index in log_queue:
+                    entry = log_queue.pop(next_log_index)
+                    self._log_prepared_result(entry)
+                    next_log_index += 1
+
+        else:
+            while next_log_index in log_queue:
+                entry = log_queue.pop(next_log_index)
+                self._log_prepared_result(entry)
+                next_log_index += 1
 
         return prepared
 
@@ -532,7 +615,6 @@ class KlingonCMTWorkflow:
                 style="conventional",
             )
             validated = generator.validate_and_fix_commit_message(commit_message)
-            self._print_commit_generated(change.file_path, validated)
             if self.debug:
                 print(
                     "DEBUG: prepare.success path={} header='{}'".format(
@@ -577,6 +659,20 @@ class KlingonCMTWorkflow:
                 ),
             )
 
+    def _clear_progress_line(self) -> None:
+        if not getattr(self, "_show_progress", False):
+            return
+        print("\r\033[K", end="", flush=True)
+
+    def _refresh_progress_line(self) -> None:
+        if not getattr(self, "_show_progress", False):
+            return
+        if not self._last_progress_stage:
+            return
+        snapshot = self._progress_snapshots.get(self._last_progress_stage)
+        if snapshot:
+            print(f"\r{snapshot}", end="", flush=True)
+
     def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
         total = snapshot["total_files"]
@@ -610,6 +706,7 @@ class KlingonCMTWorkflow:
 
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
+        self._last_progress_stage = stage
         print(f"\r{status_line}", end="", flush=True)
 
     def _finalize_progress(self) -> None:
@@ -645,11 +742,45 @@ class KlingonCMTWorkflow:
         GREEN = "\033[92m"
         RESET = "\033[0m"
 
+        self._clear_progress_line()
+
+        lines = commit_message.splitlines()
+        subject = lines[0] if lines else commit_message
+        body = lines[1:] if len(lines) > 1 else []
+        subject_display = subject.strip() if subject else commit_message.strip()
+        if not subject_display:
+            subject_display = "(empty)"
+
         print(f"\n{CYAN}Generated for {file_path}:{RESET}")
-        # Show the full commit message without truncation
-        print(f"{GREEN}{commit_message}{RESET}")
-        # Add separator line for readability
-        print("-" * 50)
+        print(f"{GREEN}{subject_display}{RESET}")
+
+        if self.verbose or self.debug:
+            if body:
+                print("\n".join(body))
+            print("-" * 50)
+
+        self._refresh_progress_line()
+
+    def _print_prepare_error(self, file_path: str, error: str) -> None:
+        RED = "\033[91m"
+        CYAN = "\033[96m"
+        RESET = "\033[0m"
+
+        self._clear_progress_line()
+        print(f"\n{CYAN}Failed to prepare {file_path}:{RESET}")
+        if self.verbose or self.debug:
+            display = error
+        else:
+            lines = error.splitlines()
+            display = lines[0] if lines else error
+        print(f"{RED}{display}{RESET}")
+        self._refresh_progress_line()
+
+    def _log_prepared_result(self, prepared: PreparedCommit) -> None:
+        if prepared.message:
+            self._print_commit_generated(prepared.change.file_path, prepared.message)
+        elif prepared.error:
+            self._print_prepare_error(prepared.change.file_path, prepared.error)
 
     def _parse_git_diff(self, diff: str) -> List[FileChange]:
         """Parse git diff output to extract file changes."""
