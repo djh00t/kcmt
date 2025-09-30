@@ -48,6 +48,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
+      - name: Configure Git identity
+        run: |
+          git config --global user.name "kcmt-ci"
+          git config --global user.email "ci@example.com"
+
       - name: Show versions
         run: |
           python --version
