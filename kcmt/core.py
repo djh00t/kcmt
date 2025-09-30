@@ -387,6 +387,8 @@ class KlingonCMTWorkflow:
         pending_debug_log: dict[Any, float] = {}
         debug_log_interval = 5.0
         remaining = set(future_map.keys())
+        retry_queue: list[int] = []
+        retry_backoff = 1.0
 
         try:
             # Poll until all futures handled (either completed or timed out)
@@ -441,12 +443,7 @@ class KlingonCMTWorkflow:
                         pending_debug_log.pop(fut, None)
                         if attempts < timeout_attempt_limit:
                             attempt_counts[idx] = attempts + 1
-                            new_future = executor.submit(
-                                self._prepare_single_change, file_changes[idx]
-                            )
-                            future_map[new_future] = idx
-                            start_times[new_future] = time.time()
-                            remaining.add(new_future)
+                            retry_queue.append(idx)
                             continue
 
                         error_message = (
@@ -481,6 +478,16 @@ class KlingonCMTWorkflow:
                                 )
                             )
                             pending_debug_log[fut] = now
+
+                while retry_queue:
+                    idx = retry_queue.pop(0)
+                    time.sleep(retry_backoff)
+                    new_future = executor.submit(
+                        self._prepare_single_change, file_changes[idx]
+                    )
+                    future_map[new_future] = idx
+                    start_times[new_future] = time.time()
+                    remaining.add(new_future)
         finally:
             # Ensure any in-flight futures are best-effort cancelled so the
             # executor shutdown doesn't block on slow LLM calls after we
