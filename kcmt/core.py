@@ -121,6 +121,8 @@ class KlingonCMTWorkflow:
         self.profile = profile
         self._thread_local = threading.local()
         self._thread_local.generator = self.commit_generator
+        self._progress_snapshots: dict[str, str] = {}
+        self._commit_subjects: list[str] = []
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -345,8 +347,9 @@ class KlingonCMTWorkflow:
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
         cpu_hint = os.cpu_count() or 4
-        # Limit concurrent threads to be more API-friendly
-        workers = max(1, min(len(file_changes), 4, cpu_hint))
+        # Limit concurrent threads to be more API-friendly while respecting
+        # the configured staggered start requirement.
+        workers = max(1, min(len(file_changes), 8, cpu_hint))
         prepared: List[Tuple[int, PreparedCommit]] = []
 
         print(
@@ -357,27 +360,35 @@ class KlingonCMTWorkflow:
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
         try:
             per_file_timeout = (
-                float(per_file_timeout_env) if per_file_timeout_env else 45.0
+                float(per_file_timeout_env) if per_file_timeout_env else 5.0
             )
         except ValueError:
-            per_file_timeout = 45.0
+            per_file_timeout = 5.0
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_map = {
-                executor.submit(self._prepare_single_change, change): idx
-                for idx, change in enumerate(file_changes)
-            }
+        timeout_retry_limit = 3
+        timeout_attempt_limit = timeout_retry_limit + 1
 
-            # Track start times for each future so we can enforce a wall-clock
-            # timeout per submitted job without a brittle global timeout.
-            start_times = {f: time.time() for f in future_map}
-            # When running with --debug we periodically emit heartbeat logs so
-            # the caller can see which file is still being processed (useful
-            # when the LLM call stalls and eventually triggers the timeout).
-            pending_debug_log: dict[Any, float] = {}
-            debug_log_interval = 5.0
-            remaining = set(future_map.keys())
+        executor = ThreadPoolExecutor(max_workers=workers)
+        future_map: dict[Any, int] = {}
+        start_times: dict[Any, float] = {}
 
+        for idx, change in enumerate(file_changes):
+            if idx and idx < workers:
+                time.sleep(0.5)
+            future = executor.submit(self._prepare_single_change, change)
+            future_map[future] = idx
+            start_times[future] = time.time()
+
+        attempt_counts = {idx: 1 for idx in range(len(file_changes))}
+
+        # When running with --debug we periodically emit heartbeat logs so
+        # the caller can see which file is still being processed (useful
+        # when the LLM call stalls and eventually triggers the timeout).
+        pending_debug_log: dict[Any, float] = {}
+        debug_log_interval = 5.0
+        remaining = set(future_map.keys())
+
+        try:
             # Poll until all futures handled (either completed or timed out)
             while remaining:
                 done, not_done = wait(
@@ -386,7 +397,13 @@ class KlingonCMTWorkflow:
 
                 # Process any newly completed futures
                 for fut in done:
-                    idx = future_map[fut]
+                    idx = future_map.pop(fut, None)
+                    if idx is None:
+                        start_times.pop(fut, None)
+                        pending_debug_log.pop(fut, None)
+                        remaining.discard(fut)
+                        continue
+                    start_times.pop(fut, None)
                     try:
                         prepared_commit = fut.result()
                     # Broad catch: ensure a single file failure does not
@@ -404,30 +421,49 @@ class KlingonCMTWorkflow:
                     self._print_progress(stage="prepare")
                     remaining.discard(fut)
                     pending_debug_log.pop(fut, None)
+                    attempt_counts.pop(idx, None)
 
                 # Check for per-file timeout on still running futures
                 now = time.time()
                 for fut in list(not_done):
-                    if now - start_times[fut] > per_file_timeout:
-                        idx = future_map[fut]
-                        # Attempt to cancel; if it's already running this will
-                        # return False, but we still record a timeout result.
+                    idx = future_map.get(fut)
+                    if idx is None:
+                        continue
+                    start_time = start_times.get(fut)
+                    if start_time is None:
+                        continue
+                    if now - start_time > per_file_timeout:
+                        attempts = attempt_counts.get(idx, 1)
                         fut.cancel()
+                        remaining.discard(fut)
+                        future_map.pop(fut, None)
+                        start_times.pop(fut, None)
+                        pending_debug_log.pop(fut, None)
+                        if attempts < timeout_attempt_limit:
+                            attempt_counts[idx] = attempts + 1
+                            new_future = executor.submit(
+                                self._prepare_single_change, file_changes[idx]
+                            )
+                            future_map[new_future] = idx
+                            start_times[new_future] = time.time()
+                            remaining.add(new_future)
+                            continue
+
+                        error_message = (
+                            "Timeout after "
+                            f"{per_file_timeout:.1f}s waiting for "
+                            f"{file_changes[idx].file_path} "
+                            f"(attempt {attempts}/{timeout_attempt_limit})"
+                        )
                         prepared_commit = PreparedCommit(
                             change=file_changes[idx],
                             message=None,
-                            error=(
-                                "Timeout after "
-                                f"{per_file_timeout:.1f}s waiting for "
-                                f"{file_changes[idx].file_path}"
-                            ),
+                            error=error_message,
                         )
                         prepared.append((idx, prepared_commit))
                         self._stats.mark_prepared()
                         self._print_progress(stage="prepare")
-                        remaining.discard(fut)
-                        pending_debug_log.pop(fut, None)
-                        continue
+                        attempt_counts.pop(idx, None)
 
                     if self.debug:
                         last_logged = pending_debug_log.get(fut, 0.0)
@@ -445,6 +481,13 @@ class KlingonCMTWorkflow:
                                 )
                             )
                             pending_debug_log[fut] = now
+        finally:
+            # Ensure any in-flight futures are best-effort cancelled so the
+            # executor shutdown doesn't block on slow LLM calls after we
+            # already surfaced a timeout result to the user.
+            for fut in list(remaining):
+                fut.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return prepared
 
@@ -526,10 +569,7 @@ class KlingonCMTWorkflow:
                 ),
             )
 
-    def _print_progress(self, stage: str) -> None:
-        if not getattr(self, "_show_progress", False):
-            return
-
+    def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
         total = snapshot["total_files"]
         prepared = snapshot["prepared"]
@@ -546,8 +586,7 @@ class KlingonCMTWorkflow:
         icon, color = stage_styles.get(stage, ("🔄", CYAN))
         stage_label = stage.upper()
 
-        status_line = (
-            "\r"
+        return (
             f"{BOLD}{icon} kcmt{RESET} "
             f"{color}{stage_label:<7}{RESET} │ "
             f"{GREEN}{processed:>3}{RESET}/{total:>3} files │ "
@@ -557,12 +596,38 @@ class KlingonCMTWorkflow:
             f"{DIM}{rate:5.2f} commits/s{RESET}   "
         )
 
-        print(status_line, end="", flush=True)
+    def _print_progress(self, stage: str) -> None:
+        if not getattr(self, "_show_progress", False):
+            return
+
+        status_line = self._build_progress_line(stage)
+        self._progress_snapshots[stage] = status_line
+        print(f"\r{status_line}", end="", flush=True)
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
-        self._print_progress(stage="done")
+
+        self._progress_snapshots["done"] = self._build_progress_line("done")
+        print("\r\033[K", end="")
+
+        ordered_stages = ["prepare", "commit", "done"]
+        block_lines = [
+            self._progress_snapshots[stage]
+            for stage in ordered_stages
+            if stage in self._progress_snapshots
+        ]
+
+        if block_lines:
+            print("\n".join(block_lines))
+        else:
+            print()
+
+        if self._commit_subjects:
+            print()
+            for subject in self._commit_subjects:
+                print(f"{GREEN}{subject}{RESET}")
+
         print()
 
     def _print_commit_generated(self, file_path: str, commit_message: str) -> None:
@@ -728,12 +793,16 @@ class KlingonCMTWorkflow:
                     self.git_repo.commit(message)
                 recent_commits = self.git_repo.get_recent_commits(1)
                 commit_hash = recent_commits[0].split()[0] if recent_commits else None
-                return CommitResult(
+                result = CommitResult(
                     success=True,
                     commit_hash=commit_hash,
                     message=message,
                     file_path=file_path,
                 )
+                if message:
+                    subject = message.splitlines()[0]
+                    self._commit_subjects.append(subject)
+                return result
             except GitError as e:
                 last_error = str(e)
                 if attempt < max_retries:
