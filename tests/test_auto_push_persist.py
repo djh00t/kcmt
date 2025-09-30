@@ -42,7 +42,6 @@ def test_auto_push_persist_env(monkeypatch, tmp_path):
             "--repo-path",
             str(tmp_path),
             "--no-progress",
-            "--allow-fallback",
         ]
     )
     # Expect success (0) now that repo exists
@@ -62,13 +61,8 @@ def test_auto_push_persist_env(monkeypatch, tmp_path):
             "--repo-path",
             str(tmp_path),
             "--no-progress",
-            "--allow-fallback",
         ]
     )
     assert code2 == 0
     cfg2 = load_persisted_config(tmp_path)
-    assert cfg2.auto_push is True
-    assert cfg2.auto_push is True
-    assert cfg2.auto_push is True
-    assert cfg2.auto_push is True
     assert cfg2.auto_push is True
