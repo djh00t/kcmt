@@ -7,7 +7,7 @@ import httpx
 
 from ..config import Config
 from ..exceptions import LLMError
-from .base import BaseDriver
+from .base import BaseDriver, resolve_default_request_timeout
 
 
 class AnthropicDriver(BaseDriver):
@@ -24,10 +24,13 @@ class AnthropicDriver(BaseDriver):
     def __init__(self, config: Config, debug: bool = False) -> None:
         super().__init__(config, debug)
         timeout_env = os.environ.get("KCMT_LLM_REQUEST_TIMEOUT")
+        default_timeout = resolve_default_request_timeout(config.provider)
         try:
-            self._request_timeout = float(timeout_env) if timeout_env else 5.0
+            self._request_timeout = (
+                float(timeout_env) if timeout_env else default_timeout
+            )
         except ValueError:
-            self._request_timeout = 5.0
+            self._request_timeout = default_timeout
         self._api_key = config.resolve_api_key()
 
     def generate(self, diff: str, context: str, style: str) -> str:  # noqa: D401,E501
