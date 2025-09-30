@@ -132,9 +132,10 @@ class LLMClient:
         diff: str,
         context: str = "",
         style: str = "conventional",
+        request_timeout: float | None = None,
     ) -> str:
         cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
-        raw_message = self._call_provider(prompt)
+        raw_message = self._call_provider(prompt, request_timeout=request_timeout)
         try:
             return self._postprocess_message(raw_message, cleaned_diff, context)
         except LLMError as e:
@@ -152,7 +153,9 @@ class LLMClient:
                     self._minimal_prompt = True
                 elif self.debug:
                     print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
-                retry_raw = self._call_provider(prompt)
+                retry_raw = self._call_provider(
+                    prompt, request_timeout=request_timeout
+                )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
@@ -161,9 +164,12 @@ class LLMClient:
         diff: str,
         context: str = "",
         style: str = "conventional",
+        request_timeout: float | None = None,
     ) -> str:
         cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
-        raw_message = await self._call_provider_async(prompt)
+        raw_message = await self._call_provider_async(
+            prompt, request_timeout=request_timeout
+        )
         try:
             return self._postprocess_message(raw_message, cleaned_diff, context)
         except LLMError as e:
@@ -181,7 +187,9 @@ class LLMClient:
                     self._minimal_prompt = True
                 elif self.debug:
                     print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
-                retry_raw = await self._call_provider_async(prompt)
+                retry_raw = await self._call_provider_async(
+                    prompt, request_timeout=request_timeout
+                )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
@@ -288,19 +296,37 @@ class LLMClient:
             print("  --- FINAL MESSAGE END ---")
         return processed
 
-    def _call_provider(self, prompt: str) -> str:
+    def _call_provider(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         if self._mode == "openai":
-            return self._call_openai(prompt)
-        return self._call_anthropic(prompt)
+            if request_timeout is None:
+                return self._call_openai(prompt)
+            return self._call_openai(prompt, request_timeout=request_timeout)
+        if request_timeout is None:
+            return self._call_anthropic(prompt)
+        return self._call_anthropic(prompt, request_timeout=request_timeout)
 
-    async def _call_provider_async(self, prompt: str) -> str:
+    async def _call_provider_async(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         if self._mode == "openai":
-            return await self._call_openai_async(prompt)
-        return await self._call_anthropic_async(prompt)
+            if request_timeout is None:
+                return await self._call_openai_async(prompt)
+            return await self._call_openai_async(
+                prompt, request_timeout=request_timeout
+            )
+        if request_timeout is None:
+            return await self._call_anthropic_async(prompt)
+        return await self._call_anthropic_async(
+            prompt, request_timeout=request_timeout
+        )
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
-    def _call_openai(self, prompt: str) -> str:
+    def _call_openai(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         """Delegate OpenAI-like provider call to the driver.
 
         Provides backward-compatible debug logging and adaptive minimal
@@ -315,11 +341,14 @@ class LLMClient:
         messages = self._build_messages(prompt)
         minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
+        invoke_kwargs = {
+            "messages": messages,
+            "minimal_ok": minimal_allowed,
+        }
+        if request_timeout is not None:
+            invoke_kwargs["request_timeout"] = request_timeout
         try:
-            content = driver.invoke_messages(
-                messages,
-                minimal_ok=minimal_allowed,
-            )
+            content = driver.invoke_messages(**invoke_kwargs)
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -332,10 +361,13 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 messages = self._build_messages(prompt)
-                content = driver.invoke_messages(
-                    messages,
-                    minimal_ok=False,
-                )
+                retry_kwargs = {
+                    "messages": messages,
+                    "minimal_ok": False,
+                }
+                if request_timeout is not None:
+                    retry_kwargs["request_timeout"] = request_timeout
+                content = driver.invoke_messages(**retry_kwargs)
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
                     print(
@@ -343,10 +375,13 @@ class LLMClient:
                         "rebuilding system message for gpt-5"
                     )
                 simple_messages = self._build_messages_simple_gpt5(prompt)
-                content = driver.invoke_messages(
-                    simple_messages,
-                    minimal_ok=False,
-                )
+                simple_kwargs = {
+                    "messages": simple_messages,
+                    "minimal_ok": False,
+                }
+                if request_timeout is not None:
+                    simple_kwargs["request_timeout"] = request_timeout
+                content = driver.invoke_messages(**simple_kwargs)
             else:
                 raise
         if self.debug:
@@ -358,7 +393,9 @@ class LLMClient:
             raise LLMError("Empty OpenAI response after driver invocation")
         return content
 
-    async def _call_openai_async(self, prompt: str) -> str:
+    async def _call_openai_async(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         if os.environ.get("KCMT_TEST_DISABLE_OPENAI"):
             return "feat(test): stubbed commit message"
         if self._mode != "openai":  # defensive
@@ -366,11 +403,14 @@ class LLMClient:
         messages = self._build_messages(prompt)
         minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
+        invoke_kwargs = {
+            "messages": messages,
+            "minimal_ok": minimal_allowed,
+        }
+        if request_timeout is not None:
+            invoke_kwargs["request_timeout"] = request_timeout
         try:
-            content = await driver.invoke_messages_async(
-                messages,
-                minimal_ok=minimal_allowed,
-            )
+            content = await driver.invoke_messages_async(**invoke_kwargs)
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -382,10 +422,13 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 messages = self._build_messages(prompt)
-                content = await driver.invoke_messages_async(
-                    messages,
-                    minimal_ok=False,
-                )
+                retry_kwargs = {
+                    "messages": messages,
+                    "minimal_ok": False,
+                }
+                if request_timeout is not None:
+                    retry_kwargs["request_timeout"] = request_timeout
+                content = await driver.invoke_messages_async(**retry_kwargs)
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
                     print(
@@ -393,10 +436,13 @@ class LLMClient:
                         "rebuilding system message for gpt-5"
                     )
                 simple_messages = self._build_messages_simple_gpt5(prompt)
-                content = await driver.invoke_messages_async(
-                    simple_messages,
-                    minimal_ok=False,
-                )
+                simple_kwargs = {
+                    "messages": simple_messages,
+                    "minimal_ok": False,
+                }
+                if request_timeout is not None:
+                    simple_kwargs["request_timeout"] = request_timeout
+                content = await driver.invoke_messages_async(**simple_kwargs)
             else:
                 raise
         if self.debug:
@@ -408,17 +454,25 @@ class LLMClient:
             raise LLMError("Empty OpenAI response after driver invocation")
         return content
 
-    def _call_anthropic(self, prompt: str) -> str:
+    def _call_anthropic(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
-        return driver.invoke(prompt)
+        if request_timeout is None:
+            return driver.invoke(prompt)
+        return driver.invoke(prompt, request_timeout=request_timeout)
 
-    async def _call_anthropic_async(self, prompt: str) -> str:
+    async def _call_anthropic_async(
+        self, prompt: str, request_timeout: float | None = None
+    ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic_async invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
-        return await driver.invoke_async(prompt)
+        if request_timeout is None:
+            return await driver.invoke_async(prompt)
+        return await driver.invoke_async(prompt, request_timeout=request_timeout)
 
     # ------------------------------------------------------------------
     # Prompt helpers
