@@ -1,5 +1,6 @@
 """Commit message generation logic for kcmt."""
 
+import inspect
 import re
 from typing import Optional
 
@@ -7,6 +8,14 @@ from .config import Config, get_active_config
 from .exceptions import LLMError, ValidationError
 from .git import GitRepo
 from .llm import LLMClient
+
+
+def _supports_request_timeout(callable_obj) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return "request_timeout" in signature.parameters
 
 
 class CommitGenerator:
@@ -90,7 +99,11 @@ class CommitGenerator:
         return self.llm_client.generate_commit_message(diff, context, style)
 
     def suggest_commit_message(
-        self, diff: str, context: str = "", style: str = "conventional"
+        self,
+        diff: str,
+        context: str = "",
+        style: str = "conventional",
+        request_timeout: float | None = None,
     ) -> str:
         """Generate a commit message from a provided diff.
 
@@ -119,7 +132,22 @@ class CommitGenerator:
                     )
                 )
             try:
-                msg = self.llm_client.generate_commit_message(diff, context, style)
+                generate_fn = self.llm_client.generate_commit_message
+                if request_timeout is not None and _supports_request_timeout(
+                    generate_fn
+                ):
+                    msg = generate_fn(
+                        diff,
+                        context,
+                        style,
+                        request_timeout=request_timeout,
+                    )
+                else:
+                    msg = generate_fn(diff, context, style)
+                if request_timeout is not None and "request_timeout" not in getattr(
+                    getattr(generate_fn, "__code__", {}), "co_varnames", ()
+                ):
+                    pass
                 if not msg or not msg.strip():
                     raise LLMError("LLM returned empty response")
                 # Validate format; if invalid, try again (unless final)
@@ -162,7 +190,11 @@ class CommitGenerator:
         ) from last_error
 
     async def suggest_commit_message_async(
-        self, diff: str, context: str = "", style: str = "conventional"
+        self,
+        diff: str,
+        context: str = "",
+        style: str = "conventional",
+        request_timeout: float | None = None,
     ) -> str:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
@@ -178,9 +210,18 @@ class CommitGenerator:
                     )
                 )
             try:
-                msg = await self.llm_client.generate_commit_message_async(
-                    diff, context, style
-                )
+                generate_fn = self.llm_client.generate_commit_message_async
+                if request_timeout is not None and _supports_request_timeout(
+                    generate_fn
+                ):
+                    msg = await generate_fn(
+                        diff,
+                        context,
+                        style,
+                        request_timeout=request_timeout,
+                    )
+                else:
+                    msg = await generate_fn(diff, context, style)
                 if not msg or not msg.strip():
                     raise LLMError("LLM returned empty response")
                 if not self.validate_conventional_commit(msg):
