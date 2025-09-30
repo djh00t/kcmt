@@ -161,6 +161,66 @@ class CommitGenerator:
             ).format(max_attempts)
         ) from last_error
 
+    async def suggest_commit_message_async(
+        self, diff: str, context: str = "", style: str = "conventional"
+    ) -> str:
+        if not diff or not diff.strip():
+            raise ValidationError("Diff content cannot be empty.")
+
+        last_error: Exception | None = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            if self.debug:
+                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
+                print(
+                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
+                        attempt, len(diff), truncated_ctx
+                    )
+                )
+            try:
+                msg = await self.llm_client.generate_commit_message_async(
+                    diff, context, style
+                )
+                if not msg or not msg.strip():
+                    raise LLMError("LLM returned empty response")
+                if not self.validate_conventional_commit(msg):
+                    if self.debug:
+                        invalid_header = msg.splitlines()[0][:120]
+                        print(
+                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
+                                attempt, invalid_header
+                            )
+                        )
+                    if attempt < max_attempts:
+                        continue
+                    raise LLMError(
+                        (
+                            "LLM produced invalid commit message after {} attempts"
+                        ).format(max_attempts)
+                    )
+                if self.debug:
+                    print(
+                        "DEBUG: commit.valid attempt={} header='{}'".format(
+                            attempt, msg.splitlines()[0]
+                        )
+                    )
+                return msg
+            except LLMError as e:
+                last_error = e
+                if self.debug:
+                    print(
+                        "DEBUG: commit.error attempt={} error='{}'".format(
+                            attempt, str(e)[:200]
+                        )
+                    )
+                if attempt < max_attempts:
+                    continue
+        raise LLMError(
+            (
+                "LLM unavailable or invalid output after {} attempts; commit aborted"
+            ).format(max_attempts)
+        ) from last_error
+
     def validate_conventional_commit(self, message: str) -> bool:
         """Validate if a commit message follows conventional commit format.
 
