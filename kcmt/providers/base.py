@@ -5,6 +5,19 @@ from typing import Any, Protocol
 
 from ..config import Config
 
+DEFAULT_PROVIDER_TIMEOUTS: dict[str, float] = {
+    "openai": 5.0,
+    "github": 5.0,
+    "xai": 12.0,
+    "anthropic": 12.0,
+}
+
+
+def resolve_default_request_timeout(provider: str | None) -> float:
+    if not provider:
+        return 5.0
+    return DEFAULT_PROVIDER_TIMEOUTS.get(provider.lower(), 5.0)
+
 
 class DriverResult(Protocol):  # simple protocol if we later enrich
     ...
