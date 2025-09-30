@@ -106,7 +106,6 @@ def test_load_config_upgrades_relative_repo_path(tmp_path):
         "api_key_env": DEFAULT_MODELS["openai"]["api_key_env"],
         "git_repo_path": ".",
         "max_commit_length": 72,
-        "allow_fallback": False,
         "auto_push": False,
     }
     (config_dir / "config.json").write_text(json.dumps(legacy))
