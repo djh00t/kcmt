@@ -1,4 +1,4 @@
-.PHONY: help clean clean-build clean-cache clean-pyc cle# Formatting and linting
+.PHONY: help install install-dev format lint test test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
@@ -28,7 +28,7 @@ help:
 PACKAGE_NAME = kcmt
 PYTHON = python3
 UV = uv
-PYTEST = uv run pytest
+PYTEST = $(UV) run pytest
 
 # Get current version
 VERSION := $(shell python -c "import kcmt; print(kcmt.__version__)")
@@ -58,7 +58,7 @@ lint:
 
 # Testing
 test:
-	$(PYTEST)
+	$(PYTEST) -q
 
 test-verbose:
 	$(PYTEST) -v
