@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -387,7 +388,7 @@ class KlingonCMTWorkflow:
         pending_debug_log: dict[Any, float] = {}
         debug_log_interval = 5.0
         remaining = set(future_map.keys())
-        retry_queue: list[int] = []
+        retry_queue: deque[int] = deque()
         retry_backoff = 1.0
 
         try:
@@ -480,7 +481,7 @@ class KlingonCMTWorkflow:
                             pending_debug_log[fut] = now
 
                 while retry_queue:
-                    idx = retry_queue.pop(0)
+                    idx = retry_queue.popleft()
                     time.sleep(retry_backoff)
                     new_future = executor.submit(
                         self._prepare_single_change, file_changes[idx]
