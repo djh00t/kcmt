@@ -52,7 +52,6 @@ class Config:
     api_key_env: str
     git_repo_path: str = "."
     max_commit_length: int = 72
-    allow_fallback: bool = False
     auto_push: bool = False
 
     def resolve_api_key(self) -> Optional[str]:
@@ -108,8 +107,7 @@ def load_persisted_config(
     if not cfg_path.exists():
         return None
     data = json.loads(cfg_path.read_text())
-    if "allow_fallback" not in data:  # backward compat
-        data["allow_fallback"] = False
+    data.pop("allow_fallback", None)
     if "auto_push" not in data:  # backward compat
         data["auto_push"] = False
     resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
@@ -156,6 +154,7 @@ def load_config(
     """Build configuration from config file, environment and overrides."""
 
     overrides = overrides or {}
+    overrides.pop("allow_fallback", None)
     repo_root = _ensure_path(repo_root)
     persisted = load_persisted_config(repo_root)
     detected = detect_available_providers()
@@ -234,27 +233,6 @@ def load_config(
         or (persisted.max_commit_length if persisted else 72)
     )
 
-    allow_fallback_env = os.environ.get("KLINGON_CMT_ALLOW_FALLBACK")
-    allow_fallback: bool
-    if overrides.get("allow_fallback") is not None:
-        allow_fallback = str(overrides["allow_fallback"]).lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-    elif persisted is not None:
-        allow_fallback = persisted.allow_fallback
-    elif allow_fallback_env:
-        allow_fallback = allow_fallback_env.lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-    else:
-        allow_fallback = False
-
     auto_push_env = os.environ.get("KLINGON_CMT_AUTO_PUSH")
     if overrides.get("auto_push") is not None:
         auto_push = str(overrides["auto_push"]).lower() in {
@@ -277,7 +255,6 @@ def load_config(
         api_key_env=api_key_env or DEFAULT_MODELS[provider]["api_key_env"],
         git_repo_path=git_repo_path,
         max_commit_length=max_commit_length,
-        allow_fallback=bool(allow_fallback),
         auto_push=bool(auto_push),
     )
 
