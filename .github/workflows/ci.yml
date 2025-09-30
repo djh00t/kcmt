@@ -26,9 +26,12 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13"]
     env:
-      # Keep tests isolated from external LLM APIs
-      KCMT_TEST_DISABLE_OPENAI: "1"
-      # Make warnings fail CI like in strict local runs
+      # Ensure git commits in tests have a valid identity
+      GIT_AUTHOR_NAME: "kcmt-ci"
+      GIT_AUTHOR_EMAIL: "kcmt-ci@example.com"
+      GIT_COMMITTER_NAME: "kcmt-ci"
+      GIT_COMMITTER_EMAIL: "kcmt-ci@example.com"
+      # Make warnings fail CI similar to strict local runs
       PYTHONWARNINGS: "default,error::DeprecationWarning,error::ResourceWarning"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       UV_SYSTEM_PYTHON: "0"
@@ -50,6 +53,12 @@ jobs:
           python --version
           uv --version
 
+      - name: Configure git identity
+        run: |
+          git config --global user.name  "${GIT_AUTHOR_NAME}"
+          git config --global user.email "${GIT_AUTHOR_EMAIL}"
+          git config --global init.defaultBranch main
+
       - name: Sync dependencies (dev)
         run: uv sync --all-extras --dev
 
@@ -69,6 +78,11 @@ jobs:
         run: uv run mypy --config-file pyproject.toml
 
       - name: Pytest (unit + coverage)
+        env:
+          # Do NOT stub or short-circuit LLM paths globally; tests control stubbing themselves
+          KCMT_TEST_DISABLE_OPENAI: ""
+          # Avoid provider auto-detection being influenced by Actions token during tests
+          GITHUB_TOKEN: ""
         run: |
           uv run pytest -n auto -ra -vv \
             -W default -W error::DeprecationWarning -W error::ResourceWarning \
