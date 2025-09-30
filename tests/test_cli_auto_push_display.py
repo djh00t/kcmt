@@ -32,4 +32,6 @@ def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
     )
     captured = capsys.readouterr()
     assert code in (0, 2)
-    assert "Pushed commits to remote" in captured.out
+    assert "Workflow Summary" in captured.out
+    assert "Auto-push" in captured.out
+    assert "pushed" in captured.out
