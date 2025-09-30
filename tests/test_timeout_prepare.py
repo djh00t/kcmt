@@ -129,9 +129,11 @@ def test_prepare_failure_limit(monkeypatch, tmp_path):
     results = wf.execute_workflow()
 
     file_commits = results.get("file_commits", [])
-    assert len(file_commits) == 25
+    assert len(file_commits) == 30
     failure_errors = [res.error for res in file_commits if not res.success]
-    assert len(failure_errors) == 25
+    assert len(failure_errors) == 30
+    limit_errors = [err for err in failure_errors if err and "failure limit" in err]
+    assert len(limit_errors) == 5
     summary_errors = results.get("errors", [])
     assert any("failure limit" in err for err in summary_errors)
 
