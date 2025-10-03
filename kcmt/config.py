@@ -50,6 +50,13 @@ class Config:
     model: str
     llm_endpoint: str
     api_key_env: str
+    # Optional secondary provider to allow future fallback/experimentation.
+    # Not currently used by the workflow, but persisted for future use and
+    # exposed via the configuration wizard.
+    secondary_provider: str | None = None
+    secondary_model: str | None = None
+    secondary_llm_endpoint: str | None = None
+    secondary_api_key_env: str | None = None
     git_repo_path: str = "."
     max_commit_length: int = 72
     auto_push: bool = False
