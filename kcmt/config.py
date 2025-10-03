@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -34,6 +34,14 @@ DEFAULT_MODELS = {
     },
 }
 
+# Friendly display names for supported providers
+PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "xai": "X.AI",
+    "github": "GitHub Models",
+}
+
 _FUZZY_ENV_HINTS = {
     "openai": ["OPENAI", "OPENAI_API", "OA_KEY"],
     "anthropic": ["ANTHROPIC", "CLAUDE"],
@@ -60,6 +68,17 @@ class Config:
     git_repo_path: str = "."
     max_commit_length: int = 72
     auto_push: bool = True
+    # Optional per-provider API key env var mapping to aid tooling like
+    # benchmarking and future multi-provider flows. Keys are provider ids
+    # (e.g. "openai", "anthropic", "xai").
+    provider_env_overrides: dict[str, str] = field(default_factory=dict)
+    # Per-provider settings persisted in the config file.
+    # Example shape:
+    #   {
+    #     "openai": {"name": "OpenAI", "endpoint": "https://...", "api_key_env": "OPENAI_API_KEY", "preferred_model": "gpt-4o-mini"},
+    #     "anthropic": {...},
+    #   }
+    providers: dict[str, dict] = field(default_factory=dict)
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -117,6 +136,9 @@ def load_persisted_config(
     data.pop("allow_fallback", None)
     if "auto_push" not in data:  # backward compat; now default is True
         data["auto_push"] = True
+    # Backward compat: ensure providers map exists in persisted data
+    if "providers" not in data or not isinstance(data.get("providers"), dict):
+        data["providers"] = {}
     resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
     resolved_root = _ensure_path(resolved_root)
     git_path = data.get("git_repo_path")
@@ -178,13 +200,59 @@ def load_config(
 
     defaults = DEFAULT_MODELS[provider]
 
+    # Build or upgrade the per-provider settings map. Persisted configs
+    # might not have this yet, so we synthesise sensible defaults.
+    providers_map: dict[str, dict] = {}
+    if persisted and isinstance(getattr(persisted, "providers", {}), dict):
+        # Shallow copy to avoid mutating the persisted object
+        providers_map = dict(getattr(persisted, "providers", {}) or {})
+    # Ensure all known providers are present with defaults
+    for prov, meta in DEFAULT_MODELS.items():
+        entry = providers_map.get(prov, {}) or {}
+        if not entry.get("name"):
+            entry["name"] = PROVIDER_DISPLAY_NAMES.get(prov, prov)
+        if not entry.get("endpoint"):
+            # If the previously persisted (legacy) top-level endpoint was for
+            # this provider, carry it over; otherwise use provider default.
+            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "llm_endpoint", None):
+                entry["endpoint"] = persisted.llm_endpoint
+            else:
+                entry["endpoint"] = meta["endpoint"]
+        # Prefer any existing override for env var, fall back to defaults
+        # or provider_env_overrides mapping (legacy field)
+        if not entry.get("api_key_env"):
+            legacy_map = (
+                getattr(persisted, "provider_env_overrides", {}) if persisted else {}
+            ) or {}
+            # If the previously persisted (legacy) top-level api_key_env was for
+            # this provider, carry it over; otherwise use overrides/defaults.
+            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "api_key_env", None):
+                entry["api_key_env"] = getattr(persisted, "api_key_env")
+            else:
+                entry["api_key_env"] = (
+                    legacy_map.get(prov) or meta["api_key_env"]
+                )
+        # Carry over any previously selected model for this provider via
+        # (1) explicit provider entry, (2) legacy top-level model when the
+        # active provider matches, or (3) leave unset to indicate "first use".
+        if "preferred_model" not in entry or entry["preferred_model"] is None:
+            if persisted and getattr(persisted, "provider", None) == prov:
+                # Use previous top-level model as the preferred one for this provider
+                entry["preferred_model"] = getattr(persisted, "model", None)
+        providers_map[prov] = entry
+
     # Only reuse persisted model if it's for the same provider; otherwise
     # fall back to defaults for the newly selected provider.
+    # Prefer any persisted per-provider preferred model first
+    provider_pref_model = None
+    if providers_map.get(provider):
+        provider_pref_model = providers_map[provider].get("preferred_model")
     persisted_model = (
         persisted.model if (persisted and persisted.provider == provider) else None
     )
     model = (
         overrides.get("model")
+        or provider_pref_model
         or persisted_model
         or os.environ.get("KLINGON_CMT_LLM_MODEL")
         or defaults["model"]
@@ -203,8 +271,10 @@ def load_config(
         if (persisted and persisted.provider == provider)
         else None
     )
+    provider_endpoint = providers_map.get(provider, {}).get("endpoint") if providers_map else None
     endpoint = (
         overrides.get("endpoint")
+        or provider_endpoint
         or persisted_endpoint
         or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or defaults["endpoint"]
@@ -215,9 +285,17 @@ def load_config(
     if persisted and persisted.provider == provider:
         persisted_api_key_env = persisted.api_key_env
 
+    # If user previously configured explicit env var for this provider, prefer it
+    mapped_api_key_env = None
+    if providers_map.get(provider):
+        mapped_api_key_env = providers_map[provider].get("api_key_env")
+    elif persisted and getattr(persisted, "provider_env_overrides", None):
+        mapped_api_key_env = persisted.provider_env_overrides.get(provider)
+
     api_key_env = (
         overrides.get("api_key_env")
         or persisted_api_key_env
+        or mapped_api_key_env
         or _select_env_var_for_provider(provider)
     )
 
@@ -255,6 +333,12 @@ def load_config(
     else:
         auto_push = True
 
+    # Keep provider_env_overrides in sync (legacy field) for compatibility
+    provider_env_overrides: dict[str, str] = {}
+    for prov, entry in providers_map.items():
+        env_name = str(entry.get("api_key_env") or DEFAULT_MODELS[prov]["api_key_env"])
+        provider_env_overrides[prov] = env_name
+
     config = Config(
         provider=provider,
         model=model,
@@ -263,6 +347,8 @@ def load_config(
         git_repo_path=git_repo_path,
         max_commit_length=max_commit_length,
         auto_push=bool(auto_push),
+        providers=providers_map,
+        provider_env_overrides=provider_env_overrides,
     )
 
     set_active_config(config)
