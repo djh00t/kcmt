@@ -18,7 +18,9 @@ Key features
 - Built-in metrics summary (diff, queue, LLM, commit timings) to diagnose performance quickly.
 - Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
 - Parallel preparation: generate per-file commit messages concurrently with live stats.
-- Optional automatic push (`--auto-push`) after a successful run.
+- Automatic push to `origin` on success by default (use `--no-auto-push` to disable).
+- Pricing-aware model selection and a cross-provider pricing board (`--list-models`).
+- Built-in benchmarking across providers/models with a CLI leaderboard and optional JSON/CSV output.
 - Small and composable core: use the CLI or import the library directly.
 
 Supported Python versions
@@ -53,6 +55,63 @@ Run `kcmt --configure` inside a repository to launch a colourful wizard that:
 - Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
 - Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
 - Persists the selection to `.kcmt/config.json` (commit it if you want teammates to share defaults).
+
+Per-provider settings
+
+kcmt maintains a per-provider settings map in `.kcmt/config.json`. Each supported provider has:
+
+- `name`: friendly display name
+- `endpoint`: base URL for API calls
+- `api_key_env`: environment variable that holds your API key/token (kcmt stores the variable name, not the secret)
+- `preferred_model`: your saved default model for that provider
+
+Example (`.kcmt/config.json` excerpt):
+
+```
+{
+  "provider": "openai",
+  "model": "gpt-5-mini-2025-08-07",
+  "llm_endpoint": "https://api.openai.com/v1",
+  "api_key_env": "OPENAI_API_KEY",
+  "auto_push": true,
+  "providers": {
+    "openai": {
+      "name": "OpenAI",
+      "endpoint": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "preferred_model": "gpt-5-mini-2025-08-07"
+    },
+    "anthropic": {
+      "name": "Anthropic",
+      "endpoint": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "preferred_model": null
+    },
+    "xai": {
+      "name": "X.AI",
+      "endpoint": "https://api.x.ai/v1",
+      "api_key_env": "XAI_API_KEY",
+      "preferred_model": null
+    },
+    "github": {
+      "name": "GitHub Models",
+      "endpoint": "https://models.github.ai/inference",
+      "api_key_env": "GITHUB_TOKEN",
+      "preferred_model": null
+    }
+  }
+}
+```
+
+First-use model selection
+
+- When you first run kcmt against a provider that doesn't yet have a `preferred_model`, the CLI shows a pricing-aware model menu and saves your selection under `providers[<provider>].preferred_model`.
+- Non-interactive runs skip the prompt and use the provider default (override with `--model`).
+
+Configure API keys for multiple providers
+
+- `kcmt --configure-all` lets you pick which providers to configure and select which environment variable holds each API key. This updates both the legacy `provider_env_overrides` and the new `providers[prov].api_key_env` entries.
+- `kcmt --verify-keys` prints a concise table of providers, the env var in use, whether it’s set, and any detected alternatives in your environment.
 
 ### Provider defaults
 
@@ -90,7 +149,36 @@ Additional LLM behaviour environment variables:
 - `KCMT_OPENAI_DISABLE_REASONING` – disable reasoning / chain-of-thought (default on)
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
 - `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
-- `KLINGON_CMT_AUTO_PUSH=1` (enable automatic `git push` after success)
+- `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
+
+## List models and pricing
+
+`kcmt --list-models` prints a simple cross-provider pricing board ordered by output (completion) price per 1M tokens, including context window and max output when available. Use `--debug` to see the raw structured listings.
+
+Example:
+
+```
+kcmt --list-models
+```
+
+## Benchmarking
+
+Run a local benchmark across providers/models using a fixed set of example diffs. kcmt measures latency, estimates cost, and scores conventional-commit quality with lightweight heuristics.
+
+Basic usage:
+
+```
+kcmt --benchmark --benchmark-limit 5
+```
+
+Options:
+
+- `--benchmark-limit INT` – max models per provider (default 5)
+- `--benchmark-timeout SECS` – per-call timeout
+- `--benchmark-json` – also emit machine-readable JSON
+- `--benchmark-csv` – also emit CSV rows
+
+Snapshots are saved under `.kcmt/benchmarks/benchmark-<timestamp>.json` for later comparison.
 
 ## Quick start (CLI)
 
@@ -113,15 +201,20 @@ Exit codes
 `kcmt` accepts the following common options:
 
 - `--configure` – launch the interactive setup wizard.
+- `--configure-all` – select provider(s) and set which env var holds each API key.
+- `--verify-keys` – show which env var is used per provider and whether it’s set.
 - `--provider`, `--model`, `--endpoint`, `--api-key-env` – override saved provider details.
 - `--repo-path PATH` – target repository (defaults to current working directory).
 - `--max-commit-length INT` – validate (not hard truncate) the subject line length (default 72 for legacy compatibility; body is preserved).
-- `--auto-push` – push the current branch after successful commits (or set `KLINGON_CMT_AUTO_PUSH=1`).
+- `--auto-push` / `--no-auto-push` – enable/disable automatic push (default: enabled; can also set `KLINGON_CMT_AUTO_PUSH`).
 - `--max-retries INT` – retries when Git rejects (default 3).
 - `--oneshot` – stage all changes, pick one file, and commit it once.
 - `--file PATH` – stage & commit an explicit file.
 - `--no-progress` – disable the live stats bar.
 - `--verbose`, `-v` – emit detailed logs and per-file results.
+- `--list-models` – show a pricing comparison board of models across providers.
+- `--benchmark` – run the model benchmark and show leaderboards.
+- `--benchmark-json` / `--benchmark-csv` – print results in machine-readable formats.
 
 ## Conventional commit automation
 
@@ -190,7 +283,7 @@ Exceptions
 Configuration
 
 - kcmt.config.Config
-  - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push
+  - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push, providers (per-provider map), provider_env_overrides (legacy mapping)
 - kcmt.config.load_config(overrides=None)
   - Merge repo `.kcmt/config.json`, environment, and optional overrides.
 - kcmt.config.save_config(config, repo_root=None)
