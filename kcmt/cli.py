@@ -247,6 +247,14 @@ Examples:
             ),
         )
         parser.add_argument(
+            "--no-auto-push",
+            action="store_true",
+            help=(
+                "Disable automatic git push for this run "
+                "(or set KLINGON_CMT_AUTO_PUSH=0)"
+            ),
+        )
+        parser.add_argument(
             "--compact",
             "--summary",
             dest="compact",
@@ -460,6 +468,8 @@ Examples:
             overrides["repo_path"] = str(repo_root.expanduser().resolve(strict=False))
         if getattr(args, "auto_push", False):
             overrides["auto_push"] = "1"
+        if getattr(args, "no_auto_push", False):
+            overrides["auto_push"] = "0"
         return overrides
 
     def _run_configuration(self, args: argparse.Namespace, repo_root: Path) -> int:
