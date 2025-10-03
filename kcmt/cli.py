@@ -160,6 +160,13 @@ Examples:
             help="Launch interactive configuration wizard",
         )
         parser.add_argument(
+            "--configure-all",
+            action="store_true",
+            help=(
+                "Interactively choose provider(s) and set which env var holds each API key"
+            ),
+        )
+        parser.add_argument(
             "--provider",
             choices=sorted(DEFAULT_MODELS.keys()),
             help="Override provider for this run",
@@ -237,6 +244,50 @@ Examples:
             "--list-models",
             action="store_true",
             help=("List available models for each provider using your API keys"),
+        )
+        parser.add_argument(
+            "--benchmark",
+            action="store_true",
+            help=(
+                "Run a local benchmark across providers/models using sample diffs"
+            ),
+        )
+        parser.add_argument(
+            "--benchmark-limit",
+            type=int,
+            default=5,
+            help=(
+                "Limit number of models per provider during --benchmark (default: 5)"
+            ),
+        )
+        parser.add_argument(
+            "--benchmark-timeout",
+            type=float,
+            default=None,
+            help=(
+                "Per-call timeout seconds for --benchmark requests (optional)"
+            ),
+        )
+        parser.add_argument(
+            "--verify-keys",
+            action="store_true",
+            help=(
+                "Verify API key environment variables for supported providers"
+            ),
+        )
+        parser.add_argument(
+            "--benchmark-json",
+            action="store_true",
+            help=(
+                "Also output benchmark results as JSON (after the leaderboard)"
+            ),
+        )
+        parser.add_argument(
+            "--benchmark-csv",
+            action="store_true",
+            help=(
+                "Also output benchmark results as CSV (after the leaderboard)"
+            ),
         )
         parser.add_argument(
             "--auto-push",
@@ -333,8 +384,14 @@ Examples:
             if getattr(parsed_args, "github_token", None):
                 os.environ["GITHUB_TOKEN"] = parsed_args.github_token
 
-            if parsed_args.list_models:
+            if parsed_args.list_models and not parsed_args.benchmark:
                 return self._execute_list_models(parsed_args)
+            if parsed_args.configure_all:
+                return self._run_configuration_all(parsed_args, repo_root)
+            if parsed_args.verify_keys:
+                return self._execute_verify_keys(parsed_args, repo_root)
+            if parsed_args.benchmark:
+                return self._execute_benchmark(parsed_args)
             if parsed_args.configure:
                 return self._run_configuration(parsed_args, repo_root)
 
@@ -379,6 +436,31 @@ Examples:
                     extra=lambda: (f"provider={config.provider}" if config else ""),
                 ):
                     config = load_config(repo_root=repo_root, overrides=overrides)
+
+            # On first use of a provider without a recorded preferred model,
+            # prompt the user to choose and persist the selection.
+            if (
+                not non_interactive
+                and not getattr(parsed_args, "model", None)
+                and isinstance(getattr(config, "providers", {}), dict)
+            ):
+                pmap = getattr(config, "providers", {}) or {}
+                pentry = pmap.get(config.provider, {}) if isinstance(pmap, dict) else {}
+                preferred = pentry.get("preferred_model") if isinstance(pentry, dict) else None
+                if not preferred:
+                    self._print_heading(f"Select preferred model for {config.provider}")
+                    default_model = DEFAULT_MODELS[config.provider]["model"]
+                    chosen = self._prompt_model_with_menu(config.provider, default_model)
+                    # Persist the selection
+                    pentry["preferred_model"] = chosen
+                    pmap[config.provider] = pentry
+                    config.model = chosen
+                    config.providers = pmap
+                    try:
+                        save_config(config, repo_root)
+                        self._print_success("Saved preferred model selection.")
+                    except OSError:
+                        pass
 
             if not persisted_config:
                 refreshed_cfg: Optional[Config] = None
@@ -516,6 +598,40 @@ Examples:
             sec_endpoint = self._prompt_endpoint(sec_provider, sec_meta["endpoint"])
             sec_api_key_env = self._prompt_api_key_env(sec_provider, detected)
 
+        # Start from existing providers map if present to preserve prior edits
+        from .config import PROVIDER_DISPLAY_NAMES, DEFAULT_MODELS as _DM
+        existing = load_persisted_config(repo_root)
+        providers_map: dict[str, dict] = {}
+        if existing and isinstance(getattr(existing, "providers", {}), dict):
+            providers_map = dict(existing.providers)
+        # Ensure all providers have an entry with defaults
+        for prov, meta in _DM.items():
+            ent = providers_map.get(prov, {}) or {}
+            ent.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
+            ent.setdefault("endpoint", meta["endpoint"])
+            ent.setdefault("api_key_env", meta["api_key_env"])
+            providers_map[prov] = ent
+        # Apply primary choices
+        p_entry = providers_map.get(provider, {})
+        p_entry["endpoint"] = endpoint
+        p_entry["api_key_env"] = api_key_env
+        p_entry["preferred_model"] = model
+        providers_map[provider] = p_entry
+        # Apply secondary choices if any
+        if sec_provider:
+            sp_meta = _DM[sec_provider]
+            sp_entry = providers_map.get(sec_provider, {})
+            sp_entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(sec_provider, sec_provider))
+            sp_entry["endpoint"] = sec_endpoint or sp_meta["endpoint"]
+            sp_entry["api_key_env"] = sec_api_key_env or sp_meta["api_key_env"]
+            sp_entry["preferred_model"] = sec_model or sp_meta["model"]
+            providers_map[sec_provider] = sp_entry
+
+        # Keep legacy mapping in sync for compatibility
+        provider_env_overrides = {
+            prov: str(ent.get("api_key_env") or _DM[prov]["api_key_env"]) for prov, ent in providers_map.items()
+        }
+
         config = Config(
             provider=provider,
             model=model,
@@ -526,12 +642,91 @@ Examples:
             secondary_llm_endpoint=sec_endpoint,
             secondary_api_key_env=sec_api_key_env,
             git_repo_path=str(repo_root.expanduser().resolve(strict=False)),
+            providers=providers_map,
+            provider_env_overrides=provider_env_overrides,
         )
         save_config(config, repo_root)
 
         self._print_success(
             "Configuration saved to {}".format(
                 (repo_root / ".kcmt" / "config.json").relative_to(repo_root)
+            )
+        )
+        return 0
+
+    def _run_configuration_all(self, args: argparse.Namespace, repo_root: Path) -> int:
+        """Let the user choose which providers to configure API key env vars for.
+
+        - Does NOT change the primary/secondary provider.
+        - Does NOT prompt for endpoints or models; defaults are fine.
+        - Only records the env var name to use for each chosen provider.
+        """
+        repo_root = Path(repo_root).expanduser().resolve(strict=False)
+        det = detect_available_providers()
+        providers = sorted(DEFAULT_MODELS.keys())
+
+        self._print_heading("Select providers to configure")
+        for idx, p in enumerate(providers, start=1):
+            badge = GREEN + "●" + RESET if det.get(p) else YELLOW + "○" + RESET
+            print(f"  {idx}. {badge} {describe_provider(p)}")
+        try:
+            raw = input(
+                f"{MAGENTA}Enter number(s) (comma-separated) or 'all'{RESET} [all]: "
+            ).strip()
+        except EOFError:
+            raw = "all"
+        if not raw:
+            raw = "all"
+        selected: list[str] = []
+        if raw.lower() in {"all", "*"}:
+            selected = providers
+        else:
+            for token in raw.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                if token.isdigit():
+                    i = int(token)
+                    if 1 <= i <= len(providers):
+                        selected.append(providers[i - 1])
+                elif token in providers:
+                    selected.append(token)
+        if not selected:
+            self._print_warning("No valid providers selected; nothing to do.")
+            return 1
+
+        # Load existing config or build one; we won't change provider/model here
+        try:
+            cfg = load_config(repo_root=repo_root)
+        except Exception:
+            cfg = Config(
+                provider="openai",
+                model=DEFAULT_MODELS["openai"]["model"],
+                llm_endpoint=DEFAULT_MODELS["openai"]["endpoint"],
+                api_key_env=DEFAULT_MODELS["openai"]["api_key_env"],
+                git_repo_path=str(repo_root),
+            )
+
+        # Build/extend the mapping
+        overrides = dict(getattr(cfg, "provider_env_overrides", {}) or {})
+        providers_map = dict(getattr(cfg, "providers", {}) or {})
+        for prov in selected:
+            self._print_heading(f"API key for {prov}")
+            env_key = self._prompt_api_key_env(prov, det)
+            overrides[prov] = env_key
+            # Ensure providers map entry exists and is updated
+            entry = providers_map.get(prov, {})
+            entry["api_key_env"] = env_key
+            entry.setdefault("name", describe_provider(prov).split(" (")[0])
+            entry.setdefault("endpoint", DEFAULT_MODELS[prov]["endpoint"])
+            providers_map[prov] = entry
+
+        cfg.provider_env_overrides = overrides
+        cfg.providers = providers_map
+        save_config(cfg, repo_root)
+        self._print_success(
+            "Saved API key env var mapping for: {}".format(
+                ", ".join(selected)
             )
         )
         return 0
@@ -742,7 +937,7 @@ Examples:
 
         # Build per-provider configs using active env
         configs: dict[str, Config] = {}
-        for prov in ("openai", "anthropic", "xai"):
+        for prov in ("openai", "anthropic", "xai", "github"):
             overrides: dict[str, str] = {"provider": prov}
             try:
                 cfg = load_config(overrides=overrides)
@@ -754,7 +949,7 @@ Examples:
         for prov, cfg in configs.items():
             try:
                 driver: BaseDriver
-                if prov == "openai":
+                if prov in {"openai", "github"}:
                     driver = OpenAIDriver(
                         cfg,
                         debug=getattr(args, "debug", False),
@@ -788,7 +983,7 @@ Examples:
                                 ids.append(candidate)
                                 seen.add(candidate)
                     # Apply provider-specific filters for CLI fallback
-                    if prov == "openai":
+                    if prov in {"openai", "github"}:
                         ids = [mm for mm in ids if OpenAIDriver.is_allowed_model_id(mm)]
                     elif prov == "xai":
                         ids = [mm for mm in ids if XAIDriver.is_allowed_model_id(mm)]
@@ -853,6 +1048,395 @@ Examples:
         self._print_pricing_board(out)
         return 0
 
+    def _execute_benchmark(self, args: argparse.Namespace) -> int:
+        """Run a benchmark across providers/models using sample diffs.
+
+        Uses the same discovery as --list-models and estimates cost using
+        published per-1M token prices. Only models for providers with available
+        API keys are exercised.
+        """
+        # Build per-provider model lists (same enrichment/filters as list-models)
+        providers = ("openai", "anthropic", "xai", "github")
+        models_map: dict[str, list[dict[str, Any]]] = {}
+        for prov in providers:
+            try:
+                models = self._list_enriched_models_for_provider(prov)
+            except Exception:
+                models = []
+            # Fallback: if enrichment returned nothing, try raw provider listing
+            if not models:
+                try:
+                    models = self._list_models_raw_for_provider(prov)
+                except Exception:
+                    models = []
+            models_map[prov] = models
+
+        # Limit models per provider
+        limit = getattr(args, "benchmark_limit", None)
+        if isinstance(limit, int) and limit > 0:
+            models_map = {k: (v[:limit] if v else []) for k, v in models_map.items()}
+
+        # Run benchmark
+        try:
+            from .benchmark import run_benchmark
+        except Exception as e:  # pragma: no cover - import protection
+            self._print_error(f"Benchmark module unavailable: {e}")
+            return 1
+
+        timeout = getattr(args, "benchmark_timeout", None)
+        debug_flag = bool(getattr(args, "debug", False))
+        # Live progress rendering
+        is_tty = sys.stdout.isatty()
+        def _make_bar(done: int, total: int, width: int = 40) -> str:
+            if total <= 0:
+                total = 1
+            frac = max(0.0, min(1.0, done / float(total)))
+            filled = int(frac * width)
+            return "[{}{}] {:>3}%".format("#" * filled, "-" * (width - filled), int(frac * 100))
+
+        # Shared state for progress callback
+        _pstate: dict[str, int | str] = {"done": 0, "total": 0, "label": ""}
+
+        def _progress(stage: str, info: dict[str, object]) -> None:
+            try:
+                if stage == "init":
+                    _pstate["total"] = int(info.get("total_runs", 0))
+                    _pstate["done"] = 0
+                    _pstate["label"] = ""
+                    if is_tty and _pstate["total"]:
+                        bar = _make_bar(0, int(_pstate["total"]))
+                        print(f"Benchmarking {bar} ", end="\r", flush=True)
+                elif stage == "provider":
+                    prov = str(info.get("provider", ""))
+                    if is_tty and _pstate.get("total", 0):
+                        # Light provider hint in label
+                        _pstate["label"] = prov
+                elif stage == "model_start":
+                    prov = str(info.get("provider", _pstate.get("label", "")))
+                    mid = str(info.get("model", ""))
+                    if is_tty and _pstate.get("total", 0):
+                        _pstate["label"] = f"{prov} / {mid}"
+                elif stage == "tick":
+                    _pstate["done"] = int(info.get("done", _pstate.get("done", 0)))
+                    prov = str(info.get("provider", ""))
+                    mid = str(info.get("model", ""))
+                    samp = str(info.get("sample", ""))
+                    if prov and mid:
+                        _pstate["label"] = f"{prov} / {mid} ({samp})"
+                    if is_tty and _pstate.get("total", 0):
+                        bar = _make_bar(int(_pstate["done"]), int(_pstate["total"]))
+                        msg = f"Benchmarking {bar} {_pstate.get('label','')}"
+                        # Ensure line overwrite
+                        print(msg.ljust(120), end="\r", flush=True)
+                elif stage == "done":
+                    if is_tty:
+                        bar = _make_bar(int(_pstate.get("total", 0) or 1), int(_pstate.get("total", 0) or 1))
+                        print(f"Benchmarking {bar} done".ljust(120))
+            except Exception:
+                # Never let progress updates break the benchmark
+                pass
+
+        results = run_benchmark(
+            models_map,
+            per_provider_limit=limit,
+            request_timeout=timeout,
+            debug=debug_flag,
+            progress=_progress,
+        )
+
+        if not results:
+            self._print_warning(
+                "No benchmarkable models found. Ensure API keys are set for providers."
+            )
+            return 1
+
+        # Build leaderboards
+        def _fmt_money(v: float) -> str:
+            if v < 1.0:
+                return f"${v:.4f}"
+            return f"${v:.2f}"
+
+        # Fastest by avg latency
+        fastest = sorted(results, key=lambda r: (r.avg_latency_ms, r.avg_cost_usd))[:10]
+        # Cheapest by cost
+        cheapest = sorted(results, key=lambda r: (r.avg_cost_usd, r.avg_latency_ms))[:10]
+        # Best quality by quality score desc
+        best_quality = sorted(results, key=lambda r: (-r.quality, r.avg_latency_ms))[:10]
+        # Stability by success rate desc
+        most_stable = sorted(
+            results, key=lambda r: (-r.success_rate, r.avg_latency_ms)
+        )[:10]
+
+        # Overall: normalized mix (quality 0.4, cost 0.3, time 0.3)
+        min_lat = min(r.avg_latency_ms for r in results)
+        max_lat = max(r.avg_latency_ms for r in results)
+        min_cost = min(r.avg_cost_usd for r in results)
+        max_cost = max(r.avg_cost_usd for r in results)
+
+        def _norm(val: float, lo: float, hi: float) -> float:
+            if hi <= lo:
+                return 1.0
+            return (val - lo) / (hi - lo)
+
+        overall: list[tuple[float, Any]] = []
+        for r in results:
+            # Higher quality is better, lower cost/time is better
+            q = r.quality / 100.0
+            c = 1.0 - _norm(r.avg_cost_usd, min_cost, max_cost)
+            t = 1.0 - _norm(r.avg_latency_ms, min_lat, max_lat)
+            score = 0.4 * q + 0.3 * c + 0.3 * t
+            overall.append((score, r))
+        overall_sorted = [r for (_s, r) in sorted(overall, key=lambda kv: -kv[0])[:10]]
+
+        # Persist snapshot for later comparison
+        try:
+            snapshot = {
+                "schema_version": 1,
+                "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "repo_path": str(self._repo_root) if self._repo_root else ".",
+                "params": {
+                    "limit": limit,
+                    "timeout": timeout,
+                },
+                "results": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in results
+                ],
+            }
+            self._persist_benchmark_snapshot(snapshot)
+        except Exception:  # pragma: no cover - best-effort persistence
+            pass
+
+        # Render
+        self._print_heading("Benchmark Leaderboard")
+        def _print_board(title: str, rows: list[Any]) -> None:
+            print(f"{BOLD}{CYAN}{title}{RESET}")
+            # widths
+            w_prov = max((len(r.provider) for r in rows), default=6)
+            w_mid = max((len(r.model) for r in rows), default=10)
+            header = (
+                f"  {'provider':<{w_prov}}  {'model':<{w_mid}}  "
+                f"{'latency(ms)':>12}  {'cost':>10}  {'quality':>8}  {'success':>8}"
+            )
+            print(CYAN + header + RESET)
+            for r in rows:
+                print(
+                    "  {prov:<{wp}}  {mid:<{wm}}  {lat:>12.1f}  {cost:>10}  {q:>8.1f}  {sr:>8.0%}".format(
+                        prov=r.provider,
+                        mid=r.model,
+                        lat=r.avg_latency_ms,
+                        cost=_fmt_money(r.avg_cost_usd),
+                        q=r.quality,
+                        sr=r.success_rate,
+                        wp=w_prov,
+                        wm=w_mid,
+                    )
+                )
+
+        _print_board("Overall", overall_sorted)
+        print()
+        _print_board("Fastest", fastest)
+        print()
+        _print_board("Cheapest", cheapest)
+        print()
+        _print_board("Best Quality", best_quality)
+        print()
+        _print_board("Most Stable", most_stable)
+
+        # Grouped results: by provider -> models
+        print()
+        self._print_heading("Results by Provider")
+        by_prov: dict[str, list[Any]] = {}
+        for r in results:
+            by_prov.setdefault(r.provider, []).append(r)
+        for prov in sorted(by_prov.keys()):
+            rows = by_prov[prov]
+            # Sort by latency then cost for readability
+            rows_sorted = sorted(rows, key=lambda r: (r.avg_latency_ms, r.avg_cost_usd))
+            print(f"{BOLD}{prov}{RESET}")
+            w_mid = max((len(r.model) for r in rows_sorted), default=10)
+            header = (
+                f"  {'model':<{w_mid}}  {'latency(ms)':>12}  {'cost':>10}  {'quality':>8}  {'success':>8}"
+            )
+            print(CYAN + header + RESET)
+            for r in rows_sorted:
+                print(
+                    "  {mid:<{wm}}  {lat:>12.1f}  {cost:>10}  {q:>8.1f}  {sr:>8.0%}".format(
+                        mid=r.model,
+                        lat=r.avg_latency_ms,
+                        cost=_fmt_money(r.avg_cost_usd),
+                        q=r.quality,
+                        sr=r.success_rate,
+                        wm=w_mid,
+                    )
+                )
+
+        # Optional JSON / CSV outputs after leaderboard
+        if bool(getattr(args, "benchmark_json", False)):
+            blob = {
+                "overall": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in overall_sorted
+                ],
+                "fastest": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in fastest
+                ],
+                "cheapest": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in cheapest
+                ],
+                "best_quality": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in best_quality
+                ],
+                "most_stable": [
+                    {
+                        "provider": r.provider,
+                        "model": r.model,
+                        "avg_latency_ms": r.avg_latency_ms,
+                        "avg_cost_usd": r.avg_cost_usd,
+                        "quality": r.quality,
+                        "success_rate": r.success_rate,
+                        "runs": r.runs,
+                    }
+                    for r in most_stable
+                ],
+            }
+            print(
+                json.dumps(
+                    blob, indent=2, ensure_ascii=False, cls=DecimalFriendlyJSONEncoder
+                )
+            )
+
+        if bool(getattr(args, "benchmark_csv", False)):
+            # Write header + rows; CSV for the raw results
+            import csv
+            from io import StringIO
+
+            buf = StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(
+                [
+                    "provider",
+                    "model",
+                    "avg_latency_ms",
+                    "avg_cost_usd",
+                    "quality",
+                    "success_rate",
+                    "runs",
+                ]
+            )
+            for r in results:
+                writer.writerow(
+                    [
+                        r.provider,
+                        r.model,
+                        f"{r.avg_latency_ms:.3f}",
+                        f"{r.avg_cost_usd:.6f}",
+                        f"{r.quality:.2f}",
+                        f"{r.success_rate:.2f}",
+                        r.runs,
+                    ]
+                )
+            print(buf.getvalue().rstrip("\n"))
+
+        return 0
+
+    def _execute_verify_keys(self, args: argparse.Namespace, repo_root: Path) -> int:
+        detected = detect_available_providers()
+        providers = sorted(DEFAULT_MODELS.keys())
+
+        from .config import load_config
+
+        rows: list[tuple[str, str, str, str]] = []
+        for prov in providers:
+            try:
+                cfg = load_config(repo_root=repo_root, overrides={"provider": prov})
+                env_var = cfg.api_key_env
+            except Exception:
+                env_var = DEFAULT_MODELS[prov]["api_key_env"]
+            present = "yes" if env_var in os.environ and os.environ.get(env_var) else "no"
+            detected_list = detected.get(prov, [])
+            hint = ",".join(detected_list[:3]) if detected_list else "-"
+            rows.append((prov, env_var, present, hint))
+
+        # Render table
+        self._print_heading("API Key Verification")
+        w_p = max(max((len(r[0]) for r in rows), default=7), len("provider"))
+        w_e = max(max((len(r[1]) for r in rows), default=8), len("env_var"))
+        w_s = len("present")
+        w_h = max(max((len(r[3]) for r in rows), default=5), len("detected"))
+        header = (
+            f"  {'provider':<{w_p}}  {'env_var':<{w_e}}  {'present':<{w_s}}  {'detected':<{w_h}}"
+        )
+        print(CYAN + header + RESET)
+        for (prov, env_var, present, hint) in rows:
+            line = (
+                f"  {prov:<{w_p}}  {env_var:<{w_e}}  {present:<{w_s}}  {hint:<{w_h}}"
+            )
+            print(line)
+        return 0
+
+    def _persist_benchmark_snapshot(self, snapshot: dict[str, Any]) -> None:
+        try:
+            base = self._repo_root or Path.cwd()
+            root = Path(base).resolve(strict=False)
+            bdir = root / ".kcmt" / "benchmarks"
+            bdir.mkdir(parents=True, exist_ok=True)
+            fname = f"benchmark-{snapshot.get('timestamp','').replace(':','').replace('Z','Z')}.json"
+            path = bdir / fname
+            with path.open("w", encoding="utf-8") as handle:
+                json.dump(
+                    snapshot,
+                    handle,
+                    indent=2,
+                    ensure_ascii=False,
+                    cls=DecimalFriendlyJSONEncoder,
+                )
+        except OSError:  # pragma: no cover - best effort
+            pass
+
     # ------------------------------------------------------------------
     # Discovery/formatting helpers for models & pricing
     # ------------------------------------------------------------------
@@ -881,7 +1465,7 @@ Examples:
             )
 
         driver: BaseDriver
-        if prov == "openai":
+        if prov in {"openai", "github"}:
             driver = OpenAIDriver(cfg, debug=False)
         elif prov == "xai":
             driver = XAIDriver(cfg, debug=False)
@@ -906,7 +1490,7 @@ Examples:
                         if candidate and candidate not in seen:
                             ids.append(candidate)
                             seen.add(candidate)
-                if prov == "openai":
+                if prov in {"openai", "github"}:
                     ids = [mm for mm in ids if OpenAIDriver.is_allowed_model_id(mm)]
                 elif prov == "xai":
                     ids = [mm for mm in ids if XAIDriver.is_allowed_model_id(mm)]
@@ -933,6 +1517,38 @@ Examples:
                 continue
             filtered.append(m)
         return filtered
+
+    def _list_models_raw_for_provider(self, prov: str) -> list[dict[str, Any]]:
+        """Return raw provider model list without requiring pricing enrichment."""
+        from .providers.anthropic_driver import AnthropicDriver
+        from .providers.base import BaseDriver
+        from .providers.openai_driver import OpenAIDriver
+        from .providers.xai_driver import XAIDriver
+
+        overrides: dict[str, str] = {"provider": prov}
+        try:
+            cfg = load_config(overrides=overrides)
+        except Exception:  # noqa: BLE001
+            meta = DEFAULT_MODELS.get(prov, {})
+            cfg = Config(
+                provider=prov,
+                model=str(meta.get("model", "")),
+                llm_endpoint=str(meta.get("endpoint", "")),
+                api_key_env=str(meta.get("api_key_env", "")),
+            )
+
+        driver: BaseDriver
+        if prov in {"openai", "github"}:
+            driver = OpenAIDriver(cfg, debug=False)
+        elif prov == "xai":
+            driver = XAIDriver(cfg, debug=False)
+        else:
+            driver = AnthropicDriver(cfg, debug=False)
+
+        try:
+            return driver.list_models()
+        except Exception:  # noqa: BLE001
+            return []
 
     def _fmt_money(self, value: Any) -> str:
         try:
