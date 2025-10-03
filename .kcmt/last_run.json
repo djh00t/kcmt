@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-09-30T16:04:23Z",
+  "timestamp": "2025-10-03T14:00:21Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast",
@@ -8,78 +8,54 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 11.368899,
-  "rate_commits_per_sec": 0.452176,
+  "duration_seconds": 4.076032,
+  "rate_commits_per_sec": 0.518854,
   "counts": {
-    "files_total": 5,
-    "prepared_total": 5,
-    "processed_total": 5,
+    "files_total": 2,
+    "prepared_total": 2,
+    "processed_total": 2,
     "prepared_failures": 0,
-    "commit_success": 5,
+    "commit_success": 2,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 5,
+    "overall_success": 2,
     "overall_failure": 0,
     "errors": 0
   },
   "pushed": null,
-  "summary": "Successfully completed 5 commits. Committed 5 file change(s)",
+  "summary": "Successfully completed 2 commits. Committed 2 file change(s)",
   "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "ec79e54",
-      "message": "chore(config): update last run log after execution\n\nUpdated .kcmt/last_run.json to reflect a successful run processing 1\nfile, reducing counts from previous 7 to 1, with updated timestamp,\nduration, rate, and summary. This captures the latest execution stats\nand replaces the commits array with the single successful commit for\nthis log file.",
+      "commit_hash": "c819e53",
+      "message": "chore(config): update last run log with execution results\n\nUpdated timestamp, duration, and stats to reflect processing of 5 files\nwith 5 successful commits. Expanded commits array to include details of\nall generated commits, updated summary and subjects accordingly, and\nimproved rate metrics. This log captures the latest kcmt run execution\nfor tracking and debugging purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
     },
     {
       "success": true,
-      "commit_hash": "48ea2a9",
-      "message": "feat(llm): add provider-specific default request timeout",
+      "commit_hash": "eaf7533",
+      "message": "feat(core): integrate provider-specific default timeouts\n\n- Import `resolve_default_request_timeout` from providers.base - Use\nprovider's default timeout as fallback for per-file timeout instead of\nhardcoded 5.0 - This allows different LLM providers to specify\nappropriate request timeouts, improving reliability and performance\nacross providers",
       "error": null,
-      "file_path": "kcmt/llm.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "d3641c5",
-      "message": "feat(anthropic): use default request timeout resolution\n\nUpdate AnthropicDriver to use resolve_default_request_timeout from base\nmodule instead of hardcoded 5.0 seconds. This allows for provider-\nspecific timeout defaults, improving configurability and consistency\nacross LLM providers.",
-      "error": null,
-      "file_path": "kcmt/providers/anthropic_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "4dd71a8",
-      "message": "feat(providers): add default timeouts for providers\n\nIntroduce DEFAULT_PROVIDER_TIMEOUTS dict with predefined timeout values\nfor openai (5.0s), github (5.0s), xai (12.0s), and anthropic (12.0s).\nAdd resolve_default_request_timeout function to retrieve the timeout for\na given provider, defaulting to 5.0s if not specified or unknown. This\nimproves handling of varying response times across providers.",
-      "error": null,
-      "file_path": "kcmt/providers/base.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "6deadca",
-      "message": "feat(providers): add dynamic default request timeout resolution\n\nPreviously, the OpenAI driver hardcoded the default request timeout to\n5.0 seconds. Now, it uses the resolve_default_request_timeout function\nto determine the default based on the provider, allowing for more\nflexible timeout handling.",
-      "error": null,
-      "file_path": "kcmt/providers/openai_driver.py"
+      "file_path": "kcmt/core.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "chore(config): update last run log after execution",
-    "feat(llm): add provider-specific default request timeout",
-    "feat(anthropic): use default request timeout resolution",
-    "feat(providers): add default timeouts for providers",
-    "feat(providers): add dynamic default request timeout resolution"
+    "chore(config): update last run log with execution results",
+    "feat(core): integrate provider-specific default timeouts"
   ],
   "stats": {
-    "total_files": 5,
-    "prepared": 5,
-    "processed": 5,
-    "successes": 5,
+    "total_files": 2,
+    "prepared": 2,
+    "processed": 2,
+    "successes": 2,
     "failures": 0,
-    "elapsed": 11.057642,
-    "rate": 0.452176
+    "elapsed": 3.854651,
+    "rate": 0.518854
   },
   "auto_push_state": ""
 }
