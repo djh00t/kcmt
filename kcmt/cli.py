@@ -54,6 +54,12 @@ RED = "\033[91m"
 class DecimalFriendlyJSONEncoder(json.JSONEncoder):
     """JSON encoder that renders floats without scientific notation."""
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+        indent = kwargs.get("indent")
+        if isinstance(indent, int):
+            kwargs["indent"] = " " * indent
+        super().__init__(*args, **kwargs)
+
     def iterencode(
         self, o: Any, _one_shot: bool = False
     ) -> Iterator[str]:  # noqa: N802 - match json API
@@ -461,17 +467,54 @@ Examples:
         provider = args.provider or self._prompt_provider(detected)
 
         provider_meta = DEFAULT_MODELS[provider]
-        model = args.model or self._prompt_model(provider, provider_meta["model"])
+        # Rich model selection with pricing, but remain compatible with freeform
+        # manual entry used by tests and power users.
+        model = args.model or self._prompt_model_with_menu(
+            provider, provider_meta["model"]
+        )
         endpoint = args.endpoint or self._prompt_endpoint(
             provider, provider_meta["endpoint"]
         )
         api_key_env = args.api_key_env or self._prompt_api_key_env(provider, detected)
+
+        # Optional secondary configuration block
+        sec_provider: Optional[str] = None
+        sec_model: Optional[str] = None
+        sec_endpoint: Optional[str] = None
+        sec_api_key_env: Optional[str] = None
+
+        is_non_interactive = bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
+        choice = ""
+        if not is_non_interactive:
+            try:
+                choice = (
+                    input(
+                        f"{MAGENTA}Configure a secondary provider?{RESET} [y/N]: "
+                    )
+                    .strip()
+                    .lower()
+                )
+            except EOFError:
+                choice = ""
+        if choice in {"y", "yes"}:
+            # Exclude already chosen provider from the quick list indicator,
+            # but still allow selecting it if user insists.
+            self._print_heading("Secondary provider")
+            sec_provider = self._prompt_provider(detected)
+            sec_meta = DEFAULT_MODELS[sec_provider]
+            sec_model = self._prompt_model_with_menu(sec_provider, sec_meta["model"])
+            sec_endpoint = self._prompt_endpoint(sec_provider, sec_meta["endpoint"])
+            sec_api_key_env = self._prompt_api_key_env(sec_provider, detected)
 
         config = Config(
             provider=provider,
             model=model,
             llm_endpoint=endpoint,
             api_key_env=api_key_env,
+            secondary_provider=sec_provider,
+            secondary_model=sec_model,
+            secondary_llm_endpoint=sec_endpoint,
+            secondary_api_key_env=sec_api_key_env,
             git_repo_path=str(repo_root.expanduser().resolve(strict=False)),
         )
         save_config(config, repo_root)
@@ -515,6 +558,52 @@ Examples:
         prompt = f"{MAGENTA}Model for {provider}{RESET} [{default_model}]: "
         response = input(prompt).strip()
         return response or default_model
+
+    def _prompt_model_with_menu(self, provider: str, default_model: str) -> str:
+        """Display a short model list with pricing; accept manual entry.
+
+        Compatible with tests: if user types a freeform value (e.g. 'my-model'),
+        it is accepted directly.
+        """
+        # Try to fetch models (enriched with pricing). Fall back to a simple
+        # prompt if anything goes sideways.
+        try:
+            models = self._list_enriched_models_for_provider(provider)
+        except Exception:  # noqa: BLE001 - Non-fatal; revert to simple prompt
+            models = []
+
+        if not models:
+            return self._prompt_model(provider, default_model)
+
+        # Prefer cheapest completion token price, then cheapest prompt price
+        def _price_key(m: dict[str, Any]) -> tuple[float, float, str]:
+            outp = float(m.get("output_price_per_mtok") or 1e12)
+            inp = float(m.get("input_price_per_mtok") or 1e12)
+            return (outp, inp, str(m.get("id", "")))
+
+        models_sorted = sorted(models, key=_price_key)
+
+        self._print_heading(f"Models for {provider} (per 1M tokens)")
+        # Render a compact board (top N entries) to keep it readable.
+        preview = models_sorted[:25]
+        self._print_models_table(provider, preview, default_model)
+
+        # Accept number or free-form entry
+        try:
+            choice = input(
+                f"{MAGENTA}Select model number or type id{RESET} "
+                f"[{default_model}]: "
+            ).strip()
+        except EOFError:
+            choice = ""
+        if not choice:
+            return default_model
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(preview):
+                return str(preview[idx].get("id", default_model))
+        # Treat as explicit model id
+        return choice
 
     def _prompt_endpoint(self, provider: str, default_endpoint: str) -> str:
         prompt = f"{MAGENTA}Endpoint for {provider}{RESET} [{default_endpoint}]: "
@@ -737,15 +826,204 @@ Examples:
                 ):
                     out[prov] = {"error": str(e)}
 
-        print(
-            json.dumps(
-                out,
-                indent=2,
-                ensure_ascii=False,
-                cls=DecimalFriendlyJSONEncoder,
+        # If debug flag is set, preserve the raw JSON output for tooling.
+        if getattr(args, "debug", False):
+            print(
+                json.dumps(
+                    out,
+                    indent=2,
+                    ensure_ascii=False,
+                    cls=DecimalFriendlyJSONEncoder,
+                )
             )
-        )
+            return 0
+
+        # Otherwise render a pricing comparison board across providers
+        self._print_heading("Model Pricing (per 1M tokens)")
+        self._print_pricing_board(out)
         return 0
+
+    # ------------------------------------------------------------------
+    # Discovery/formatting helpers for models & pricing
+    # ------------------------------------------------------------------
+    def _list_enriched_models_for_provider(self, prov: str) -> list[dict[str, Any]]:
+        """Return enriched models for one provider, tolerating missing keys.
+
+        Uses driver.list_models() when possible, with dataset fallback mirroring
+        the --list-models path, and includes pricing enrichment.
+        """
+        from .providers.anthropic_driver import AnthropicDriver
+        from .providers.base import BaseDriver
+        from .providers.openai_driver import OpenAIDriver
+        from .providers.xai_driver import XAIDriver
+
+        overrides: dict[str, str] = {"provider": prov}
+        try:
+            cfg = load_config(overrides=overrides)
+        except Exception:  # noqa: BLE001
+            # Minimal config if config load has issues
+            meta = DEFAULT_MODELS.get(prov, {})
+            cfg = Config(
+                provider=prov,
+                model=str(meta.get("model", "")),
+                llm_endpoint=str(meta.get("endpoint", "")),
+                api_key_env=str(meta.get("api_key_env", "")),
+            )
+
+        driver: BaseDriver
+        if prov == "openai":
+            driver = OpenAIDriver(cfg, debug=False)
+        elif prov == "xai":
+            driver = XAIDriver(cfg, debug=False)
+        else:
+            driver = AnthropicDriver(cfg, debug=False)
+
+        try:
+            models = driver.list_models()
+        except Exception:  # noqa: BLE001
+            # Fallback matching CLI --list-models semantics
+            try:
+                from .providers.pricing import build_enrichment_context as _bctx
+                from .providers.pricing import enrich_ids as _enrich
+
+                alias_lut, _ctx, _mx = _bctx()
+                ids: list[str] = []
+                seen: set[str] = set()
+                for (p, mid), canon in alias_lut.items():
+                    if p != prov:
+                        continue
+                    for candidate in (str(canon), str(mid)):
+                        if candidate and candidate not in seen:
+                            ids.append(candidate)
+                            seen.add(candidate)
+                if prov == "openai":
+                    ids = [mm for mm in ids if OpenAIDriver.is_allowed_model_id(mm)]
+                elif prov == "xai":
+                    ids = [mm for mm in ids if XAIDriver.is_allowed_model_id(mm)]
+                elif prov == "anthropic":
+                    ids = [mm for mm in ids if AnthropicDriver.is_allowed_model_id(mm)]
+                emap = _enrich(prov, ids)
+                out_list: list[dict[str, Any]] = []
+                for mid in ids:
+                    em = emap.get(mid) or {}
+                    if not em or not em.get("_has_pricing", False):
+                        continue
+                    payload = dict(em)
+                    payload.pop("_has_pricing", None)
+                    out_list.append({"id": mid, "owned_by": prov, **payload})
+                models = out_list
+            except Exception:  # noqa: BLE001
+                models = []
+
+        # Ensure pricing presence
+        filtered: list[dict[str, Any]] = []
+        for m in models:
+            em_flag = m.get("input_price_per_mtok") or m.get("output_price_per_mtok")
+            if em_flag is None:
+                continue
+            filtered.append(m)
+        return filtered
+
+    def _fmt_money(self, value: Any) -> str:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        # For small values, keep four decimals; otherwise two.
+        if v < 1.0:
+            return f"${v:.4f}"
+        return f"${v:.2f}"
+
+    def _print_models_table(
+        self, provider: str, models: list[dict[str, Any]], default_model: str
+    ) -> None:
+        rows: list[tuple[str, str, str, str, str]] = []
+        for idx, m in enumerate(models, start=1):
+            mid = str(m.get("id", ""))
+            inp = self._fmt_money(m.get("input_price_per_mtok"))
+            outp = self._fmt_money(m.get("output_price_per_mtok"))
+            ctx = m.get("total_context") or m.get("context") or m.get("context_window")
+            ctxs = f"{int(ctx):,}" if isinstance(ctx, int) else "-"
+            marker = "*" if mid == default_model else " "
+            rows.append((str(idx), marker, mid, f"{inp}/{outp}", ctxs))
+
+        # Compute widths
+        w_idx = max((len(r[0]) for r in rows), default=1)
+        w_mrk = 1
+        w_mid = max((len(r[2]) for r in rows), default=5)
+        w_price = max((len(r[3]) for r in rows), default=11)
+        w_ctx = max((len(r[4]) for r in rows), default=7)
+
+        header = (
+            f"  {'#':>{w_idx}}  {'':{w_mrk}}  {'model':<{w_mid}}  "
+            f"{'in/out per MTok':<{w_price}}  {'ctx':>{w_ctx}}"
+        )
+        print(CYAN + header + RESET)
+        for r in rows:
+            line = (
+                f"  {r[0]:>{w_idx}}  {r[1]:{w_mrk}}  {r[2]:<{w_mid}}  "
+                f"{r[3]:<{w_price}}  {r[4]:>{w_ctx}}"
+            )
+            print(line)
+
+    def _print_pricing_board(self, data: dict[str, Any]) -> None:
+        # Build combined rows across providers
+        combined: list[tuple[str, str, float | None, float | None, int | None, int | None]] = []
+        for prov, items in data.items():
+            if not isinstance(items, list):
+                continue
+            for m in items:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    mid = str(m.get("id", ""))
+                    inp = m.get("input_price_per_mtok")
+                    outp = m.get("output_price_per_mtok")
+                    if inp is None and outp is None:
+                        continue
+                    ctx = m.get("total_context") or m.get("context") or m.get("context_window")
+                    ctxi = int(ctx) if isinstance(ctx, int) else None
+                    mx = m.get("max_output")
+                    mxi = int(mx) if isinstance(mx, int) else None
+                    combined.append((prov, mid, inp, outp, ctxi, mxi))
+                except Exception:  # noqa: BLE001
+                    continue
+
+        # Sort by output price then input price
+        def _key(row: tuple[str, str, Any, Any, Any, Any]) -> tuple[float, float, str]:
+            inp = float(row[2]) if isinstance(row[2], (int, float)) else 1e12
+            outp = float(row[3]) if isinstance(row[3], (int, float)) else 1e12
+            return (outp, inp, row[1])
+
+        combined.sort(key=_key)
+
+        # Limit output to reasonable number
+        view = combined[:60]
+
+        # Compute dynamic widths
+        w_prov = max((len(r[0]) for r in view), default=8)
+        w_mid = max((len(r[1]) for r in view), default=10)
+        w_in = max((len(self._fmt_money(r[2])) for r in view), default=4)
+        w_out = max((len(self._fmt_money(r[3])) for r in view), default=4)
+        w_ctx = max((len(f"{r[4]:,}") if r[4] else 1 for r in view), default=3)
+        w_mx = max((len(str(r[5])) if r[5] else 1 for r in view), default=2)
+
+        header = (
+            f"  {'provider':<{w_prov}}  {'model':<{w_mid}}  "
+            f"{'input/MTok':>{w_in}}  {'output/MTok':>{w_out}}  "
+            f"{'ctx':>{w_ctx}}  {'max_out':>{w_mx}}"
+        )
+        print(CYAN + header + RESET)
+        for r in view:
+            prov, mid, inp, outp, ctx, mx = r
+            ctxs = f"{ctx:,}" if isinstance(ctx, int) else "-"
+            mxs = f"{mx}" if isinstance(mx, int) else "-"
+            line = (
+                f"  {prov:<{w_prov}}  {mid:<{w_mid}}  "
+                f"{self._fmt_money(inp):>{w_in}}  {self._fmt_money(outp):>{w_out}}  "
+                f"{ctxs:>{w_ctx}}  {mxs:>{w_mx}}"
+            )
+            print(line)
 
     def _execute_single_file(self, args: argparse.Namespace, config: Config) -> int:
         file_path = args.single_file
