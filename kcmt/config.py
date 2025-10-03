@@ -59,7 +59,7 @@ class Config:
     secondary_api_key_env: str | None = None
     git_repo_path: str = "."
     max_commit_length: int = 72
-    auto_push: bool = False
+    auto_push: bool = True
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -115,8 +115,8 @@ def load_persisted_config(
         return None
     data = json.loads(cfg_path.read_text())
     data.pop("allow_fallback", None)
-    if "auto_push" not in data:  # backward compat
-        data["auto_push"] = False
+    if "auto_push" not in data:  # backward compat; now default is True
+        data["auto_push"] = True
     resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
     resolved_root = _ensure_path(resolved_root)
     git_path = data.get("git_repo_path")
@@ -253,7 +253,7 @@ def load_config(
     elif auto_push_env:
         auto_push = auto_push_env.lower() in {"1", "true", "yes", "on"}
     else:
-        auto_push = False
+        auto_push = True
 
     config = Config(
         provider=provider,
