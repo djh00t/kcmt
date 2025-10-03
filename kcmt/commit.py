@@ -4,7 +4,7 @@ import inspect
 import re
 from typing import Optional
 
-from .config import Config, get_active_config
+from .config import Config, DEFAULT_MODELS, get_active_config
 from .exceptions import LLMError, ValidationError
 from .git import GitRepo
 from .llm import LLMClient
@@ -39,6 +39,117 @@ class CommitGenerator:
         self.git_repo = GitRepo(repo_path, self._config)
         self.llm_client = LLMClient(self._config, debug=debug)
         self.debug = debug
+
+    # ----------------------------
+    # Secondary provider fallback
+    # ----------------------------
+    def _build_secondary_config(self) -> Config | None:
+        """Construct a secondary Config from persisted secondary fields.
+
+        Returns None if no secondary provider configured.
+        """
+        sec_prov = getattr(self._config, "secondary_provider", None)
+        if not sec_prov:
+            return None
+        defaults = DEFAULT_MODELS.get(sec_prov, {})
+        sec_model = getattr(self._config, "secondary_model", None) or defaults.get(
+            "model"
+        )
+        sec_endpoint = (
+            getattr(self._config, "secondary_llm_endpoint", None)
+            or defaults.get("endpoint")
+            or ""
+        )
+        sec_key_env = (
+            getattr(self._config, "secondary_api_key_env", None)
+            or defaults.get("api_key_env")
+            or ""
+        )
+        # Mirror other properties from primary config
+        return Config(
+            provider=sec_prov,
+            model=str(sec_model or ""),
+            llm_endpoint=str(sec_endpoint or ""),
+            api_key_env=str(sec_key_env or ""),
+            git_repo_path=self._config.git_repo_path,
+            max_commit_length=self._config.max_commit_length,
+            auto_push=self._config.auto_push,
+        )
+
+    def _attempt_with_client(
+        self,
+        client: LLMClient,
+        diff: str,
+        context: str,
+        style: str,
+        request_timeout: float | None,
+    ) -> str:
+        last_error: Exception | None = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            if self.debug:
+                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
+                print(
+                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
+                        attempt, len(diff), truncated_ctx
+                    )
+                )
+            try:
+                generate_fn = client.generate_commit_message
+                if request_timeout is not None and _supports_request_timeout(
+                    generate_fn
+                ):
+                    msg = generate_fn(
+                        diff,
+                        context,
+                        style,
+                        request_timeout=request_timeout,
+                    )
+                else:
+                    msg = generate_fn(diff, context, style)
+                if request_timeout is not None and "request_timeout" not in getattr(
+                    getattr(generate_fn, "__code__", {}), "co_varnames", ()
+                ):
+                    pass
+                if not msg or not msg.strip():
+                    raise LLMError("LLM returned empty response")
+                if not self.validate_conventional_commit(msg):
+                    if self.debug:
+                        invalid_header = msg.splitlines()[0][:120]
+                        print(
+                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
+                                attempt, invalid_header
+                            )
+                        )
+                    if attempt < max_attempts:
+                        continue
+                    raise LLMError(
+                        (
+                            "LLM produced invalid commit message after {} attempts"
+                        ).format(max_attempts)
+                    )
+                if self.debug:
+                    print(
+                        "DEBUG: commit.valid attempt={} header='{}'".format(
+                            attempt, msg.splitlines()[0]
+                        )
+                    )
+                return msg
+            except LLMError as e:
+                last_error = e
+                if self.debug:
+                    print(
+                        "DEBUG: commit.error attempt={} error='{}'".format(
+                            attempt, str(e)[:200]
+                        )
+                    )
+                if attempt < max_attempts:
+                    continue
+        raise LLMError(
+            (
+                "LLM unavailable or invalid output after {} attempts; commit aborted"
+            ).format(3)
+        ) from last_error
 
     def generate_from_staged(
         self, context: str = "", style: str = "conventional"
@@ -121,73 +232,42 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
-        last_error: Exception | None = None
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
+        # First try primary provider
+        try:
+            return self._attempt_with_client(
+                self.llm_client, diff, context, style, request_timeout
+            )
+        except LLMError as primary_error:
+            # Try secondary provider if configured and key available
+            sec_cfg = self._build_secondary_config()
             if self.debug:
-                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
                 print(
-                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
-                        attempt, len(diff), truncated_ctx
+                    "DEBUG: primary provider failed; evaluating secondary fallback"
+                )
+            if not sec_cfg or not sec_cfg.resolve_api_key():
+                raise primary_error
+            try:
+                secondary_client = LLMClient(sec_cfg, debug=self.debug)
+            except LLMError:
+                # Missing key or bad config; no fallback
+                raise primary_error
+            if self.debug:
+                print(
+                    "DEBUG: attempting secondary provider '{}' model '{}'".format(
+                        sec_cfg.provider, sec_cfg.model
                     )
                 )
             try:
-                generate_fn = self.llm_client.generate_commit_message
-                if request_timeout is not None and _supports_request_timeout(
-                    generate_fn
-                ):
-                    msg = generate_fn(
-                        diff,
-                        context,
-                        style,
-                        request_timeout=request_timeout,
-                    )
-                else:
-                    msg = generate_fn(diff, context, style)
-                if request_timeout is not None and "request_timeout" not in getattr(
-                    getattr(generate_fn, "__code__", {}), "co_varnames", ()
-                ):
-                    pass
-                if not msg or not msg.strip():
-                    raise LLMError("LLM returned empty response")
-                # Validate format; if invalid, try again (unless final)
-                if not self.validate_conventional_commit(msg):
-                    if self.debug:
-                        invalid_header = msg.splitlines()[0][:120]
-                        print(
-                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
-                                attempt, invalid_header
-                            )
-                        )
-                    if attempt < max_attempts:
-                        continue
-                    raise LLMError(
-                        (
-                            "LLM produced invalid commit message after {} attempts"
-                        ).format(max_attempts)
-                    )
-                if self.debug:
-                    print(
-                        "DEBUG: commit.valid attempt={} header='{}'".format(
-                            attempt, msg.splitlines()[0]
-                        )
-                    )
-                return msg
-            except LLMError as e:
-                last_error = e
-                if self.debug:
-                    print(
-                        "DEBUG: commit.error attempt={} error='{}'".format(
-                            attempt, str(e)[:200]
-                        )
-                    )
-                if attempt < max_attempts:
-                    continue
-        raise LLMError(
-            (
-                "LLM unavailable or invalid output after {} attempts; commit aborted"
-            ).format(max_attempts)
-        ) from last_error
+                return self._attempt_with_client(
+                    secondary_client, diff, context, style, request_timeout
+                )
+            except LLMError as secondary_error:
+                # Chain both errors for context
+                combined = LLMError(
+                    "Primary provider failed; secondary provider failed as well"
+                )
+                combined.__cause__ = secondary_error
+                raise combined from primary_error
 
     async def suggest_commit_message_async(
         self,
@@ -199,68 +279,99 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
-        last_error: Exception | None = None
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            if self.debug:
-                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
-                print(
-                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
-                        attempt, len(diff), truncated_ctx
+        # Primary attempt (async)
+        async def _attempt_async(client: LLMClient) -> str:
+            last_error: Exception | None = None
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                if self.debug:
+                    truncated_ctx = context[:120] + "…" if len(context) > 120 else context
+                    print(
+                        "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
+                            attempt, len(diff), truncated_ctx
+                        )
                     )
-                )
-            try:
-                generate_fn = self.llm_client.generate_commit_message_async
-                if request_timeout is not None and _supports_request_timeout(
-                    generate_fn
-                ):
-                    msg = await generate_fn(
-                        diff,
-                        context,
-                        style,
-                        request_timeout=request_timeout,
-                    )
-                else:
-                    msg = await generate_fn(diff, context, style)
-                if not msg or not msg.strip():
-                    raise LLMError("LLM returned empty response")
-                if not self.validate_conventional_commit(msg):
+                try:
+                    generate_fn = client.generate_commit_message_async
+                    if request_timeout is not None and _supports_request_timeout(
+                        generate_fn
+                    ):
+                        msg = await generate_fn(
+                            diff,
+                            context,
+                            style,
+                            request_timeout=request_timeout,
+                        )
+                    else:
+                        msg = await generate_fn(diff, context, style)
+                    if not msg or not msg.strip():
+                        raise LLMError("LLM returned empty response")
+                    if not self.validate_conventional_commit(msg):
+                        if self.debug:
+                            invalid_header = msg.splitlines()[0][:120]
+                            print(
+                                (
+                                    "DEBUG: commit.invalid_format attempt={} msg='{}'"
+                                ).format(attempt, invalid_header)
+                            )
+                        if attempt < max_attempts:
+                            continue
+                        raise LLMError(
+                            (
+                                "LLM produced invalid commit message after {} attempts"
+                            ).format(max_attempts)
+                        )
                     if self.debug:
-                        invalid_header = msg.splitlines()[0][:120]
                         print(
-                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
-                                attempt, invalid_header
+                            "DEBUG: commit.valid attempt={} header='{}'".format(
+                                attempt, msg.splitlines()[0]
+                            )
+                        )
+                    return msg
+                except LLMError as e:
+                    last_error = e
+                    if self.debug:
+                        print(
+                            "DEBUG: commit.error attempt={} error='{}'".format(
+                                attempt, str(e)[:200]
                             )
                         )
                     if attempt < max_attempts:
                         continue
-                    raise LLMError(
-                        (
-                            "LLM produced invalid commit message after {} attempts"
-                        ).format(max_attempts)
+            raise LLMError(
+                (
+                    "LLM unavailable or invalid output after {} attempts; commit aborted"
+                ).format(3)
+            ) from last_error
+
+        try:
+            return await _attempt_async(self.llm_client)
+        except LLMError as primary_error:
+            sec_cfg = self._build_secondary_config()
+            if self.debug:
+                print(
+                    "DEBUG: primary provider failed(async); evaluating secondary fallback"
+                )
+            if not sec_cfg or not sec_cfg.resolve_api_key():
+                raise primary_error
+            try:
+                secondary_client = LLMClient(sec_cfg, debug=self.debug)
+            except LLMError:
+                raise primary_error
+            if self.debug:
+                print(
+                    "DEBUG: attempting secondary provider '{}' model '{}' (async)".format(
+                        sec_cfg.provider, sec_cfg.model
                     )
-                if self.debug:
-                    print(
-                        "DEBUG: commit.valid attempt={} header='{}'".format(
-                            attempt, msg.splitlines()[0]
-                        )
-                    )
-                return msg
-            except LLMError as e:
-                last_error = e
-                if self.debug:
-                    print(
-                        "DEBUG: commit.error attempt={} error='{}'".format(
-                            attempt, str(e)[:200]
-                        )
-                    )
-                if attempt < max_attempts:
-                    continue
-        raise LLMError(
-            (
-                "LLM unavailable or invalid output after {} attempts; commit aborted"
-            ).format(max_attempts)
-        ) from last_error
+                )
+            try:
+                return await _attempt_async(secondary_client)
+            except LLMError as secondary_error:
+                combined = LLMError(
+                    "Primary provider failed; secondary provider failed as well"
+                )
+                combined.__cause__ = secondary_error
+                raise combined from primary_error
 
     def validate_conventional_commit(self, message: str) -> bool:
         """Validate if a commit message follows conventional commit format.
