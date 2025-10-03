@@ -160,6 +160,33 @@ class LLMClient:
                     prompt, request_timeout=request_timeout
                 )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
+            # For gpt-5 models, fall back to simplified system prompt
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode == "openai"
+                and self.model.startswith("gpt-5")
+            ):
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry -> forcing simple gpt-5 system prompt"
+                    )
+                retry_raw = self._call_openai(
+                    prompt, request_timeout=request_timeout, force_simple=True
+                )
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
+            # Apply equivalent simplified prompt retry for non-OpenAI providers
+            if "missing conventional commit header" in str(e) and self._mode != "openai":
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry -> simplified prompt for provider '{}'".format(
+                            self.provider
+                        )
+                    )
+                simple_prompt = self._build_prompt(cleaned_diff, context, "simple")
+                retry_raw = self._call_provider(
+                    simple_prompt, request_timeout=request_timeout
+                )
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
     async def generate_commit_message_async(
@@ -192,6 +219,31 @@ class LLMClient:
                     print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
                 retry_raw = await self._call_provider_async(
                     prompt, request_timeout=request_timeout
+                )
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode == "openai"
+                and self.model.startswith("gpt-5")
+            ):
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry(async) -> forcing simple gpt-5 system prompt"
+                    )
+                retry_raw = await self._call_openai_async(
+                    prompt, request_timeout=request_timeout, force_simple=True
+                )
+                return self._postprocess_message(retry_raw, cleaned_diff, context)
+            if "missing conventional commit header" in str(e) and self._mode != "openai":
+                if self.debug:
+                    print(
+                        "DEBUG: sanitize.retry(async) -> simplified prompt for provider '{}'".format(
+                            self.provider
+                        )
+                    )
+                simple_prompt = self._build_prompt(cleaned_diff, context, "simple")
+                retry_raw = await self._call_provider_async(
+                    simple_prompt, request_timeout=request_timeout
                 )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
@@ -328,7 +380,11 @@ class LLMClient:
     # Provider calls
     # ------------------------------------------------------------------
     def _call_openai(
-        self, prompt: str, request_timeout: float | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        *,
+        force_simple: bool = False,
     ) -> str:
         """Delegate OpenAI-like provider call to the driver.
 
@@ -341,8 +397,13 @@ class LLMClient:
         if self._mode != "openai":  # defensive
             raise LLMError("_call_openai invoked for non-openai provider")
         # Build messages (system + user) based on current minimal_prompt flag
-        messages = self._build_messages(prompt)
-        minimal_allowed = not self.model.startswith("gpt-5")
+        # Optionally force a simplified system prompt (e.g., gpt-5 sanitize retry)
+        if force_simple and self.model.startswith("gpt-5"):
+            messages = self._build_messages_simple_gpt5(prompt)
+            minimal_allowed = False
+        else:
+            messages = self._build_messages(prompt)
+            minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
         invoke_kwargs = {
             "messages": messages,
@@ -351,7 +412,7 @@ class LLMClient:
         if request_timeout is not None:
             invoke_kwargs["request_timeout"] = request_timeout
         try:
-            content = driver.invoke_messages(**invoke_kwargs)
+                content = driver.invoke_messages(**invoke_kwargs)
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -397,14 +458,22 @@ class LLMClient:
         return content
 
     async def _call_openai_async(
-        self, prompt: str, request_timeout: float | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        *,
+        force_simple: bool = False,
     ) -> str:
         if os.environ.get("KCMT_TEST_DISABLE_OPENAI"):
             return "feat(test): stubbed commit message"
         if self._mode != "openai":  # defensive
             raise LLMError("_call_openai_async invoked for non-openai provider")
-        messages = self._build_messages(prompt)
-        minimal_allowed = not self.model.startswith("gpt-5")
+        if force_simple and self.model.startswith("gpt-5"):
+            messages = self._build_messages_simple_gpt5(prompt)
+            minimal_allowed = False
+        else:
+            messages = self._build_messages(prompt)
+            minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
         invoke_kwargs = {
             "messages": messages,
