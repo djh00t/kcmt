@@ -15,6 +15,7 @@ from .commit import CommitGenerator
 from .config import Config, get_active_config
 from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
 from .git import GitRepo
+from .providers.base import resolve_default_request_timeout
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -425,12 +426,17 @@ class KlingonCMTWorkflow:
         )
 
         per_file_timeout_env = os.environ.get("KCMT_PREPARE_PER_FILE_TIMEOUT")
+        provider_default_timeout = resolve_default_request_timeout(
+            getattr(self._config, "provider", None)
+        )
         try:
             per_file_timeout = (
-                float(per_file_timeout_env) if per_file_timeout_env else 5.0
+                float(per_file_timeout_env)
+                if per_file_timeout_env
+                else provider_default_timeout
             )
         except ValueError:
-            per_file_timeout = 5.0
+            per_file_timeout = provider_default_timeout
 
         timeout_retry_limit = 3
         timeout_attempt_limit = timeout_retry_limit + 1
