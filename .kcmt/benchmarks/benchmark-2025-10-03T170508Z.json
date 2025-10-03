@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "timestamp": "2025-10-03T17:05:08Z",
+  "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
+  "params": {
+    "limit": 5,
+    "timeout": null
+  },
+  "results": [
+    {
+      "provider": "openai",
+      "model": "gpt-5-codex",
+      "avg_latency_ms": 2329.2777,
+      "avg_cost_usd": 0.000083,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "avg_latency_ms": 2025.9353,
+      "avg_cost_usd": 0.000124,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "avg_latency_ms": 2095.894358,
+      "avg_cost_usd": 0.000025,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-4.1-nano",
+      "avg_latency_ms": 2123.237642,
+      "avg_cost_usd": 0.000006,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5-chat-latest",
+      "avg_latency_ms": 2016.013591,
+      "avg_cost_usd": 0.000083,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5-20250929",
+      "avg_latency_ms": 362.272433,
+      "avg_cost_usd": 0.00019,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "avg_latency_ms": 390.825308,
+      "avg_cost_usd": 0.00019,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-3-7-sonnet-20250219",
+      "avg_latency_ms": 416.648558,
+      "avg_cost_usd": 0.00019,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-3-5-haiku-20241022",
+      "avg_latency_ms": 458.472625,
+      "avg_cost_usd": 0.000051,
+      "quality": 0.0,
+      "success_rate": 0.0,
+      "runs": 5
+    },
+    {
+      "provider": "xai",
+      "model": "grok-3",
+      "avg_latency_ms": 1137.510316,
+      "avg_cost_usd": 0.000472,
+      "quality": 53.8,
+      "success_rate": 1.0,
+      "runs": 5
+    },
+    {
+      "provider": "xai",
+      "model": "grok-3-mini",
+      "avg_latency_ms": 5680.12715,
+      "avg_cost_usd": 0.000025,
+      "quality": 53.8,
+      "success_rate": 1.0,
+      "runs": 5
+    },
+    {
+      "provider": "xai",
+      "model": "grok-4-0709",
+      "avg_latency_ms": 20270.028691,
+      "avg_cost_usd": 0.000475,
+      "quality": 57.8,
+      "success_rate": 1.0,
+      "runs": 5
+    },
+    {
+      "provider": "xai",
+      "model": "grok-code-fast-1",
+      "avg_latency_ms": 3638.662733,
+      "avg_cost_usd": 0.000049,
+      "quality": 53.8,
+      "success_rate": 1.0,
+      "runs": 5
+    }
+  ]
+}
