@@ -1,85 +1,142 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-03T14:22:31Z",
+  "timestamp": "2025-10-03T17:37:43Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "xai",
-  "model": "grok-code-fast",
-  "endpoint": "https://api.x.ai/v1",
+  "provider": "anthropic",
+  "model": "claude-3-5-haiku-20241022",
+  "endpoint": "https://api.anthropic.com",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 19.131029,
-  "rate_commits_per_sec": 0.264319,
+  "duration_seconds": 4.567865,
+  "rate_commits_per_sec": 3.108806,
   "counts": {
-    "files_total": 5,
-    "prepared_total": 5,
-    "processed_total": 5,
+    "files_total": 14,
+    "prepared_total": 14,
+    "processed_total": 14,
     "prepared_failures": 0,
-    "commit_success": 5,
-    "commit_failure": 0,
+    "commit_success": 0,
+    "commit_failure": 14,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 5,
-    "overall_failure": 0,
+    "overall_success": 0,
+    "overall_failure": 14,
     "errors": 0
   },
   "pushed": null,
-  "summary": "Successfully completed 5 commits. Committed 5 file change(s)",
+  "summary": "No commits were made. Committed 0 file change(s)",
   "errors": [],
   "commits": [
     {
-      "success": true,
-      "commit_hash": "094d9ce",
-      "message": "feat(config): add secondary LLM provider configuration\n\nAdd support for a secondary LLM provider (OpenAI) with model, endpoint,\nand API key configuration fields. This enables fallback options for API\ncalls in case the primary provider fails.",
-      "error": null,
-      "file_path": ".kcmt/config.json"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/config.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     },
     {
-      "success": true,
-      "commit_hash": "d219c1d",
-      "message": "chore(config): update last run log after execution\n\nUpdated .kcmt/last_run.json with new timestamp, reduced file counts from\n5 to 2, updated duration and rate metrics, modified commits array to\nreflect 2 successful commits (one for the log itself and one for\ncore.py), and adjusted summary accordingly. This captures the latest\nkcmt run stats for tracking and debugging purposes.",
-      "error": null,
-      "file_path": ".kcmt/last_run.json"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     },
     {
-      "success": true,
-      "commit_hash": "f89c69c",
-      "message": "feat(cli): add interactive model selection with pricing and secondary…\n\n- Introduced _prompt_model_with_menu for menu-based model selection\ndisplaying pricing and allowing freeform entry - Added support for\noptional secondary provider configuration in _prompt_config - Enhanced\n_execute_list_models to render a formatted pricing comparison board by\ndefault, preserving raw JSON under debug flag - Added helper methods for\nfetching enriched model data with pricing, printing tables, and\nformatting monetary values to improve user experience in model selection\nand comparison",
-      "error": null,
-      "file_path": "kcmt/cli.py"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for README.md: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     },
     {
-      "success": true,
-      "commit_hash": "837e256",
-      "message": "feat(generator): add secondary provider fallback\n\nAdd support for a secondary LLM provider as a fallback when the primary\nprovider fails. This improves reliability by attempting to generate\ncommit messages with a backup configuration if the first one encounters\nerrors. Refactored the retry logic into a reusable method for better\nmaintainability.",
-      "error": null,
-      "file_path": "kcmt/commit.py"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/cli.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     },
     {
-      "success": true,
-      "commit_hash": "cb06138",
-      "message": "feat(config): add optional secondary provider config fields\n\nAdd secondary provider, model, endpoint, and API key environment fields\nto Config class for future fallback and experimentation. These are not\ncurrently used in the workflow but are persisted and exposed via the\nconfiguration wizard.",
-      "error": null,
-      "file_path": "kcmt/config.py"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/config.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/llm.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T145836Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T153625Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T163932Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T170508Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T171337Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T171806Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/env.example: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/benchmark.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     }
   ],
   "deletions": [],
-  "subjects": [
-    "feat(config): add secondary LLM provider configuration",
-    "chore(config): update last run log after execution",
-    "feat(cli): add interactive model selection with pricing and secondary…",
-    "feat(generator): add secondary provider fallback",
-    "feat(config): add optional secondary provider config fields"
-  ],
+  "subjects": [],
   "stats": {
-    "total_files": 5,
-    "prepared": 5,
-    "processed": 5,
-    "successes": 5,
-    "failures": 0,
-    "elapsed": 18.916561,
-    "rate": 0.264319
+    "total_files": 14,
+    "prepared": 14,
+    "processed": 14,
+    "successes": 0,
+    "failures": 14,
+    "elapsed": 4.503337,
+    "rate": 3.108806
   },
   "auto_push_state": ""
 }
