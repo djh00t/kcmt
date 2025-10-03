@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-03T14:00:21Z",
+  "timestamp": "2025-10-03T14:22:31Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast",
@@ -8,54 +8,78 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 4.076032,
-  "rate_commits_per_sec": 0.518854,
+  "duration_seconds": 19.131029,
+  "rate_commits_per_sec": 0.264319,
   "counts": {
-    "files_total": 2,
-    "prepared_total": 2,
-    "processed_total": 2,
+    "files_total": 5,
+    "prepared_total": 5,
+    "processed_total": 5,
     "prepared_failures": 0,
-    "commit_success": 2,
+    "commit_success": 5,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 2,
+    "overall_success": 5,
     "overall_failure": 0,
     "errors": 0
   },
   "pushed": null,
-  "summary": "Successfully completed 2 commits. Committed 2 file change(s)",
+  "summary": "Successfully completed 5 commits. Committed 5 file change(s)",
   "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "c819e53",
-      "message": "chore(config): update last run log with execution results\n\nUpdated timestamp, duration, and stats to reflect processing of 5 files\nwith 5 successful commits. Expanded commits array to include details of\nall generated commits, updated summary and subjects accordingly, and\nimproved rate metrics. This log captures the latest kcmt run execution\nfor tracking and debugging purposes.",
+      "commit_hash": "094d9ce",
+      "message": "feat(config): add secondary LLM provider configuration\n\nAdd support for a secondary LLM provider (OpenAI) with model, endpoint,\nand API key configuration fields. This enables fallback options for API\ncalls in case the primary provider fails.",
+      "error": null,
+      "file_path": ".kcmt/config.json"
+    },
+    {
+      "success": true,
+      "commit_hash": "d219c1d",
+      "message": "chore(config): update last run log after execution\n\nUpdated .kcmt/last_run.json with new timestamp, reduced file counts from\n5 to 2, updated duration and rate metrics, modified commits array to\nreflect 2 successful commits (one for the log itself and one for\ncore.py), and adjusted summary accordingly. This captures the latest\nkcmt run stats for tracking and debugging purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
     },
     {
       "success": true,
-      "commit_hash": "eaf7533",
-      "message": "feat(core): integrate provider-specific default timeouts\n\n- Import `resolve_default_request_timeout` from providers.base - Use\nprovider's default timeout as fallback for per-file timeout instead of\nhardcoded 5.0 - This allows different LLM providers to specify\nappropriate request timeouts, improving reliability and performance\nacross providers",
+      "commit_hash": "f89c69c",
+      "message": "feat(cli): add interactive model selection with pricing and secondary…\n\n- Introduced _prompt_model_with_menu for menu-based model selection\ndisplaying pricing and allowing freeform entry - Added support for\noptional secondary provider configuration in _prompt_config - Enhanced\n_execute_list_models to render a formatted pricing comparison board by\ndefault, preserving raw JSON under debug flag - Added helper methods for\nfetching enriched model data with pricing, printing tables, and\nformatting monetary values to improve user experience in model selection\nand comparison",
       "error": null,
-      "file_path": "kcmt/core.py"
+      "file_path": "kcmt/cli.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "837e256",
+      "message": "feat(generator): add secondary provider fallback\n\nAdd support for a secondary LLM provider as a fallback when the primary\nprovider fails. This improves reliability by attempting to generate\ncommit messages with a backup configuration if the first one encounters\nerrors. Refactored the retry logic into a reusable method for better\nmaintainability.",
+      "error": null,
+      "file_path": "kcmt/commit.py"
+    },
+    {
+      "success": true,
+      "commit_hash": "cb06138",
+      "message": "feat(config): add optional secondary provider config fields\n\nAdd secondary provider, model, endpoint, and API key environment fields\nto Config class for future fallback and experimentation. These are not\ncurrently used in the workflow but are persisted and exposed via the\nconfiguration wizard.",
+      "error": null,
+      "file_path": "kcmt/config.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "chore(config): update last run log with execution results",
-    "feat(core): integrate provider-specific default timeouts"
+    "feat(config): add secondary LLM provider configuration",
+    "chore(config): update last run log after execution",
+    "feat(cli): add interactive model selection with pricing and secondary…",
+    "feat(generator): add secondary provider fallback",
+    "feat(config): add optional secondary provider config fields"
   ],
   "stats": {
-    "total_files": 2,
-    "prepared": 2,
-    "processed": 2,
-    "successes": 2,
+    "total_files": 5,
+    "prepared": 5,
+    "processed": 5,
+    "successes": 5,
     "failures": 0,
-    "elapsed": 3.854651,
-    "rate": 0.518854
+    "elapsed": 18.916561,
+    "rate": 0.264319
   },
   "auto_push_state": ""
 }
