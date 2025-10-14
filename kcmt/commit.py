@@ -3,15 +3,17 @@
 import inspect
 import os
 import re
+from typing import Any
+from typing import Callable as _Callable
 from typing import Optional
 
-from .config import Config, DEFAULT_MODELS, get_active_config
+from .config import DEFAULT_MODELS, Config, get_active_config
 from .exceptions import LLMError, ValidationError
 from .git import GitRepo
 from .llm import LLMClient
 
 
-def _supports_request_timeout(callable_obj) -> bool:
+def _supports_request_timeout(callable_obj: _Callable[..., Any]) -> bool:
     try:
         signature = inspect.signature(callable_obj)
     except (TypeError, ValueError):
