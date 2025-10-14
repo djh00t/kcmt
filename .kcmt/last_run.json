@@ -1,100 +1,109 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T10:00:04Z",
+  "timestamp": "2025-10-14T10:01:36Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "openai",
-  "model": "gpt-5-mini-2025-08-07",
-  "endpoint": "https://api.openai.com/v1",
+  "provider": "xai",
+  "model": "grok-code-fast-1",
+  "endpoint": "https://api.x.ai/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 12.529831,
-  "rate_commits_per_sec": 0.655881,
+  "duration_seconds": 72.422853,
+  "rate_commits_per_sec": 0.111013,
   "counts": {
     "files_total": 8,
     "prepared_total": 8,
     "processed_total": 8,
     "prepared_failures": 0,
-    "commit_success": 0,
-    "commit_failure": 8,
+    "commit_success": 8,
+    "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 0,
-    "overall_failure": 8,
+    "overall_success": 8,
+    "overall_failure": 0,
     "errors": 0
   },
-  "pushed": null,
-  "summary": "No commits were made. Committed 0 file change(s)",
+  "pushed": true,
+  "summary": "Successfully completed 8 commits. Committed 8 file change(s)",
   "errors": [],
   "commits": [
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/config.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "13d8741",
+      "message": "refactor(config): remove secondary provider and openai preferred model\n\nRemove secondary LLM provider configuration by setting provider, model,\nendpoint, and API key environment variable to null. Also remove the\npreferred_model from the OpenAI provider configuration to simplify\nsettings and avoid outdated model references.",
+      "error": null,
+      "file_path": ".kcmt/config.json"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "17e5c99",
+      "message": "chore(kcmt): update last run results\n\nUpdated the last run log to reflect a new execution processing 8 files\ninstead of 2, with all commits failing due to LLM unavailability after 3\nattempts. Duration decreased slightly, and rate increased. This captures\nthe outcome of running kcmt on additional files including benchmark.py,\ncli.py, main.py, and provider drivers.",
+      "error": null,
+      "file_path": ".kcmt/last_run.json"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/benchmark.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "83ae652",
+      "message": "refactor(benchmark): add model count tracking and simplify code\n\nAdd provider_model_counts and total_runs variables to track model counts\nper provider and total benchmark runs. Simplify list comprehension and\ncost calculation for better readability and remove unnecessary blank\nlines.",
+      "error": null,
+      "file_path": "kcmt/benchmark.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/cli.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "ce494cb",
+      "message": "refactor(cli): add type hint and simplify filter logic\n\nAdd type annotation for providers variable and refine condition to check\nfor string type and truthiness. Simplify model_filter and\nprovider_filter assignments into concise single-line expressions for\nimproved readability.",
+      "error": null,
+      "file_path": "kcmt/cli.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/main.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "592be9b",
+      "message": "refactor(typing): remove unused type import",
+      "error": null,
+      "file_path": "kcmt/main.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/providers/openai_driver.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "794cd2a",
+      "message": "fix(openai): use timezone-aware timestamp to avoid deprecation\n\nUpdate datetime handling to use fromtimestamp with UTC timezone,\nreplacing deprecated utcfromtimestamp to prevent warnings.",
+      "error": null,
+      "file_path": "kcmt/providers/openai_driver.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/providers/xai_driver.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "041951d",
+      "message": "fix(xai): use timezone-aware UTC timestamps\n\nReplace utcfromtimestamp with fromtimestamp(tz=UTC) to ensure timestamps\nare timezone-aware, preventing potential issues with date handling in\ndifferent environments.",
+      "error": null,
+      "file_path": "kcmt/providers/xai_driver.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for tests/conftest.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "5b30829",
+      "message": "feat(tests): add mock fixture for Anthropic messages API\n\nAdd an autouse pytest fixture that intercepts httpx.post calls to\nAnthropic's messages API, returning a stubbed response to prevent real\nnetwork calls during tests that don't explicitly mock the endpoint. This\nensures test isolation while leaving other providers untouched.",
+      "error": null,
+      "file_path": "tests/conftest.py"
     }
   ],
   "deletions": [],
-  "subjects": [],
+  "subjects": [
+    "refactor(config): remove secondary provider and openai preferred model",
+    "chore(kcmt): update last run results",
+    "refactor(benchmark): add model count tracking and simplify code",
+    "refactor(cli): add type hint and simplify filter logic",
+    "refactor(typing): remove unused type import",
+    "fix(openai): use timezone-aware timestamp to avoid deprecation",
+    "fix(xai): use timezone-aware UTC timestamps",
+    "feat(tests): add mock fixture for Anthropic messages API"
+  ],
   "stats": {
     "total_files": 8,
     "prepared": 8,
     "processed": 8,
-    "successes": 0,
-    "failures": 8,
-    "elapsed": 12.197336,
-    "rate": 0.655881
+    "successes": 8,
+    "failures": 0,
+    "elapsed": 72.063738,
+    "rate": 0.111013
   },
-  "auto_push_state": ""
+  "auto_push_state": "pushed"
 }
