@@ -793,3 +793,43 @@ class OpenAIDriver(BaseDriver):
         if cls._contains_disallowed_string(model_id):
             return False
         return True
+
+    # ------------------------
+    # Resource management
+    # ------------------------
+    def close(self) -> None:  # noqa: D401
+        """Release underlying HTTP clients (sync/async) if present."""
+        http = getattr(self, "_http", None)
+        if http is not None:
+            try:
+                http.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        client = getattr(self, "_client", None)
+        if client is not None:
+            try:
+                closer = getattr(client, "close", None)
+                if callable(closer):
+                    closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        aclient = getattr(self, "_client_async", None)
+        if aclient is not None:
+            try:
+                aclose = getattr(aclient, "aclose", None)
+                if callable(aclose):
+                    try:
+                        asyncio.run(aclose())
+                    except RuntimeError:
+                        # Fallback to synchronous close if available
+                        closer = getattr(aclient, "close", None)
+                        if callable(closer):
+                            closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
