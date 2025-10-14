@@ -1,6 +1,7 @@
 """Commit message generation logic for kcmt."""
 
 import inspect
+import os
 import re
 from typing import Optional
 
@@ -39,6 +40,7 @@ class CommitGenerator:
         self.git_repo = GitRepo(repo_path, self._config)
         self.llm_client = LLMClient(self._config, debug=debug)
         self.debug = debug
+        self._memo: dict[str, str] = {}
 
     # ----------------------------
     # Secondary provider fallback
@@ -232,11 +234,60 @@ class CommitGenerator:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
 
+        # Optional within-run memoization to avoid duplicate LLM calls.
+        disable_memo = str(os.environ.get("KCMT_DISABLE_MEMO", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            import hashlib
+
+            memo_key = None
+            if not disable_memo:
+                digest = hashlib.sha256(diff.encode("utf-8", "ignore")).hexdigest()
+                memo_key = f"{self._config.provider}:{self._config.model}:{digest}"
+                cached = self._memo.get(memo_key)
+                if cached:
+                    if self.debug:
+                        print("DEBUG: commit.memo hit")
+                    return cached
+        except Exception:  # pragma: no cover - memo is best-effort
+            memo_key = None
+
+        # Optional local fast path for tiny diffs when explicitly enabled.
+        fast_local = str(os.environ.get("KCMT_FAST_LOCAL_FOR_SMALL_DIFFS", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if fast_local:
+            changed_lines = 0
+            for line in diff.splitlines():
+                if not line:
+                    continue
+                if line.startswith("+++") or line.startswith("---"):
+                    continue
+                if line.startswith("+") or line.startswith("-"):
+                    changed_lines += 1
+            if changed_lines <= 3:
+                file_path = ""
+                if context and "File:" in context:
+                    file_path = context.split("File:", 1)[1].strip()
+                subject = self._synthesize_small_diff_subject(file_path)
+                if self.validate_conventional_commit(subject):
+                    return subject
+
         # First try primary provider
         try:
-            return self._attempt_with_client(
+            result_primary = self._attempt_with_client(
                 self.llm_client, diff, context, style, request_timeout
             )
+            if memo_key and result_primary:
+                self._memo[memo_key] = result_primary
+            return result_primary
         except LLMError as primary_error:
             # Try secondary provider if configured and key available
             sec_cfg = self._build_secondary_config()
@@ -258,9 +309,12 @@ class CommitGenerator:
                     )
                 )
             try:
-                return self._attempt_with_client(
+                result_secondary = self._attempt_with_client(
                     secondary_client, diff, context, style, request_timeout
                 )
+                if memo_key and result_secondary:
+                    self._memo[memo_key] = result_secondary
+                return result_secondary
             except LLMError as secondary_error:
                 # Chain both errors for context
                 combined = LLMError(
@@ -268,6 +322,30 @@ class CommitGenerator:
                 )
                 combined.__cause__ = secondary_error
                 raise combined from primary_error
+
+    def _synthesize_small_diff_subject(self, file_path: str) -> str:
+        """Heuristic conventional subject for tiny diffs (opt-in).
+
+        - type: docs for markdown/text, otherwise chore
+        - scope: directory name or core
+        - description: "update <basename>"
+        """
+        import os as _os
+
+        base = _os.path.basename(file_path) if file_path else "file"
+        name, ext = _os.path.splitext(base)
+        scope = _os.path.basename(_os.path.dirname(file_path)) or "core"
+        scope = re.sub(r"[^a-zA-Z0-9_-]", "-", scope) or "core"
+        ctype = "docs" if ext.lower() in {".md", ".rst", ".txt"} else "chore"
+        desc = f"update {base}" if base else "update"
+        # Enforce 50-char subject without trailing period
+        subject = f"{ctype}({scope}): {desc}".rstrip(".")
+        if len(subject) > 50:
+            cut = subject.rfind(" ", 0, 50)
+            if cut == -1 or cut < 25:
+                cut = 49
+            subject = subject[:cut].rstrip() + "…"
+        return subject
 
     async def suggest_commit_message_async(
         self,
