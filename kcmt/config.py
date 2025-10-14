@@ -214,7 +214,11 @@ def load_config(
         if not entry.get("endpoint"):
             # If the previously persisted (legacy) top-level endpoint was for
             # this provider, carry it over; otherwise use provider default.
-            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "llm_endpoint", None):
+            if (
+                persisted
+                and getattr(persisted, "provider", None) == prov
+                and getattr(persisted, "llm_endpoint", None)
+            ):
                 entry["endpoint"] = persisted.llm_endpoint
             else:
                 entry["endpoint"] = meta["endpoint"]
@@ -226,12 +230,14 @@ def load_config(
             ) or {}
             # If the previously persisted (legacy) top-level api_key_env was for
             # this provider, carry it over; otherwise use overrides/defaults.
-            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "api_key_env", None):
+            if (
+                persisted
+                and getattr(persisted, "provider", None) == prov
+                and getattr(persisted, "api_key_env", None)
+            ):
                 entry["api_key_env"] = getattr(persisted, "api_key_env")
             else:
-                entry["api_key_env"] = (
-                    legacy_map.get(prov) or meta["api_key_env"]
-                )
+                entry["api_key_env"] = legacy_map.get(prov) or meta["api_key_env"]
         # Carry over any previously selected model for this provider via
         # (1) explicit provider entry, (2) legacy top-level model when the
         # active provider matches, or (3) leave unset to indicate "first use".
@@ -271,7 +277,9 @@ def load_config(
         if (persisted and persisted.provider == provider)
         else None
     )
-    provider_endpoint = providers_map.get(provider, {}).get("endpoint") if providers_map else None
+    provider_endpoint = (
+        providers_map.get(provider, {}).get("endpoint") if providers_map else None
+    )
     endpoint = (
         overrides.get("endpoint")
         or provider_endpoint
