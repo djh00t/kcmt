@@ -403,11 +403,13 @@ class GitRepo:
         those separately (e.g., via porcelain status) and use
         ``get_worktree_diff_for_path`` for them.
         """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
         if not file_paths:
             return ""
         combined: list[str] = []
         # Chunk to keep argument length reasonable on various platforms
-        for i in range(0, len(file_paths), max(1, batch_size)):
+        for i in range(0, len(file_paths), batch_size):
             chunk = file_paths[i : i + batch_size]
             head_cmd = ["git", "diff", "--patch", "HEAD", "--", *chunk]
             head_result = subprocess.run(
