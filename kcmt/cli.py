@@ -8,10 +8,10 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict, is_dataclass
-from datetime import datetime
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, is_dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -598,10 +598,11 @@ Examples:
             sec_api_key_env = self._prompt_api_key_env(sec_provider, detected)
 
         # Start from existing providers map if present to preserve prior edits
-        from .config import PROVIDER_DISPLAY_NAMES, DEFAULT_MODELS as _DM
+        from .config import DEFAULT_MODELS as _DM
+        from .config import PROVIDER_DISPLAY_NAMES
 
         existing = load_persisted_config(repo_root)
-        providers_map: dict[str, dict] = {}
+        providers_map: dict[str, dict[str, Any]] = {}
         if existing and isinstance(getattr(existing, "providers", {}), dict):
             providers_map = dict(existing.providers)
         # Ensure all providers have an entry with defaults
@@ -1102,10 +1103,18 @@ Examples:
         # Shared state for progress callback
         _pstate: dict[str, int | str] = {"done": 0, "total": 0, "label": ""}
 
+        from typing import SupportsInt
+
         def _progress(stage: str, info: dict[str, object]) -> None:
             try:
                 if stage == "init":
-                    _pstate["total"] = int(info.get("total_runs", 0))
+                    total_raw = info.get("total_runs", 0)
+                    try:
+                        _pstate["total"] = int(
+                            cast(SupportsInt | str | bytes | bytearray, total_raw)
+                        )
+                    except Exception:
+                        _pstate["total"] = 0
                     _pstate["done"] = 0
                     _pstate["label"] = ""
                     if is_tty and _pstate["total"]:
@@ -1122,7 +1131,13 @@ Examples:
                     if is_tty and _pstate.get("total", 0):
                         _pstate["label"] = f"{prov} / {mid}"
                 elif stage == "tick":
-                    _pstate["done"] = int(info.get("done", _pstate.get("done", 0)))
+                    done_raw = info.get("done", _pstate.get("done", 0))
+                    try:
+                        _pstate["done"] = int(
+                            cast(SupportsInt | str | bytes | bytearray, done_raw)
+                        )
+                    except Exception:
+                        _pstate["done"] = int(_pstate.get("done", 0))
                     prov = str(info.get("provider", ""))
                     mid = str(info.get("model", ""))
                     samp = str(info.get("sample", ""))
@@ -1204,7 +1219,7 @@ Examples:
         try:
             snapshot = {
                 "schema_version": 1,
-                "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "repo_path": str(self._repo_root) if self._repo_root else ".",
                 "params": {
                     "limit": limit,
@@ -1736,7 +1751,7 @@ Examples:
         return []
 
     def _result_to_dict(self, result: Any) -> dict[str, Any]:
-        if is_dataclass(result):
+        if is_dataclass(result) and not isinstance(result, type):
             return asdict(result)
         if isinstance(result, dict):
             return dict(result)
@@ -1790,7 +1805,7 @@ Examples:
 
         snapshot = {
             "schema_version": 1,
-            "timestamp": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "repo_path": repo_display,
             "provider": config.provider,
             "model": config.model,
@@ -1854,7 +1869,10 @@ Examples:
         path = repo_root / ".kcmt" / "last_run.json"
         try:
             with path.open("r", encoding="utf-8") as handle:
-                return json.load(handle)
+                loaded = json.load(handle)
+                if isinstance(loaded, dict):
+                    return cast(dict[str, Any], loaded)
+                return None
         except FileNotFoundError:
             return None
         except (OSError, json.JSONDecodeError):  # pragma: no cover - corrupt snapshot
