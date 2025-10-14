@@ -395,6 +395,49 @@ class GitRepo:
 
         return no_index_result.stdout
 
+    def get_head_diff_for_paths(self, file_paths: list[str], batch_size: int = 64) -> str:
+        """Return a unified diff against HEAD for many paths in batches.
+
+        Falls back to a working-tree diff when HEAD is unavailable. This
+        function does not handle untracked files; callers should compute
+        those separately (e.g., via porcelain status) and use
+        ``get_worktree_diff_for_path`` for them.
+        """
+        if not file_paths:
+            return ""
+        combined: list[str] = []
+        # Chunk to keep argument length reasonable on various platforms
+        for i in range(0, len(file_paths), max(1, batch_size)):
+            chunk = file_paths[i : i + batch_size]
+            head_cmd = ["git", "diff", "--patch", "HEAD", "--", *chunk]
+            head_result = subprocess.run(
+                head_cmd,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if head_result.returncode in {0, 1}:
+                if head_result.stdout:
+                    combined.append(head_result.stdout)
+                continue
+            # HEAD not available -> fallback to working tree diff
+            wt_cmd = ["git", "diff", "--patch", "--", *chunk]
+            wt_result = subprocess.run(
+                wt_cmd,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if wt_result.returncode not in {0, 1}:
+                raise GitError(
+                    f"Git command failed: diff --patch --\n{wt_result.stderr}"
+                )
+            if wt_result.stdout:
+                combined.append(wt_result.stdout)
+        return "".join(combined)
+
     # ------------------------------------------------------------------
     # Status helpers
     # ------------------------------------------------------------------
