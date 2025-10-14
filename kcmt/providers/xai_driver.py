@@ -33,14 +33,18 @@ class XAIDriver(OpenAIDriver):
             # Reuse parent's pooled client if present, else a one-off
             http = getattr(self, "_http", None)
             if http is None:
-                http = httpx.Client(
+                with httpx.Client(
                     base_url=self.config.llm_endpoint.rstrip("/"),
                     timeout=self._request_timeout,
                     http2=True,
-                )
-            resp = http.get(url, headers=headers, timeout=self._request_timeout)
-            resp.raise_for_status()
-            data = resp.json()
+                ) as http:
+                    resp = http.get(url, headers=headers, timeout=self._request_timeout)
+                    resp.raise_for_status()
+                    data = resp.json()
+            else:
+                resp = http.get(url, headers=headers, timeout=self._request_timeout)
+                resp.raise_for_status()
+                data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
             if isinstance(payload_items, list):
                 items = payload_items
