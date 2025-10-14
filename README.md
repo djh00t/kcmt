@@ -68,7 +68,7 @@ kcmt maintains a per-provider settings map in `.kcmt/config.json`. Each supporte
 
 Example (`.kcmt/config.json` excerpt):
 
-```
+```json
 {
   "provider": "openai",
   "model": "gpt-5-mini-2025-08-07",
@@ -125,7 +125,7 @@ Configure API keys for multiple providers
 
 You can still override values at runtime:
 
-```
+```shell
 kcmt --provider openai --model gpt-5-mini-2025-08-07 --endpoint https://api.openai.com/v1 \
      --api-key-env OPENAI_API_KEY --repo-path .
 ```
@@ -160,17 +160,21 @@ Additional LLM behaviour environment variables:
 
 Example:
 
-```
+```shell
 kcmt --list-models
 ```
 
 ## Benchmarking
 
+```shell
+kcmt --benchmark
+```
+
 Run a local benchmark across providers/models using a fixed set of example diffs. kcmt measures latency, estimates cost, and scores conventional-commit quality with lightweight heuristics.
 
 Basic usage:
 
-```
+```shell
 kcmt --benchmark --benchmark-limit 5
 ```
 
@@ -185,7 +189,7 @@ Snapshots are saved under `.kcmt/benchmarks/benchmark-<timestamp>.json` for late
 
 ## Quick start (CLI)
 
-```
+```shell
 kcmt --configure              # guided setup -> .kcmt/config.json
 kcmt                          # per-file atomic commits with live stats
 kcmt --workers 8              # explicitly set parallel LLM preparations
@@ -261,7 +265,7 @@ Run the full atomic workflow
 - results = wf.execute_workflow()
 - print(results["summary"])
 - for r in results.get("file_commits", []):
--     print(r.success, r.commit_hash, r.message)
+  - print(r.success, r.commit_hash, r.message)
 
 Using GitRepo directly
 
@@ -271,8 +275,8 @@ Using GitRepo directly
 - repo = GitRepo(cfg.git_repo_path, cfg)
 - print(repo.get_working_diff())
 - if repo.has_working_changes():
--     repo.stage_file("README.md")
--     repo.commit("docs: update readme")
+  - repo.stage_file("README.md")
+  - repo.commit("docs: update readme")
 
 ## API documentation (high-level)
 
