@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .config import Config, DEFAULT_MODELS, load_config
 from .exceptions import LLMError
@@ -24,7 +24,7 @@ def sample_diffs() -> list[tuple[str, str]]:
     return [
         (
             "feature-add",
-            '''diff --git a/app/math.py b/app/math.py
+            """diff --git a/app/math.py b/app/math.py
 index 111..222 100644
 --- a/app/math.py
 +++ b/app/math.py
@@ -41,11 +41,11 @@ index 111..222 100644
  +    if b == 0:
  +        raise ValueError("division by zero")
  +    return a / b
-''',
+""",
         ),
         (
             "bugfix-conditional",
-            '''diff --git a/app/auth.py b/app/auth.py
+            """diff --git a/app/auth.py b/app/auth.py
 index 333..444 100644
 --- a/app/auth.py
 +++ b/app/auth.py
@@ -56,11 +56,11 @@ index 333..444 100644
 +    allow = True
  else:
      allow = False
-''',
+""",
         ),
         (
             "docs-update",
-            '''diff --git a/README.md b/README.md
+            """diff --git a/README.md b/README.md
 index 555..666 100644
 --- a/README.md
 +++ b/README.md
@@ -71,7 +71,7 @@ index 555..666 100644
 +A tool for atomic git commits with AI assistance.
  
  ## Usage
-''',
+""",
         ),
         (
             "refactor-utils",
@@ -90,14 +90,14 @@ index 777..888 100644
         ),
         (
             "tests-add",
-            '''diff --git a/tests/test_math.py b/tests/test_math.py
+            """diff --git a/tests/test_math.py b/tests/test_math.py
 index 999..aaa 100644
 --- a/tests/test_math.py
 +++ b/tests/test_math.py
 @@
  def test_divide():
      assert divide(6, 3) == 2
-''',
+""",
         ),
     ]
 
@@ -207,7 +207,9 @@ def score_quality(diff: str, message: str, max_subject: int = 72) -> dict[str, A
 
     # Specificity: overlap between subject words and diff keywords
     kws = set(extract_keywords_from_diff(diff))
-    subj_words = {w.lower() for w in re.split(r"[^a-zA-Z0-9_]+", subject) if len(w) >= 4}
+    subj_words = {
+        w.lower() for w in re.split(r"[^a-zA-Z0-9_]+", subject) if len(w) >= 4
+    }
     matches = len(kws.intersection(subj_words))
     if matches >= 3:
         pts = 30.0
@@ -303,7 +305,9 @@ def run_benchmark(
         if not items:
             provider_model_counts[provider] = 0
             continue
-        subset_len = len(items[: per_provider_limit]) if per_provider_limit else len(items)
+        subset_len = (
+            len(items[:per_provider_limit]) if per_provider_limit else len(items)
+        )
         provider_model_counts[provider] = subset_len
         total_runs += subset_len * len(diffs)
 
@@ -340,7 +344,7 @@ def run_benchmark(
                 )
             except Exception:  # pragma: no cover
                 pass
-        subset = items[: per_provider_limit] if per_provider_limit else items
+        subset = items[:per_provider_limit] if per_provider_limit else items
         model_index = 0
         for item in subset:
             model_index += 1
@@ -374,7 +378,7 @@ def run_benchmark(
             costs: list[float] = []
             scores: list[float] = []
             successes = 0
-            for (name, diff_text) in diffs:
+            for name, diff_text in diffs:
                 start = time.perf_counter()
                 try:
                     msg = client.generate_commit_message(
