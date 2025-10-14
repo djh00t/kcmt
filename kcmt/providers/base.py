@@ -55,3 +55,13 @@ class BaseDriver(ABC):
         other attributes passed through from the provider where possible.
         """
         raise NotImplementedError
+
+    # Optional lifecycle hook; subclasses may override to release resources
+    def close(self) -> None:  # pragma: no cover - simple no-op default
+        """Close any underlying HTTP clients or resources.
+
+        Drivers using persistent clients (e.g., httpx.Client) should override
+        this method to ensure sockets are closed promptly when the driver is
+        no longer needed.
+        """
+        return None
