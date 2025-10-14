@@ -1,0 +1,1 @@
+"""Ink application entry point."""

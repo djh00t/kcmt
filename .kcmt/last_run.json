@@ -1,72 +1,61 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T10:25:35Z",
+  "timestamp": "2025-10-14T10:38:49Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "openai",
-  "model": "gpt-5-mini-2025-08-07",
-  "endpoint": "https://api.openai.com/v1",
+  "provider": "xai",
+  "model": "grok-code-fast-1",
+  "endpoint": "https://api.x.ai/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 12.453936,
-  "rate_commits_per_sec": 0.328886,
+  "duration_seconds": 9.660309,
+  "rate_commits_per_sec": 0.215032,
   "counts": {
-    "files_total": 4,
-    "prepared_total": 4,
-    "processed_total": 4,
+    "files_total": 2,
+    "prepared_total": 2,
+    "processed_total": 2,
     "prepared_failures": 0,
-    "commit_success": 0,
-    "commit_failure": 4,
+    "commit_success": 2,
+    "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 0,
-    "overall_failure": 4,
+    "overall_success": 2,
+    "overall_failure": 0,
     "errors": 0
   },
-  "pushed": null,
-  "summary": "No commits were made. Committed 0 file change(s)",
+  "pushed": true,
+  "summary": "Successfully completed 2 commits. Committed 2 file change(s)",
   "errors": [],
   "commits": [
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/config.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "de1e199",
+      "message": "test(tests): isolate main entrypoint test with temp directory",
+      "error": null,
+      "file_path": "tests/test_main_entrypoint.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/core.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .github/copilot-instructions.md: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "1af5ad1",
+      "message": "chore(deps): bump kcmt version to 0.2.0",
+      "error": null,
+      "file_path": "uv.lock"
     }
   ],
   "deletions": [],
-  "subjects": [],
+  "subjects": [
+    "test(tests): isolate main entrypoint test with temp directory",
+    "chore(deps): bump kcmt version to 0.2.0"
+  ],
   "stats": {
-    "total_files": 4,
-    "prepared": 4,
-    "processed": 4,
-    "successes": 0,
-    "failures": 4,
-    "elapsed": 12.162265,
-    "rate": 0.328886
+    "total_files": 2,
+    "prepared": 2,
+    "processed": 2,
+    "successes": 2,
+    "failures": 0,
+    "elapsed": 9.300922,
+    "rate": 0.215032
   },
-  "auto_push_state": ""
+  "auto_push_state": "pushed"
 }

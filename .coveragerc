@@ -1,11 +1,3 @@
 [run]
-branch = True
 omit =
-  kcmt/providers/*
-  kcmt/cli.py
-  kcmt/main.py
-  kcmt/llm.py
-  kcmt/core.py
-  kcmt/benchmark.py
-  kcmt/commit.py
-  kcmt/git.py
+    kcmt/ink_backend.py

@@ -1,0 +1,1 @@
+"""UI assets for kcmt."""
