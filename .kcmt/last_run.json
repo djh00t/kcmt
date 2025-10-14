@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T09:09:08Z",
+  "timestamp": "2025-10-14T09:13:44Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast-1",
@@ -8,126 +8,62 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 15.357809,
-  "rate_commits_per_sec": 0.731852,
+  "duration_seconds": 10.287646,
+  "rate_commits_per_sec": 0.302043,
   "counts": {
-    "files_total": 11,
-    "prepared_total": 11,
-    "processed_total": 11,
+    "files_total": 3,
+    "prepared_total": 3,
+    "processed_total": 3,
     "prepared_failures": 0,
-    "commit_success": 11,
+    "commit_success": 3,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 11,
+    "overall_success": 3,
     "overall_failure": 0,
     "errors": 0
   },
   "pushed": true,
-  "summary": "Successfully completed 11 commits. Committed 11 file change(s)",
+  "summary": "Successfully completed 3 commits. Committed 3 file change(s)",
   "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "a85837d",
-      "message": "feat(config): update models and add secondary provider\n\nAdd OpenAI as secondary provider with gpt-5-mini model. Update preferred\nmodels: grok-code-fast-1 for X.AI, gpt-5-mini for OpenAI,\nclaude-3-5-haiku-latest for Anthropic. Bump primary model to grok-code-\nfast-1.",
-      "error": null,
-      "file_path": ".kcmt/config.json"
-    },
-    {
-      "success": true,
-      "commit_hash": "95e261f",
-      "message": "chore(log): update last run log with latest execution\n\nUpdate .kcmt/last_run.json to reflect the most recent kcmt run on\n2025-10-14, including a new timestamp, updated model version\n(claude-3-5-haiku-latest), revised performance metrics (shorter\nduration, higher rate), and adjusted counts (12 files processed instead\nof 14). Error list now targets core Python modules and config files\ninstead of benchmark JSONs, indicating a shift in processing scope. This\nmaintains an accurate record of tool execution for debugging and\nbenchmarking purposes.",
+      "commit_hash": "faf9325",
+      "message": "chore(log): update last run log with latest execution\n\nUpdate .kcmt/last_run.json to reflect the most recent kcmt run on\n2025-10-14, including a new timestamp, switched provider from Anthropic\nto XAI with grok-code-fast-1 model, updated performance metrics (longer\nduration, lower rate), and adjusted counts (11 files processed\nsuccessfully instead of 12 failures). Added successful commit details\nwith messages, enabled auto-push, and updated summary to indicate\ncompletion. This maintains an accurate record of tool execution for\ndebugging and benchmarking purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
     },
     {
       "success": true,
-      "commit_hash": "f93482b",
-      "message": "feat(cli): add --workers option for LLM concurrency control\n\nAdd a new command-line argument `--workers` that allows users to\noverride the default number of concurrent LLM preparations. The default\nuses a smart heuristic, but this option provides explicit control for\nperformance tuning. This enhances flexibility in processing workflows.",
+      "commit_hash": "0119647",
+      "message": "chore(config): add cSpell word kcmt",
       "error": null,
-      "file_path": "kcmt/cli.py"
+      "file_path": ".vscode/settings.json"
     },
     {
       "success": true,
-      "commit_hash": "f25ee8a",
-      "message": "feat(commit): add memoization and fast path for small diffs\n\nImplement in-memory caching using SHA256 hashes of diffs to avoid\nduplicate LLM calls, keyed by provider and model. Add optional fast\nlocal path for diffs with <=3 changed lines, synthesizing heuristic\nconventional commit subjects for performance gains. This reduces API\nusage and speeds up generation for trivial changes.",
+      "commit_hash": "5ecadbb",
+      "message": "docs(readme): specify languages in code blocks\n\nAdded 'json' and 'shell' language specifiers to fenced code blocks in\nREADME.md to improve syntax highlighting. Introduced a new benchmarking\ncommand example and corrected indentation in API usage snippets for\nbetter readability and consistency.",
       "error": null,
-      "file_path": "kcmt/commit.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "a84fd07",
-      "message": "feat(core): add batched diff building and worker concurrency\n\nImplement batched HEAD diff for modified tracked files to reduce\nsubprocess overhead in large repositories. Add optional 'workers'\nparameter to __init__ for configurable concurrency, with support for\nKCMT_PREPARE_WORKERS env var. Fallback to per-file diffs if batched\ncalls fail. Record metrics for diff operations to track performance.",
-      "error": null,
-      "file_path": "kcmt/core.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "2b5069d",
-      "message": "feat(git): add method to get head diff for paths\n\nAdd get_head_diff_for_paths method to GitRepo class for generating\nunified diffs against HEAD for multiple file paths in batches. Handles\ncases where HEAD is unavailable by falling back to working-tree diffs.\nDoes not process untracked files, which should be handled separately.\nThis prevents argument length issues on various platforms.",
-      "error": null,
-      "file_path": "kcmt/git.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "9d7074c",
-      "message": "refactor(llm): update Anthropic prompt handling and system text building\n\nRefactor the LLMClient class to support different system prompts for\nAnthropic provider, adding optional system_text parameter to\n_call_anthropic and _call_anthropic_async methods. Introduce\n_build_system_strict and _build_system_simple helper methods to\ncentralize system prompt construction. Update retry logic in both sync\nand async methods to conditionally use Anthropic-specific calls with\nappropriate system text. This improves modularity and allows flexible\nprompt handling based on minimal flag and model type.",
-      "error": null,
-      "file_path": "kcmt/llm.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "49dbb8b",
-      "message": "feat(anthropic_driver): add system prompt support and optimize HTTP…\n\nIntroduce persistent HTTP clients to reduce handshake overhead across\nmultiple calls. Add optional 'system' parameter to invoke methods for\ncustom system prompts. Update request building to support system text.\nSimplify list_models URL to relative path.",
-      "error": null,
-      "file_path": "kcmt/providers/anthropic_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "2cbc94f",
-      "message": "feat(openai): add pooled HTTP client for API requests\n\nAdd a persistent httpx.Client with connection pooling to handle model\nlisting and direct REST calls more efficiently. This reduces overhead\nfrom repeated connection establishments. Updated the _list_models method\nto use the shared client instead of direct httpx.get calls.",
-      "error": null,
-      "file_path": "kcmt/providers/openai_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "1079a94",
-      "message": "refactor(xai): optimize HTTP client usage in list_models\n\nReplace direct httpx.get calls with a reusable httpx.Client instance to\nleverage connection pooling and HTTP/2 support. This improves\nperformance and resource efficiency when querying the XAI endpoint for\nmodel listings. The client is reused from the parent if available,\nfalling back to a one-off client with the configured base URL.",
-      "error": null,
-      "file_path": "kcmt/providers/xai_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "1badc25",
-      "message": "feat(deps): enable HTTP/2 support for httpx\n\nAdd http2 extra to httpx dependency, introducing h2, hpack, and\nhyperframe packages for HTTP/2 protocol support. Remove requests\ndependency as it's replaced by httpx with enhanced capabilities.",
-      "error": null,
-      "file_path": "uv.lock"
+      "file_path": "README.md"
     }
   ],
   "deletions": [],
   "subjects": [
-    "feat(config): update models and add secondary provider",
     "chore(log): update last run log with latest execution",
-    "feat(cli): add --workers option for LLM concurrency control",
-    "feat(commit): add memoization and fast path for small diffs",
-    "feat(core): add batched diff building and worker concurrency",
-    "feat(git): add method to get head diff for paths",
-    "refactor(llm): update Anthropic prompt handling and system text building",
-    "feat(anthropic_driver): add system prompt support and optimize HTTP…",
-    "feat(openai): add pooled HTTP client for API requests",
-    "refactor(xai): optimize HTTP client usage in list_models",
-    "feat(deps): enable HTTP/2 support for httpx"
+    "chore(config): add cSpell word kcmt",
+    "docs(readme): specify languages in code blocks"
   ],
   "stats": {
-    "total_files": 11,
-    "prepared": 11,
-    "processed": 11,
-    "successes": 11,
+    "total_files": 3,
+    "prepared": 3,
+    "processed": 3,
+    "successes": 3,
     "failures": 0,
-    "elapsed": 15.030369,
-    "rate": 0.731852
+    "elapsed": 9.932371,
+    "rate": 0.302043
   },
   "auto_push_state": "pushed"
 }
