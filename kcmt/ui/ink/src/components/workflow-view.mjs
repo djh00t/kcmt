@@ -74,7 +74,7 @@ export default function WorkflowView({onBack}) {
   useEffect(() => {
     const payload = {
       overrides,
-      repoPath: argv['repo-path'] || argv.repoPath || bootstrap?.repoRoot,
+      repoPath: argv.repoPath || bootstrap?.repoRoot,
       limit: argv.limit,
       maxRetries: argv['max-retries'],
       workers: argv.workers,
