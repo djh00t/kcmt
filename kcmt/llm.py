@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+from types import TracebackType
 from typing import Any, Optional, cast
 
 from ._optional import OpenAIModule, import_openai
@@ -365,6 +366,35 @@ class LLMClient:
             print(processed)
             print("  --- FINAL MESSAGE END ---")
         return processed
+
+    # ------------------------
+    # Resource management
+    # ------------------------
+    def close(self) -> None:
+        driver = getattr(self, "_driver", None)
+        closer = getattr(driver, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def __enter__(self) -> "LLMClient":  # pragma: no cover - convenience
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:  # pragma: no cover
+        self.close()
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _call_provider(self, prompt: str, request_timeout: float | None = None) -> str:
         if self._mode == "openai":
