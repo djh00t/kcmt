@@ -265,6 +265,23 @@ class BenchResult:
     runs: int
 
 
+@dataclass
+class BenchExclusion:
+    provider: str
+    model: str
+    reason: str
+    detail: str | None = None
+
+
+@dataclass
+class _PreparedModel:
+    provider: str
+    model: str
+    client: LLMClient
+    input_price_per_mtok: float
+    output_price_per_mtok: float
+
+
 def _build_config(provider: str, model: str) -> Config:
     """Build a provider-specific Config using loader heuristics.
 
@@ -293,16 +310,59 @@ def run_benchmark(
     request_timeout: float | None = None,
     debug: bool = False,
     progress: Any | None = None,
-) -> list[BenchResult]:
+    only_providers: Iterable[str] | None = None,
+    only_models: Iterable[str] | None = None,
+) -> tuple[list[BenchResult], list[BenchExclusion]]:
     diffs = sample_diffs()
     results: list[BenchResult] = []
+    exclusions: list[BenchExclusion] = []
 
-    # Compute totals for progress reporting
-    total_runs = 0
-    provider_model_counts: dict[str, int] = {}
-    for provider, items in models_map.items():
+    provider_filter = {p for p in only_providers} if only_providers else None
+    model_filter = {str(m) for m in only_models} if only_models else None
+
+    ordered_providers = [
+        prov
+        for prov in models_map.keys()
+        if provider_filter is None or prov in provider_filter
+    ]
+
+    prepared: dict[str, list[_PreparedModel]] = {}
+
+    for provider in ordered_providers:
+        items = list(models_map.get(provider, []) or [])
         if not items:
-            provider_model_counts[provider] = 0
+            exclusions.append(
+                BenchExclusion(
+                    provider=provider,
+                    model="*",
+                    reason="no_models_available",
+                    detail="provider returned no benchmarkable models",
+                )
+            )
+            prepared[provider] = []
+            continue
+
+        if model_filter:
+            subset = [
+                item for item in items if str(item.get("id", "")) in model_filter
+            ]
+        elif per_provider_limit:
+            subset = items[:per_provider_limit]
+        else:
+            subset = items
+
+        if model_filter and not subset:
+            if provider_filter is not None and provider in provider_filter:
+                for target in model_filter:
+                    exclusions.append(
+                        BenchExclusion(
+                            provider=provider,
+                            model=target,
+                            reason="model_not_listed",
+                            detail="model not present in provider catalog",
+                        )
+                    )
+            prepared[provider] = []
             continue
         subset_len = (
             len(items[:per_provider_limit]) if per_provider_limit else len(items)
@@ -310,13 +370,14 @@ def run_benchmark(
         provider_model_counts[provider] = subset_len
         total_runs += subset_len * len(diffs)
 
+
     if callable(progress):
         try:
             progress(
                 "init",
                 {
                     "total_runs": total_runs,
-                    "providers": list(models_map.keys()),
+                    "providers": ordered_providers,
                     "provider_model_counts": provider_model_counts,
                     "samples": len(diffs),
                 },
@@ -326,8 +387,10 @@ def run_benchmark(
 
     done = 0
     provider_index = 0
-    for provider, items in models_map.items():
-        if not items:
+    total_providers = len(ordered_providers)
+    for provider in ordered_providers:
+        prepared_models = prepared.get(provider, [])
+        if not prepared_models:
             continue
         provider_index += 1
         if callable(progress):
@@ -337,7 +400,7 @@ def run_benchmark(
                     {
                         "provider": provider,
                         "index": provider_index,
-                        "total_providers": len(models_map),
+                        "total_providers": total_providers,
                         "models": provider_model_counts.get(provider, 0),
                     },
                 )
@@ -345,27 +408,15 @@ def run_benchmark(
                 pass
         subset = items[:per_provider_limit] if per_provider_limit else items
         model_index = 0
-        for item in subset:
+        for prepared_model in prepared_models:
             model_index += 1
-            model_id = str(item.get("id", ""))
-            in_price = float(item.get("input_price_per_mtok") or 0.0)
-            out_price = float(item.get("output_price_per_mtok") or 0.0)
-            cfg = _build_config(provider, model_id)
-            if not cfg.resolve_api_key():
-                # skip models for which no key is available
-                continue
-            try:
-                client = LLMClient(cfg, debug=debug)
-            except LLMError:
-                # client could not be constructed (e.g., SDK missing)
-                continue
             if callable(progress):
                 try:
                     progress(
                         "model_start",
                         {
-                            "provider": provider,
-                            "model": model_id,
+                            "provider": prepared_model.provider,
+                            "model": prepared_model.model,
                             "index": model_index,
                             "total_models": provider_model_counts.get(provider, 0),
                             "samples": len(diffs),
@@ -380,7 +431,7 @@ def run_benchmark(
             for name, diff_text in diffs:
                 start = time.perf_counter()
                 try:
-                    msg = client.generate_commit_message(
+                    msg = prepared_model.client.generate_commit_message(
                         diff_text,
                         context=f"Benchmark sample: {name}",
                         style="conventional",
@@ -391,11 +442,12 @@ def run_benchmark(
                     msg = ""
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
                 latencies.append(elapsed_ms)
-                # Estimate cost from input/output tokens
                 in_tokens = approx_tokens(diff_text)
                 out_tokens = approx_tokens(msg or "")
-                cost = (in_tokens * (in_price / 1_000_000.0)) + (
-                    out_tokens * (out_price / 1_000_000.0)
+                cost = (
+                    in_tokens * (prepared_model.input_price_per_mtok / 1_000_000.0)
+                ) + (
+                    out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0)
                 )
                 costs.append(cost)
                 q = score_quality(diff_text, msg).get("score", 0.0)
@@ -408,8 +460,8 @@ def run_benchmark(
                             {
                                 "done": done,
                                 "total": total_runs,
-                                "provider": provider,
-                                "model": model_id,
+                                "provider": prepared_model.provider,
+                                "model": prepared_model.model,
                                 "sample": name,
                             },
                         )
@@ -420,11 +472,11 @@ def run_benchmark(
             avg_lat = sum(latencies) / len(latencies)
             avg_cost = sum(costs) / len(costs)
             avg_quality = sum(scores) / len(scores) if scores else 0.0
-            success_rate = successes / len(diffs)
+            success_rate = successes / len(diffs) if diffs else 0.0
             results.append(
                 BenchResult(
-                    provider=provider,
-                    model=model_id,
+                    provider=prepared_model.provider,
+                    model=prepared_model.model,
                     avg_latency_ms=avg_lat,
                     avg_cost_usd=avg_cost,
                     quality=avg_quality,
@@ -437,4 +489,4 @@ def run_benchmark(
             progress("done", {"done": done, "total": total_runs})
         except Exception:
             pass
-    return results
+    return results, exclusions

@@ -6,6 +6,7 @@ import argparse
 import inspect
 import json
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
@@ -23,7 +24,9 @@ from .config import (
     detect_available_providers,
     load_config,
     load_persisted_config,
+    load_preferences,
     save_config,
+    save_preferences,
 )
 from .core import KlingonCMTWorkflow
 from .exceptions import GitError, KlingonCMTError, LLMError
@@ -260,9 +263,9 @@ Examples:
         parser.add_argument(
             "--benchmark-limit",
             type=int,
-            default=5,
+            default=0,
             help=(
-                "Limit number of models per provider during --benchmark (default: 5)"
+                "Limit number of models per provider during --benchmark (default: 0 = unlimited)"
             ),
         )
         parser.add_argument(
@@ -367,6 +370,8 @@ Examples:
             non_interactive = (
                 bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
             )
+
+            self._maybe_offer_commitizen_install(repo_root, non_interactive)
 
             self._compact_mode = bool(getattr(parsed_args, "compact", False))
             if self._compact_mode and hasattr(parsed_args, "no_progress"):
@@ -531,6 +536,61 @@ Examples:
     # ------------------------------------------------------------------
     # Configuration helpers
     # ------------------------------------------------------------------
+    def _maybe_offer_commitizen_install(
+        self, repo_root: Path, non_interactive: bool
+    ) -> None:
+        """Prompt to install commitizen if missing and user allows prompts."""
+
+        if non_interactive:
+            return
+
+        try:
+            from importlib.util import find_spec
+        except ImportError:  # pragma: no cover - Python without importlib.util
+            return
+
+        if find_spec("commitizen") is not None:
+            return
+
+        preferences = load_preferences(repo_root)
+        if preferences.get("skip_commitizen_install_prompt"):
+            return
+
+        self._print_heading("Commitizen helper")
+        self._print_info(
+            "Commitizen provides conventional commit tooling. It's not installed "
+            "in this environment yet."
+        )
+        try:
+            response = (
+                input(f"{MAGENTA}Install commitizen now?{RESET} [Y/n]: ")
+                .strip()
+                .lower()
+            )
+        except EOFError:
+            return
+
+        if response in {"", "y", "yes"}:
+            self._print_info("Installing commitizen with pip...")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "commitizen"],
+                check=False,
+            )
+            if result.returncode == 0:
+                self._print_success("Commitizen installed successfully.")
+            else:
+                self._print_error(
+                    "Commitizen installation failed. Re-run the install command manually."
+                )
+            return
+
+        preferences["skip_commitizen_install_prompt"] = True
+        try:
+            save_preferences(preferences, repo_root)
+        except OSError:
+            pass
+        self._print_info("Okay, we'll skip the Commitizen prompt next time.")
+
     def _collect_overrides(
         self, args: argparse.Namespace, repo_root: Path
     ) -> dict[str, str]:
@@ -1059,7 +1119,11 @@ Examples:
         API keys are exercised.
         """
         # Build per-provider model lists (same enrichment/filters as list-models)
-        providers = ("openai", "anthropic", "xai", "github")
+        selected_provider = getattr(args, "provider", None)
+        if selected_provider:
+            providers = (selected_provider,)
+        else:
+            providers = tuple(DEFAULT_MODELS.keys())
         models_map: dict[str, list[dict[str, Any]]] = {}
         for prov in providers:
             try:
@@ -1075,9 +1139,8 @@ Examples:
             models_map[prov] = models
 
         # Limit models per provider
-        limit = getattr(args, "benchmark_limit", None)
-        if isinstance(limit, int) and limit > 0:
-            models_map = {k: (v[:limit] if v else []) for k, v in models_map.items()}
+        limit_raw = getattr(args, "benchmark_limit", None)
+        limit = limit_raw if isinstance(limit_raw, int) and limit_raw > 0 else None
 
         # Run benchmark
         try:
@@ -1159,18 +1222,34 @@ Examples:
                 # Never let progress updates break the benchmark
                 pass
 
-        results = run_benchmark(
+        model_filter = (
+            {str(args.model)} if getattr(args, "model", None) else None
+        )
+        provider_filter = (
+            {str(selected_provider)} if selected_provider else None
+        )
+        results, exclusions = run_benchmark(
             models_map,
             per_provider_limit=limit,
             request_timeout=timeout,
             debug=debug_flag,
             progress=_progress,
+            only_providers=provider_filter,
+            only_models=model_filter,
         )
 
         if not results:
-            self._print_warning(
-                "No benchmarkable models found. Ensure API keys are set for providers."
-            )
+            if exclusions:
+                self._print_warning(
+                    "No benchmarkable models found. See exclusions for details."
+                )
+                print()
+                self._print_heading("Excluded Models")
+                self._print_benchmark_exclusions(exclusions)
+            else:
+                self._print_warning(
+                    "No benchmarkable models found. Ensure API keys are set for providers."
+                )
             return 1
 
         # Build leaderboards
@@ -1237,6 +1316,9 @@ Examples:
                     }
                     for r in results
                 ],
+                "exclusions": [
+                    asdict(ex) if is_dataclass(ex) else ex for ex in exclusions
+                ],
             }
             self._persist_benchmark_snapshot(snapshot)
         except Exception:  # pragma: no cover - best-effort persistence
@@ -1278,6 +1360,11 @@ Examples:
         _print_board("Best Quality", best_quality)
         print()
         _print_board("Most Stable", most_stable)
+
+        if exclusions:
+            print()
+            self._print_heading("Excluded Models")
+            self._print_benchmark_exclusions(exclusions)
 
         # Grouped results: by provider -> models
         print()
@@ -1368,6 +1455,9 @@ Examples:
                     }
                     for r in most_stable
                 ],
+                "exclusions": [
+                    asdict(ex) if is_dataclass(ex) else ex for ex in exclusions
+                ],
             }
             print(
                 json.dumps(
@@ -1405,6 +1495,18 @@ Examples:
                         r.runs,
                     ]
                 )
+            if exclusions:
+                writer.writerow([])
+                writer.writerow(["provider", "model", "reason", "detail"])
+                for ex in exclusions:
+                    writer.writerow(
+                        [
+                            ex.provider,
+                            ex.model,
+                            ex.reason,
+                            ex.detail or "",
+                        ]
+                    )
             print(buf.getvalue().rstrip("\n"))
 
         return 0
@@ -1680,6 +1782,58 @@ Examples:
                 f"{ctxs:>{w_ctx}}  {mxs:>{w_mx}}"
             )
             print(line)
+
+    def _print_benchmark_exclusions(self, exclusions: list[Any]) -> None:
+        if not exclusions:
+            print("  (none)")
+            return
+
+        def _extract(obj: Any, key: str, default: str = "") -> str:
+            if hasattr(obj, key):
+                value = getattr(obj, key)
+            elif isinstance(obj, dict):
+                value = obj.get(key, default)
+            else:
+                value = default
+            return str(value) if value is not None else default
+
+        reason_labels = {
+            "missing_api_key": "missing API key",
+            "client_init_error": "client init error",
+            "no_models_available": "no models available",
+            "model_not_listed": "model not listed",
+        }
+
+        rows: list[tuple[str, str, str, str]] = []
+        for ex in exclusions:
+            provider = _extract(ex, "provider", "-")
+            model = _extract(ex, "model", "-")
+            reason_key = _extract(ex, "reason", "unknown")
+            reason = reason_labels.get(reason_key, reason_key.replace("_", " "))
+            detail = _extract(ex, "detail", "").strip()
+            rows.append((provider, model, reason, detail or "-"))
+
+        w_prov = max((len(r[0]) for r in rows), default=8)
+        w_model = max((len(r[1]) for r in rows), default=5)
+        w_reason = max((len(r[2]) for r in rows), default=6)
+
+        header = (
+            f"  {'provider':<{w_prov}}  {'model':<{w_model}}  "
+            f"{'reason':<{w_reason}}  detail"
+        )
+        print(CYAN + header + RESET)
+        for prov, model, reason, detail in rows:
+            print(
+                "  {prov:<{wp}}  {model:<{wm}}  {reason:<{wr}}  {detail}".format(
+                    prov=prov,
+                    model=model,
+                    reason=reason,
+                    detail=detail,
+                    wp=w_prov,
+                    wm=w_model,
+                    wr=w_reason,
+                )
+            )
 
     def _execute_single_file(self, args: argparse.Namespace, config: Config) -> int:
         file_path = args.single_file

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 CONFIG_DIR_NAME = ".kcmt"
 CONFIG_FILE_NAME = "config.json"
+PREFERENCES_FILE_NAME = "preferences.json"
 
 DEFAULT_MODELS = {
     "openai": {
@@ -106,6 +107,10 @@ def _config_file(repo_root: Optional[Path] = None) -> Path:
     return _config_dir(repo_root) / CONFIG_FILE_NAME
 
 
+def _preferences_file(repo_root: Optional[Path] = None) -> Path:
+    return _config_dir(repo_root) / PREFERENCES_FILE_NAME
+
+
 def save_config(config: Config, repo_root: Optional[Path] = None) -> None:
     """Persist configuration JSON within the repository."""
     cfg_path = _config_file(repo_root)
@@ -152,6 +157,31 @@ def load_persisted_config(
     else:
         data["git_repo_path"] = str(resolved_root)
     return Config(**data)
+
+
+def load_preferences(repo_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Load CLI preferences persisted for the repository."""
+
+    pref_path = _preferences_file(repo_root)
+    if not pref_path.exists():
+        return {}
+    try:
+        data = json.loads(pref_path.read_text())
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def save_preferences(
+    preferences: Dict[str, Any], repo_root: Optional[Path] = None
+) -> None:
+    """Persist CLI preference state for the repository."""
+
+    pref_path = _preferences_file(repo_root)
+    pref_path.parent.mkdir(parents=True, exist_ok=True)
+    pref_path.write_text(json.dumps(preferences, indent=2, sort_keys=True))
 
 
 def detect_available_providers(

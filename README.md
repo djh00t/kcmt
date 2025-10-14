@@ -180,7 +180,7 @@ kcmt --benchmark --benchmark-limit 5
 
 Options:
 
-- `--benchmark-limit INT` – max models per provider (default 5)
+- `--benchmark-limit INT` – max models per provider (default 0 = all models)
 - `--benchmark-timeout SECS` – per-call timeout
 - `--benchmark-json` – also emit machine-readable JSON
 - `--benchmark-csv` – also emit CSV rows
@@ -221,7 +221,10 @@ Exit codes
 - `--no-progress` – disable the live stats bar.
 - `--verbose`, `-v` – emit detailed logs and per-file results.
 - `--list-models` – show a pricing comparison board of models across providers.
-- `--benchmark` – run the model benchmark and show leaderboards.
+- `--benchmark` – run the model benchmark and show leaderboards. Combine with
+  `--provider` / `--model` to focus a subset; see `docs/benchmark.md` for the
+  scoring rubric and pass/fail guidance. Missing credentials are listed in the
+  "Excluded Models" table at the end of each run.
 - `--benchmark-json` / `--benchmark-csv` – print results in machine-readable formats.
 
 ## Conventional commit automation
