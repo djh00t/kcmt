@@ -417,14 +417,12 @@ class LLMClient:
             messages = self._build_messages(prompt)
             minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
-        invoke_kwargs = {
-            "messages": messages,
-            "minimal_ok": minimal_allowed,
-        }
-        if request_timeout is not None:
-            invoke_kwargs["request_timeout"] = request_timeout
         try:
-            content = driver.invoke_messages(**invoke_kwargs)
+            content = driver.invoke_messages(
+                messages=messages,
+                minimal_ok=minimal_allowed,
+                request_timeout=request_timeout,
+            )
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -437,13 +435,11 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 messages = self._build_messages(prompt)
-                retry_kwargs = {
-                    "messages": messages,
-                    "minimal_ok": False,
-                }
-                if request_timeout is not None:
-                    retry_kwargs["request_timeout"] = request_timeout
-                content = driver.invoke_messages(**retry_kwargs)
+                content = driver.invoke_messages(
+                    messages=messages,
+                    minimal_ok=False,
+                    request_timeout=request_timeout,
+                )
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
                     print(
@@ -451,13 +447,11 @@ class LLMClient:
                         "rebuilding system message for gpt-5"
                     )
                 simple_messages = self._build_messages_simple_gpt5(prompt)
-                simple_kwargs = {
-                    "messages": simple_messages,
-                    "minimal_ok": False,
-                }
-                if request_timeout is not None:
-                    simple_kwargs["request_timeout"] = request_timeout
-                content = driver.invoke_messages(**simple_kwargs)
+                content = driver.invoke_messages(
+                    messages=simple_messages,
+                    minimal_ok=False,
+                    request_timeout=request_timeout,
+                )
             else:
                 raise
         if self.debug:
@@ -487,14 +481,12 @@ class LLMClient:
             messages = self._build_messages(prompt)
             minimal_allowed = not self.model.startswith("gpt-5")
         driver = cast(OpenAIDriver, self._driver)
-        invoke_kwargs = {
-            "messages": messages,
-            "minimal_ok": minimal_allowed,
-        }
-        if request_timeout is not None:
-            invoke_kwargs["request_timeout"] = request_timeout
         try:
-            content = await driver.invoke_messages_async(**invoke_kwargs)
+            content = await driver.invoke_messages_async(
+                messages=messages,
+                minimal_ok=minimal_allowed,
+                request_timeout=request_timeout,
+            )
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -506,13 +498,11 @@ class LLMClient:
                 if not self.model.startswith("gpt-5"):
                     self._minimal_prompt = True
                 messages = self._build_messages(prompt)
-                retry_kwargs = {
-                    "messages": messages,
-                    "minimal_ok": False,
-                }
-                if request_timeout is not None:
-                    retry_kwargs["request_timeout"] = request_timeout
-                content = await driver.invoke_messages_async(**retry_kwargs)
+                content = await driver.invoke_messages_async(
+                    messages=messages,
+                    minimal_ok=False,
+                    request_timeout=request_timeout,
+                )
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
                     print(
@@ -520,13 +510,11 @@ class LLMClient:
                         "rebuilding system message for gpt-5"
                     )
                 simple_messages = self._build_messages_simple_gpt5(prompt)
-                simple_kwargs = {
-                    "messages": simple_messages,
-                    "minimal_ok": False,
-                }
-                if request_timeout is not None:
-                    simple_kwargs["request_timeout"] = request_timeout
-                content = await driver.invoke_messages_async(**simple_kwargs)
+                content = await driver.invoke_messages_async(
+                    messages=simple_messages,
+                    minimal_ok=False,
+                    request_timeout=request_timeout,
+                )
             else:
                 raise
         if self.debug:
