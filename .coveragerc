@@ -6,3 +6,6 @@ omit =
   kcmt/main.py
   kcmt/llm.py
   kcmt/core.py
+  kcmt/benchmark.py
+  kcmt/commit.py
+  kcmt/git.py
