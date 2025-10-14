@@ -56,8 +56,6 @@ class PreparedCommit:
     error: Optional[str] = None
 
 
-
-
 @dataclass
 class WorkflowMetrics:
     diff_count: int = 0
@@ -383,7 +381,7 @@ class KlingonCMTWorkflow:
                                         file_path=p,
                                     )
                                 )
-            except GitError as e:
+            except GitError:
                 # If batched path fails, fall back to per-file for mods
                 for p in mod_paths:
                     try:
@@ -481,7 +479,6 @@ class KlingonCMTWorkflow:
             return "A"
         return "M"
 
-
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
@@ -501,7 +498,11 @@ class KlingonCMTWorkflow:
             env_workers_val = None
         desired_workers = self._workers_override or env_workers_val
         max_default = max(1, min(len(file_changes), 8, cpu_hint))
-        workers = max(1, min(len(file_changes), desired_workers)) if desired_workers else max_default
+        workers = (
+            max(1, min(len(file_changes), desired_workers))
+            if desired_workers
+            else max_default
+        )
         print(
             f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
             f"{len(file_changes)} file(s){RESET}"
@@ -568,7 +569,9 @@ class KlingonCMTWorkflow:
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
-                        call_args = (change, timeout_value) if supports_timeout else (change,)
+                        call_args = (
+                            (change, timeout_value) if supports_timeout else (change,)
+                        )
                         prepared_commit = await asyncio.wait_for(
                             asyncio.to_thread(prepare_fn, *call_args),
                             timeout=timeout_value,
@@ -576,7 +579,9 @@ class KlingonCMTWorkflow:
                         llm_elapsed = time.perf_counter() - start
                         if prepared_commit.message:
                             self._metrics.record_llm(llm_elapsed)
-                            avg_llm = self._metrics.llm_total / max(1, self._metrics.llm_count)
+                            avg_llm = self._metrics.llm_total / max(
+                                1, self._metrics.llm_count
+                            )
                             timeout_state["value"] = max(
                                 per_file_timeout,
                                 min(per_file_timeout * 4, avg_llm * 2),
@@ -702,7 +707,6 @@ class KlingonCMTWorkflow:
 
         flush_log()
         return sorted(prepared, key=lambda item: item[0])
-
 
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""
