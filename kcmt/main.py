@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable
 __all__ = ["main"]
 
 if TYPE_CHECKING:  # pragma: no cover - type checking aid only
-    from .cli import main as _cli_main_type
+    pass
 
 _cached_cli_main: Callable[[], int] | None = None
 
