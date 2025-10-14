@@ -1,11 +1,7 @@
 """Git operations for kcmt."""
 
-import difflib
-import hashlib
 import os
-import shlex
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
@@ -306,7 +302,11 @@ class GitRepo:
     ) -> list[str]:
         """Process deletions first by staging all deleted files."""
 
-        entries = list(status_entries) if status_entries is not None else self._run_git_porcelain()
+        entries = (
+            list(status_entries)
+            if status_entries is not None
+            else self._run_git_porcelain()
+        )
         deleted_files: list[str] = []
         for status, file_path in entries:
             if "D" not in status:
@@ -321,7 +321,9 @@ class GitRepo:
     ) -> list[tuple[str, str]]:
         """Return porcelain status entries as (status, path)."""
 
-        entries = status_entries if status_entries is not None else self._run_git_porcelain()
+        entries = (
+            status_entries if status_entries is not None else self._run_git_porcelain()
+        )
         return [(status, path) for status, path in entries if path]
 
     def get_worktree_diff_for_path(self, file_path: str) -> str:
@@ -395,7 +397,9 @@ class GitRepo:
 
         return no_index_result.stdout
 
-    def get_head_diff_for_paths(self, file_paths: list[str], batch_size: int = 64) -> str:
+    def get_head_diff_for_paths(
+        self, file_paths: list[str], batch_size: int = 64
+    ) -> str:
         """Return a unified diff against HEAD for many paths in batches.
 
         Falls back to a working-tree diff when HEAD is unavailable. This
