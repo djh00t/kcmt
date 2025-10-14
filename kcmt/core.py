@@ -569,9 +569,9 @@ class KlingonCMTWorkflow:
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
-                        call_args = (
-                            (change, timeout_value) if supports_timeout else (change,)
-                        )
+                        call_args = [change]
+                        if supports_timeout:
+                            call_args.append(timeout_value)
                         prepared_commit = await asyncio.wait_for(
                             asyncio.to_thread(prepare_fn, *call_args),
                             timeout=timeout_value,
