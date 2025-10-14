@@ -225,6 +225,13 @@ Examples:
             help="Limit the number of files to process per run",
         )
         parser.add_argument(
+            "--workers",
+            type=int,
+            help=(
+                "Override number of concurrent LLM preparations (default: smart heuristic)"
+            ),
+        )
+        parser.add_argument(
             "--verbose",
             "-v",
             action="store_true",
@@ -881,6 +888,7 @@ Examples:
             "debug": getattr(args, "debug", False),
             "profile": self._profile_enabled,
             "verbose": getattr(args, "verbose", False),
+            "workers": getattr(args, "workers", None),
         }
         signature = inspect.signature(KlingonCMTWorkflow)
         filtered_kwargs = {
