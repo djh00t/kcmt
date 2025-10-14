@@ -51,7 +51,7 @@ class OpenAIDriver(BaseDriver):
             client_factory = None
 
         def _instantiate(factory: Callable[..., Any]) -> Any:
-            # Use a broadly-typed kwargs map to allow optional timeout injection
+            # Base keyword arguments for OpenAI client instantiation: includes base_url and api_key.
             base_kwargs: dict[str, Any] = {
                 "base_url": config.llm_endpoint,
                 "api_key": api_key,
