@@ -233,3 +233,36 @@ class AnthropicDriver(BaseDriver):
         if not cls.DISALLOWED_STRINGS:
             return True
         return not cls._contains_disallowed_string(model_id)
+
+    # ------------------------
+    # Resource management
+    # ------------------------
+    def close(self) -> None:
+        http = getattr(self, "_http", None)
+        if http is not None:
+            try:
+                http.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        ahttp = getattr(self, "_http_async", None)
+        if ahttp is not None:
+            try:
+                # Prefer aclose when available
+                aclose = getattr(ahttp, "aclose", None)
+                if callable(aclose):
+                    try:
+                        import asyncio as _asyncio
+
+                        _asyncio.run(aclose())
+                    except RuntimeError:
+                        closer = getattr(ahttp, "close", None)
+                        if callable(closer):
+                            closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
