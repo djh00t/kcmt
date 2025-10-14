@@ -1,53 +1,58 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T09:19:42Z",
+  "timestamp": "2025-10-14T09:42:32Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "xai",
-  "model": "grok-code-fast-1",
-  "endpoint": "https://api.x.ai/v1",
+  "provider": "openai",
+  "model": "gpt-5-mini-2025-08-07",
+  "endpoint": "https://api.openai.com/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 8.034331,
-  "rate_commits_per_sec": 0.12941,
+  "duration_seconds": 12.731695,
+  "rate_commits_per_sec": 0.160979,
   "counts": {
-    "files_total": 1,
-    "prepared_total": 1,
-    "processed_total": 1,
+    "files_total": 2,
+    "prepared_total": 2,
+    "processed_total": 2,
     "prepared_failures": 0,
-    "commit_success": 1,
-    "commit_failure": 0,
+    "commit_success": 0,
+    "commit_failure": 2,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 1,
-    "overall_failure": 0,
+    "overall_success": 0,
+    "overall_failure": 2,
     "errors": 0
   },
-  "pushed": true,
-  "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
+  "pushed": null,
+  "summary": "No commits were made. Committed 0 file change(s)",
   "errors": [],
   "commits": [
     {
-      "success": true,
-      "commit_hash": "6c21e83",
-      "message": "chore(log): update last run log with latest execution\n\nUpdate .kcmt/last_run.json to reflect the most recent kcmt run on\n2025-10-14, including a new timestamp, switched provider from Anthropic\nto XAI with grok-code-fast-1 model, updated performance metrics (longer\nduration, higher rate), and adjusted counts (11 files processed\nsuccessfully instead of 3). Added an auto-push failure error due to non-\nfast-forward rejection, expanded commits list to 11 entries with new\nrefactor and style messages, updated summary and stats for accuracy.\nThis maintains an accurate record of tool execution for debugging and\nbenchmarking purposes.",
-      "error": null,
-      "file_path": ".kcmt/last_run.json"
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .coveragerc: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     }
   ],
   "deletions": [],
-  "subjects": [
-    "chore(log): update last run log with latest execution"
-  ],
+  "subjects": [],
   "stats": {
-    "total_files": 1,
-    "prepared": 1,
-    "processed": 1,
-    "successes": 1,
-    "failures": 0,
-    "elapsed": 7.727366,
-    "rate": 0.12941
+    "total_files": 2,
+    "prepared": 2,
+    "processed": 2,
+    "successes": 0,
+    "failures": 2,
+    "elapsed": 12.424004,
+    "rate": 0.160979
   },
-  "auto_push_state": "pushed"
+  "auto_push_state": ""
 }
