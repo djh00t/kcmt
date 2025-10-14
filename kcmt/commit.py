@@ -257,7 +257,9 @@ class CommitGenerator:
             memo_key = None
 
         # Optional local fast path for tiny diffs when explicitly enabled.
-        fast_local = str(os.environ.get("KCMT_FAST_LOCAL_FOR_SMALL_DIFFS", "")).lower() in {
+        fast_local = str(
+            os.environ.get("KCMT_FAST_LOCAL_FOR_SMALL_DIFFS", "")
+        ).lower() in {
             "1",
             "true",
             "yes",
@@ -292,9 +294,7 @@ class CommitGenerator:
             # Try secondary provider if configured and key available
             sec_cfg = self._build_secondary_config()
             if self.debug:
-                print(
-                    "DEBUG: primary provider failed; evaluating secondary fallback"
-                )
+                print("DEBUG: primary provider failed; evaluating secondary fallback")
             if not sec_cfg or not sec_cfg.resolve_api_key():
                 raise primary_error
             try:
@@ -363,7 +363,9 @@ class CommitGenerator:
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 if self.debug:
-                    truncated_ctx = context[:120] + "…" if len(context) > 120 else context
+                    truncated_ctx = (
+                        context[:120] + "…" if len(context) > 120 else context
+                    )
                     print(
                         "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
                             attempt, len(diff), truncated_ctx
