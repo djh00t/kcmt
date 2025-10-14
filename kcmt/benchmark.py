@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from .config import DEFAULT_MODELS, Config, load_config
 from .exceptions import LLMError
@@ -316,6 +316,8 @@ def run_benchmark(
     diffs = sample_diffs()
     results: list[BenchResult] = []
     exclusions: list[BenchExclusion] = []
+    provider_model_counts: dict[str, int] = {}
+    total_runs = 0
 
     provider_filter = {p for p in only_providers} if only_providers else None
     model_filter = {str(m) for m in only_models} if only_models else None
@@ -343,9 +345,7 @@ def run_benchmark(
             continue
 
         if model_filter:
-            subset = [
-                item for item in items if str(item.get("id", "")) in model_filter
-            ]
+            subset = [item for item in items if str(item.get("id", "")) in model_filter]
         elif per_provider_limit:
             subset = items[:per_provider_limit]
         else:
@@ -369,7 +369,6 @@ def run_benchmark(
         )
         provider_model_counts[provider] = subset_len
         total_runs += subset_len * len(diffs)
-
 
     if callable(progress):
         try:
@@ -446,9 +445,7 @@ def run_benchmark(
                 out_tokens = approx_tokens(msg or "")
                 cost = (
                     in_tokens * (prepared_model.input_price_per_mtok / 1_000_000.0)
-                ) + (
-                    out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0)
-                )
+                ) + (out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0))
                 costs.append(cost)
                 q = score_quality(diff_text, msg).get("score", 0.0)
                 scores.append(float(q))
