@@ -19,7 +19,7 @@ function parseStdout(stdout) {
         err.payload = message.payload;
         throw err;
       }
-      if (Object.prototype.hasOwnProperty.call(message, 'payload')) {
+      if (Object.hasOwn(message, 'payload')) {
         payload = message.payload;
       }
     } catch (err) {
