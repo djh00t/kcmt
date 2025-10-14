@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T09:42:32Z",
+  "timestamp": "2025-10-14T10:00:04Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "openai",
   "model": "gpt-5-mini-2025-08-07",
@@ -8,20 +8,20 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 12.731695,
-  "rate_commits_per_sec": 0.160979,
+  "duration_seconds": 12.529831,
+  "rate_commits_per_sec": 0.655881,
   "counts": {
-    "files_total": 2,
-    "prepared_total": 2,
-    "processed_total": 2,
+    "files_total": 8,
+    "prepared_total": 8,
+    "processed_total": 8,
     "prepared_failures": 0,
     "commit_success": 0,
-    "commit_failure": 2,
+    "commit_failure": 8,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
     "overall_success": 0,
-    "overall_failure": 2,
+    "overall_failure": 8,
     "errors": 0
   },
   "pushed": null,
@@ -32,7 +32,7 @@
       "success": false,
       "commit_hash": null,
       "message": null,
-      "error": "Failed to generate valid commit message for .coveragerc: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "error": "Failed to generate valid commit message for .kcmt/config.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
       "file_path": null
     },
     {
@@ -41,18 +41,60 @@
       "message": null,
       "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
       "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/benchmark.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/cli.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/main.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/providers/openai_driver.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for kcmt/providers/xai_driver.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
+    },
+    {
+      "success": false,
+      "commit_hash": null,
+      "message": null,
+      "error": "Failed to generate valid commit message for tests/conftest.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "file_path": null
     }
   ],
   "deletions": [],
   "subjects": [],
   "stats": {
-    "total_files": 2,
-    "prepared": 2,
-    "processed": 2,
+    "total_files": 8,
+    "prepared": 8,
+    "processed": 8,
     "successes": 0,
-    "failures": 2,
-    "elapsed": 12.424004,
-    "rate": 0.160979
+    "failures": 8,
+    "elapsed": 12.197336,
+    "rate": 0.655881
   },
   "auto_push_state": ""
 }
