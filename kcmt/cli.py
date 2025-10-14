@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import shutil
 from typing import Optional
 
 from . import legacy_cli as _legacy_module
@@ -65,7 +66,49 @@ class CLI:
             for token in arg_list
         ):
             return False
-        return INK_APP_PATH.exists()
+        if not INK_APP_PATH.exists():
+            return False
+        return self._ink_runtime_available()
+
+    def _ink_runtime_available(self) -> bool:
+        """Best-effort probe for a usable Node+Ink runtime.
+
+        We only enable the Ink UI when:
+        - `node` is available on PATH, and
+        - required packages (react, ink) are resolvable from the Ink app dir.
+
+        This avoids surfacing a noisy Node stack trace when dependencies
+        aren't installed, and gracefully falls back to the legacy CLI.
+        """
+        # Check for node executable
+        if shutil.which("node") is None:
+            return False
+
+        # Quick dependency resolution check using ESM import semantics.
+        # Run from the Ink app directory so local node_modules (if present)
+        # and its package.json resolution rules are used.
+        probe = (
+            "import('react').then(() => import('ink'))"
+            ".then(() => process.exit(0))"
+            ".catch(() => process.exit(2))"
+        )
+        try:
+            completed = subprocess.run(
+                [
+                    "node",
+                    "--input-type=module",
+                    "-e",
+                    probe,
+                ],
+                cwd=str(INK_APP_PATH.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=2.0,
+            )
+        except Exception:
+            return False
+        return completed.returncode == 0
 
     def _run_with_ink(self, args: Optional[list[str]]) -> Optional[int]:
         if not INK_APP_PATH.exists():
