@@ -51,13 +51,14 @@ class OpenAIDriver(BaseDriver):
             client_factory = None
 
         def _instantiate(factory: Callable[..., Any]) -> Any:
-            base_kwargs = {
+            # Use a broadly-typed kwargs map to allow optional timeout injection
+            base_kwargs: dict[str, Any] = {
                 "base_url": config.llm_endpoint,
                 "api_key": api_key,
             }
             last_type_error: Exception | None = None
             for include_timeout in (False, True):
-                kwargs = dict(base_kwargs)
+                kwargs: dict[str, Any] = dict(base_kwargs)
                 if include_timeout:
                     kwargs["timeout"] = self._request_timeout
                 try:
@@ -405,7 +406,10 @@ class OpenAIDriver(BaseDriver):
         async def _call_with_kwargs_async(k: dict[str, Any]) -> Any:
             call_kwargs = dict(k)
             call_kwargs.setdefault("timeout", timeout_value)
-            create_fn = self._client_async.chat.completions.create
+            # mypy: _client_async narrowed via early return above
+            client_async = self._client_async
+            assert client_async is not None
+            create_fn = client_async.chat.completions.create
             return await create_fn(**call_kwargs)
 
         try:
