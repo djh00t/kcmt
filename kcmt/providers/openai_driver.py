@@ -107,6 +107,19 @@ class OpenAIDriver(BaseDriver):
             self._max_completion_tokens = 512
         self._minimal_prompt = False  # orchestrator can flip; kept for compat
 
+        # Pooled HTTP client for model listing and any direct REST calls
+        limits = httpx.Limits(max_connections=60, max_keepalive_connections=30)
+        base_url = self.config.llm_endpoint.rstrip("/")
+        self._http = httpx.Client(
+            base_url=base_url,
+            timeout=self._request_timeout,
+            http2=True,
+            limits=limits,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+
     # The message-building stays orchestrated; we accept already-built messages
     def _invoke(
         self,
@@ -543,13 +556,12 @@ class OpenAIDriver(BaseDriver):
           - drop object/type
           - convert created -> created_at (ISO 8601 UTC, like Anthropic)
         """
-        base = self.config.llm_endpoint.rstrip("/")
-        url = f"{base}/models"
+        url = "/models"
         key = self.config.resolve_api_key() or ""
         headers = {"Authorization": f"Bearer {key}"}
         items: list[Any] = []
         try:
-            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
+            resp = self._http.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
