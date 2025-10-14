@@ -31,11 +31,12 @@ class CLI:
         _legacy_module.KlingonCMTWorkflow = KlingonCMTWorkflow
         _legacy_module.CommitGenerator = CommitGenerator
         _legacy_module.GitRepo = GitRepo
-        if self._should_use_ink(args):
-            code = self._run_with_ink(args)
+        effective_args = args if args is not None else sys.argv[1:]
+        if self._should_use_ink(effective_args):
+            code = self._run_with_ink(effective_args)
             if code is not None:
                 return code
-        return self._legacy.run(args)
+        return self._legacy.run(effective_args)
 
     # ------------------------------------------------------------------
     # Ink orchestration

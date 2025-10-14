@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .benchmark import BenchExclusion, BenchResult, run_benchmark
 from .config import (
