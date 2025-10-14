@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 CONFIG_DIR_NAME = ".kcmt"
 CONFIG_FILE_NAME = "config.json"
@@ -78,7 +78,7 @@ class Config:
     #     "openai": {"name": "OpenAI", "endpoint": "https://...", "api_key_env": "OPENAI_API_KEY", "preferred_model": "gpt-4o-mini"},
     #     "anthropic": {...},
     #   }
-    providers: dict[str, dict] = field(default_factory=dict)
+    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -202,7 +202,7 @@ def load_config(
 
     # Build or upgrade the per-provider settings map. Persisted configs
     # might not have this yet, so we synthesise sensible defaults.
-    providers_map: dict[str, dict] = {}
+    providers_map: dict[str, dict[str, Any]] = {}
     if persisted and isinstance(getattr(persisted, "providers", {}), dict):
         # Shallow copy to avoid mutating the persisted object
         providers_map = dict(getattr(persisted, "providers", {}) or {})
@@ -280,11 +280,12 @@ def load_config(
     provider_endpoint = (
         providers_map.get(provider, {}).get("endpoint") if providers_map else None
     )
+    # Endpoint precedence: overrides > env > per-provider map > persisted > default
     endpoint = (
         overrides.get("endpoint")
+        or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or provider_endpoint
         or persisted_endpoint
-        or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or defaults["endpoint"]
     )
 
