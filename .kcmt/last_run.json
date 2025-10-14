@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T09:19:19Z",
+  "timestamp": "2025-10-14T09:19:42Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast-1",
@@ -8,128 +8,46 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 27.898762,
-  "rate_commits_per_sec": 0.399012,
+  "duration_seconds": 8.034331,
+  "rate_commits_per_sec": 0.12941,
   "counts": {
-    "files_total": 11,
-    "prepared_total": 11,
-    "processed_total": 11,
+    "files_total": 1,
+    "prepared_total": 1,
+    "processed_total": 1,
     "prepared_failures": 0,
-    "commit_success": 11,
+    "commit_success": 1,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 11,
+    "overall_success": 1,
     "overall_failure": 0,
-    "errors": 1
+    "errors": 0
   },
-  "pushed": null,
-  "summary": "Successfully completed 11 commits. Committed 11 file change(s)",
-  "errors": [
-    "Auto-push failed: Git command failed: push origin feat/benchmarking\nTo https://github.com/djh00t/kcmt.git\n ! [rejected]        feat/benchmarking -> feat/benchmarking (non-fast-forward)\nerror: failed to push some refs to 'https://github.com/djh00t/kcmt.git'\nhint: Updates were rejected because the tip of your current branch is behind\nhint: its remote counterpart. If you want to integrate the remote changes,\nhint: use 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.\n"
-  ],
+  "pushed": true,
+  "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
+  "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "641deb8",
-      "message": "chore(log): update last run log with latest execution\n\nUpdate .kcmt/last_run.json to reflect the most recent kcmt run on\n2025-10-14, including a new timestamp, switched provider from Anthropic\nto XAI with grok-code-fast-1 model, updated performance metrics (shorter\nduration, lower rate), and adjusted counts (3 files processed instead of\n11). Reduced commits list to 3 entries, updated summary and stats for\naccuracy. This maintains an accurate record of tool execution for\ndebugging and benchmarking purposes.",
+      "commit_hash": "6c21e83",
+      "message": "chore(log): update last run log with latest execution\n\nUpdate .kcmt/last_run.json to reflect the most recent kcmt run on\n2025-10-14, including a new timestamp, switched provider from Anthropic\nto XAI with grok-code-fast-1 model, updated performance metrics (longer\nduration, higher rate), and adjusted counts (11 files processed\nsuccessfully instead of 3). Added an auto-push failure error due to non-\nfast-forward rejection, expanded commits list to 11 entries with new\nrefactor and style messages, updated summary and stats for accuracy.\nThis maintains an accurate record of tool execution for debugging and\nbenchmarking purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
-    },
-    {
-      "success": true,
-      "commit_hash": "4062923",
-      "message": "refactor(benchmark): clean up imports and improve code formatting\n\nRemove unused type imports and standardize string delimiters in sample\ndiffs. Reformat long lines and expressions for better readability.\nRemove unnecessary parentheses in loops and conditionals.",
-      "error": null,
-      "file_path": "kcmt/benchmark.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "06149dc",
-      "message": "refactor(cli): format help strings and wrap lines\n\nReformat multi-line help strings to single-line for consistency. Wrap\nlong expressions and function calls across multiple lines to improve\nreadability and comply with line length guidelines. Add blank lines in\nselect locations for better code organization.",
-      "error": null,
-      "file_path": "kcmt/cli.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "c4c9abd",
-      "message": "refactor(commit): improve code formatting for readability\n\nReformatted long lines in CommitGenerator class to multi-line or single-\nline as appropriate, enhancing code readability without altering\nfunctionality. This includes environment variable checks, debug print\nstatements, and context truncation logic. Changes follow consistent\nstyle guidelines for line length.",
-      "error": null,
-      "file_path": "kcmt/commit.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "3c52907",
-      "message": "refactor(config): improve load_config readability\n\nSplit long if conditions and variable assignments into multiple lines\nfor better code readability and maintainability. No functional changes.",
-      "error": null,
-      "file_path": "kcmt/config.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "3e3a1b0",
-      "message": "refactor(core): reformat code for improved readability\n\nReformatted long expressions into multi-line for better readability.\nRemoved unnecessary blank lines around classes and methods. Simplified\nexception handling by removing unused exception variable. These changes\nenhance code maintainability without altering functionality.",
-      "error": null,
-      "file_path": "kcmt/core.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "834016e",
-      "message": "refactor(git): improve code formatting and remove unused imports\n\nRemove unused imports (difflib, hashlib, shlex, tempfile) to clean up\nthe module. Refactor long lines in method assignments and function\nsignatures to multi-line format for better readability and adherence to\nstyle guidelines.",
-      "error": null,
-      "file_path": "kcmt/git.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "0db60f9",
-      "message": "refactor(llm): format code for better readability\n\nReformatted long lines into multiple lines for improved readability,\nfixed indentation inconsistencies, and added blank lines in method\ndefinitions. These changes enhance code maintainability without altering\nfunctionality.",
-      "error": null,
-      "file_path": "kcmt/llm.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "a5a4b63",
-      "message": "style(anthropic): reformat long method calls\n\nReformatted long HTTP post method calls into multiple lines for improved\nreadability and consistency with the codebase. This change enhances code\nmaintainability without altering functionality.",
-      "error": null,
-      "file_path": "kcmt/providers/anthropic_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "ac8c6fc",
-      "message": "style(openai): reformat long lines for improved readability\n\nReformat several long lines in the OpenAIDriver class by breaking them\ninto multiple lines, enhancing code readability without altering\nfunctionality. This includes wrapping conditional expressions, string\nconcatenations, and debug print statements. No logical changes were\nmade.",
-      "error": null,
-      "file_path": "kcmt/providers/openai_driver.py"
-    },
-    {
-      "success": true,
-      "commit_hash": "eb27198",
-      "message": "refactor(tests): condense file_path assignment",
-      "error": null,
-      "file_path": "tests/test_timeout_prepare.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "chore(log): update last run log with latest execution",
-    "refactor(benchmark): clean up imports and improve code formatting",
-    "refactor(cli): format help strings and wrap lines",
-    "refactor(commit): improve code formatting for readability",
-    "refactor(config): improve load_config readability",
-    "refactor(core): reformat code for improved readability",
-    "refactor(git): improve code formatting and remove unused imports",
-    "refactor(llm): format code for better readability",
-    "style(anthropic): reformat long method calls",
-    "style(openai): reformat long lines for improved readability",
-    "refactor(tests): condense file_path assignment"
+    "chore(log): update last run log with latest execution"
   ],
   "stats": {
-    "total_files": 11,
-    "prepared": 11,
-    "processed": 11,
-    "successes": 11,
+    "total_files": 1,
+    "prepared": 1,
+    "processed": 1,
+    "successes": 1,
     "failures": 0,
-    "elapsed": 27.568072,
-    "rate": 0.399012
+    "elapsed": 7.727366,
+    "rate": 0.12941
   },
-  "auto_push_state": ""
+  "auto_push_state": "pushed"
 }
