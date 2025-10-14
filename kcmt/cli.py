@@ -255,9 +255,7 @@ Examples:
         parser.add_argument(
             "--benchmark",
             action="store_true",
-            help=(
-                "Run a local benchmark across providers/models using sample diffs"
-            ),
+            help=("Run a local benchmark across providers/models using sample diffs"),
         )
         parser.add_argument(
             "--benchmark-limit",
@@ -271,30 +269,22 @@ Examples:
             "--benchmark-timeout",
             type=float,
             default=None,
-            help=(
-                "Per-call timeout seconds for --benchmark requests (optional)"
-            ),
+            help=("Per-call timeout seconds for --benchmark requests (optional)"),
         )
         parser.add_argument(
             "--verify-keys",
             action="store_true",
-            help=(
-                "Verify API key environment variables for supported providers"
-            ),
+            help=("Verify API key environment variables for supported providers"),
         )
         parser.add_argument(
             "--benchmark-json",
             action="store_true",
-            help=(
-                "Also output benchmark results as JSON (after the leaderboard)"
-            ),
+            help=("Also output benchmark results as JSON (after the leaderboard)"),
         )
         parser.add_argument(
             "--benchmark-csv",
             action="store_true",
-            help=(
-                "Also output benchmark results as CSV (after the leaderboard)"
-            ),
+            help=("Also output benchmark results as CSV (after the leaderboard)"),
         )
         parser.add_argument(
             "--auto-push",
@@ -317,9 +307,7 @@ Examples:
             "--summary",
             dest="compact",
             action="store_true",
-            help=(
-                "Use condensed output with a summary table and checklist"
-            ),
+            help=("Use condensed output with a summary table and checklist"),
         )
 
         return parser
@@ -453,11 +441,15 @@ Examples:
             ):
                 pmap = getattr(config, "providers", {}) or {}
                 pentry = pmap.get(config.provider, {}) if isinstance(pmap, dict) else {}
-                preferred = pentry.get("preferred_model") if isinstance(pentry, dict) else None
+                preferred = (
+                    pentry.get("preferred_model") if isinstance(pentry, dict) else None
+                )
                 if not preferred:
                     self._print_heading(f"Select preferred model for {config.provider}")
                     default_model = DEFAULT_MODELS[config.provider]["model"]
-                    chosen = self._prompt_model_with_menu(config.provider, default_model)
+                    chosen = self._prompt_model_with_menu(
+                        config.provider, default_model
+                    )
                     # Persist the selection
                     pentry["preferred_model"] = chosen
                     pmap[config.provider] = pentry
@@ -582,14 +574,14 @@ Examples:
         sec_endpoint: Optional[str] = None
         sec_api_key_env: Optional[str] = None
 
-        is_non_interactive = bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
+        is_non_interactive = (
+            bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
+        )
         choice = ""
         if not is_non_interactive:
             try:
                 choice = (
-                    input(
-                        f"{MAGENTA}Configure a secondary provider?{RESET} [y/N]: "
-                    )
+                    input(f"{MAGENTA}Configure a secondary provider?{RESET} [y/N]: ")
                     .strip()
                     .lower()
                 )
@@ -607,6 +599,7 @@ Examples:
 
         # Start from existing providers map if present to preserve prior edits
         from .config import PROVIDER_DISPLAY_NAMES, DEFAULT_MODELS as _DM
+
         existing = load_persisted_config(repo_root)
         providers_map: dict[str, dict] = {}
         if existing and isinstance(getattr(existing, "providers", {}), dict):
@@ -628,7 +621,9 @@ Examples:
         if sec_provider:
             sp_meta = _DM[sec_provider]
             sp_entry = providers_map.get(sec_provider, {})
-            sp_entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(sec_provider, sec_provider))
+            sp_entry.setdefault(
+                "name", PROVIDER_DISPLAY_NAMES.get(sec_provider, sec_provider)
+            )
             sp_entry["endpoint"] = sec_endpoint or sp_meta["endpoint"]
             sp_entry["api_key_env"] = sec_api_key_env or sp_meta["api_key_env"]
             sp_entry["preferred_model"] = sec_model or sp_meta["model"]
@@ -636,7 +631,8 @@ Examples:
 
         # Keep legacy mapping in sync for compatibility
         provider_env_overrides = {
-            prov: str(ent.get("api_key_env") or _DM[prov]["api_key_env"]) for prov, ent in providers_map.items()
+            prov: str(ent.get("api_key_env") or _DM[prov]["api_key_env"])
+            for prov, ent in providers_map.items()
         }
 
         config = Config(
@@ -732,9 +728,7 @@ Examples:
         cfg.providers = providers_map
         save_config(cfg, repo_root)
         self._print_success(
-            "Saved API key env var mapping for: {}".format(
-                ", ".join(selected)
-            )
+            "Saved API key env var mapping for: {}".format(", ".join(selected))
         )
         return 0
 
@@ -1095,12 +1089,15 @@ Examples:
         debug_flag = bool(getattr(args, "debug", False))
         # Live progress rendering
         is_tty = sys.stdout.isatty()
+
         def _make_bar(done: int, total: int, width: int = 40) -> str:
             if total <= 0:
                 total = 1
             frac = max(0.0, min(1.0, done / float(total)))
             filled = int(frac * width)
-            return "[{}{}] {:>3}%".format("#" * filled, "-" * (width - filled), int(frac * 100))
+            return "[{}{}] {:>3}%".format(
+                "#" * filled, "-" * (width - filled), int(frac * 100)
+            )
 
         # Shared state for progress callback
         _pstate: dict[str, int | str] = {"done": 0, "total": 0, "label": ""}
@@ -1138,7 +1135,10 @@ Examples:
                         print(msg.ljust(120), end="\r", flush=True)
                 elif stage == "done":
                     if is_tty:
-                        bar = _make_bar(int(_pstate.get("total", 0) or 1), int(_pstate.get("total", 0) or 1))
+                        bar = _make_bar(
+                            int(_pstate.get("total", 0) or 1),
+                            int(_pstate.get("total", 0) or 1),
+                        )
                         print(f"Benchmarking {bar} done".ljust(120))
             except Exception:
                 # Never let progress updates break the benchmark
@@ -1167,9 +1167,13 @@ Examples:
         # Fastest by avg latency
         fastest = sorted(results, key=lambda r: (r.avg_latency_ms, r.avg_cost_usd))[:10]
         # Cheapest by cost
-        cheapest = sorted(results, key=lambda r: (r.avg_cost_usd, r.avg_latency_ms))[:10]
+        cheapest = sorted(results, key=lambda r: (r.avg_cost_usd, r.avg_latency_ms))[
+            :10
+        ]
         # Best quality by quality score desc
-        best_quality = sorted(results, key=lambda r: (-r.quality, r.avg_latency_ms))[:10]
+        best_quality = sorted(results, key=lambda r: (-r.quality, r.avg_latency_ms))[
+            :10
+        ]
         # Stability by success rate desc
         most_stable = sorted(
             results, key=lambda r: (-r.success_rate, r.avg_latency_ms)
@@ -1225,6 +1229,7 @@ Examples:
 
         # Render
         self._print_heading("Benchmark Leaderboard")
+
         def _print_board(title: str, rows: list[Any]) -> None:
             print(f"{BOLD}{CYAN}{title}{RESET}")
             # widths
@@ -1271,9 +1276,7 @@ Examples:
             rows_sorted = sorted(rows, key=lambda r: (r.avg_latency_ms, r.avg_cost_usd))
             print(f"{BOLD}{prov}{RESET}")
             w_mid = max((len(r.model) for r in rows_sorted), default=10)
-            header = (
-                f"  {'model':<{w_mid}}  {'latency(ms)':>12}  {'cost':>10}  {'quality':>8}  {'success':>8}"
-            )
+            header = f"  {'model':<{w_mid}}  {'latency(ms)':>12}  {'cost':>10}  {'quality':>8}  {'success':>8}"
             print(CYAN + header + RESET)
             for r in rows_sorted:
                 print(
@@ -1404,7 +1407,9 @@ Examples:
                 env_var = cfg.api_key_env
             except Exception:
                 env_var = DEFAULT_MODELS[prov]["api_key_env"]
-            present = "yes" if env_var in os.environ and os.environ.get(env_var) else "no"
+            present = (
+                "yes" if env_var in os.environ and os.environ.get(env_var) else "no"
+            )
             detected_list = detected.get(prov, [])
             hint = ",".join(detected_list[:3]) if detected_list else "-"
             rows.append((prov, env_var, present, hint))
@@ -1415,14 +1420,10 @@ Examples:
         w_e = max(max((len(r[1]) for r in rows), default=8), len("env_var"))
         w_s = len("present")
         w_h = max(max((len(r[3]) for r in rows), default=5), len("detected"))
-        header = (
-            f"  {'provider':<{w_p}}  {'env_var':<{w_e}}  {'present':<{w_s}}  {'detected':<{w_h}}"
-        )
+        header = f"  {'provider':<{w_p}}  {'env_var':<{w_e}}  {'present':<{w_s}}  {'detected':<{w_h}}"
         print(CYAN + header + RESET)
-        for (prov, env_var, present, hint) in rows:
-            line = (
-                f"  {prov:<{w_p}}  {env_var:<{w_e}}  {present:<{w_s}}  {hint:<{w_h}}"
-            )
+        for prov, env_var, present, hint in rows:
+            line = f"  {prov:<{w_p}}  {env_var:<{w_e}}  {present:<{w_s}}  {hint:<{w_h}}"
             print(line)
         return 0
 
@@ -1602,7 +1603,9 @@ Examples:
 
     def _print_pricing_board(self, data: dict[str, Any]) -> None:
         # Build combined rows across providers
-        combined: list[tuple[str, str, float | None, float | None, int | None, int | None]] = []
+        combined: list[
+            tuple[str, str, float | None, float | None, int | None, int | None]
+        ] = []
         for prov, items in data.items():
             if not isinstance(items, list):
                 continue
@@ -1615,7 +1618,11 @@ Examples:
                     outp = m.get("output_price_per_mtok")
                     if inp is None and outp is None:
                         continue
-                    ctx = m.get("total_context") or m.get("context") or m.get("context_window")
+                    ctx = (
+                        m.get("total_context")
+                        or m.get("context")
+                        or m.get("context_window")
+                    )
                     ctxi = int(ctx) if isinstance(ctx, int) else None
                     mx = m.get("max_output")
                     mxi = int(mx) if isinstance(mx, int) else None
@@ -1696,9 +1703,7 @@ Examples:
     # ------------------------------------------------------------------
     # Run snapshot & formatting helpers
     # ------------------------------------------------------------------
-    def _print_compact_header(
-        self, config: Config, args: argparse.Namespace
-    ) -> None:
+    def _print_compact_header(self, config: Config, args: argparse.Namespace) -> None:
         parts = [
             f"{CYAN}provider{RESET} {config.provider}",
             f"{CYAN}model{RESET} {config.model}",
@@ -1756,9 +1761,13 @@ Examples:
         deletions = list(results.get("deletions_committed", []) or [])
         errors = [str(err) for err in (results.get("errors", []) or []) if err]
 
-        commit_success = sum(1 for item in file_commits if getattr(item, "success", False))
+        commit_success = sum(
+            1 for item in file_commits if getattr(item, "success", False)
+        )
         commit_failure = len(file_commits) - commit_success
-        deletion_success = sum(1 for item in deletions if getattr(item, "success", False))
+        deletion_success = sum(
+            1 for item in deletions if getattr(item, "success", False)
+        )
         deletion_failure = len(deletions) - deletion_success
 
         total_files = int(stats.get("total_files", len(file_commits)) or 0)
@@ -1886,7 +1895,9 @@ Examples:
         total = int(counts.get("files_total", 0) or 0)
         prepared = int(counts.get("prepared_total", 0) or 0)
         processed = int(counts.get("processed_total", 0) or 0)
-        prepared_failures = int(counts.get("prepared_failures", max(total - prepared, 0)))
+        prepared_failures = int(
+            counts.get("prepared_failures", max(total - prepared, 0))
+        )
         commit_success = int(counts.get("commit_success", 0) or 0)
         commit_failure = int(counts.get("commit_failure", 0) or 0)
         deletions_total = int(counts.get("deletions_total", 0) or 0)
@@ -1896,8 +1907,12 @@ Examples:
 
         lines = [
             f"{BOLD}{CYAN}{'Phase':<10} {'Total':>6} {'Ready':>6} {'✓':>6} {'✗':>6} {'Rate':>8}{RESET}",
-            self._format_summary_row("Prepare", total, prepared, prepared, prepared_failures, None),
-            self._format_summary_row("Commit", processed, None, commit_success, commit_failure, rate),
+            self._format_summary_row(
+                "Prepare", total, prepared, prepared, prepared_failures, None
+            ),
+            self._format_summary_row(
+                "Commit", processed, None, commit_success, commit_failure, rate
+            ),
         ]
         if deletions_total or deletion_success or deletion_failure:
             lines.append(
@@ -1933,8 +1948,7 @@ Examples:
         duration = float(snapshot.get("duration_seconds", 0.0) or 0.0)
         rate = float(snapshot.get("rate_commits_per_sec", 0.0) or 0.0)
         print(
-            f"{CYAN}Duration{RESET} {duration:.2f}s  "
-            f"{CYAN}Rate{RESET} {rate:.2f}/s"
+            f"{CYAN}Duration{RESET} {duration:.2f}s  " f"{CYAN}Rate{RESET} {rate:.2f}/s"
         )
 
         checklist: list[tuple[str, str]] = [
@@ -2106,7 +2120,6 @@ Examples:
         summary_text = results.get("summary")
         if summary_text:
             self._print_info(summary_text)
-
 
 
 def main(argv: Optional[list[str]] = None) -> int:
