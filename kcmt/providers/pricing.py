@@ -32,6 +32,20 @@ class _SnapshotState:
 _STATE = _SnapshotState()
 
 
+def _offline() -> bool:
+    """Return True when running in environments that should avoid network IO.
+
+    Triggers when either of these is present:
+    - KCMT_OFFLINE set to a truthy value ("1", "true", "yes", "on")
+    - PYTEST_CURRENT_TEST (pytest is running)
+    """
+    env = os.environ
+    if "PYTEST_CURRENT_TEST" in env:
+        return True
+    val = env.get("KCMT_OFFLINE", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
 def _coerce_int(value: object) -> int | None:
     if isinstance(value, bool):
         return int(value)
@@ -77,7 +91,7 @@ def _ensure_snapshot() -> data_snapshot.DataSnapshot:
         if _STATE.cache is not None and _STATE.last_success == today:
             return _STATE.cache
 
-        if _STATE.last_attempt != today:
+        if _STATE.last_attempt != today and not _offline():
             _STATE.last_attempt = today
             try:
                 snapshot = UpdatePrices().fetch()
@@ -158,11 +172,15 @@ def _dec(val: Decimal | str | float | int | None) -> float | None:
 
 
 def _get(url: str, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    response = httpx.get(url, headers=(headers or {}), timeout=TIMEOUT)
-    response.raise_for_status()
-    data = response.json()
-    if isinstance(data, dict):
-        return data
+    if _offline():
+        raise httpx.HTTPError("network disabled in offline/test mode")
+    # Use explicit Client context to ensure sockets are closed promptly.
+    with httpx.Client(timeout=TIMEOUT, http2=False) as client:
+        response = client.get(url, headers=(headers or {}))
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, dict):
+            return data
     raise ValueError("Expected JSON object from pricing endpoint")
 
 
@@ -178,6 +196,8 @@ def _scale_openrouter_price(value: float | str | None) -> Decimal | None:
 
 @lru_cache(maxsize=1)
 def openrouter_max_output_lookup() -> dict[str, int | None]:
+    if _offline():
+        return {}
     try:
         headers = {}
         api_key = os.getenv("OPENROUTER_API_KEY")
@@ -198,6 +218,8 @@ def openrouter_max_output_lookup() -> dict[str, int | None]:
 
 @lru_cache(maxsize=1)
 def openrouter_metadata_lookup() -> dict[str, dict[str, object]]:
+    if _offline():
+        return {}
     try:
         headers = {}
         api_key = os.getenv("OPENROUTER_API_KEY")

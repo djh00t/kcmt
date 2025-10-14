@@ -56,8 +56,6 @@ class PreparedCommit:
     error: Optional[str] = None
 
 
-
-
 @dataclass
 class WorkflowMetrics:
     diff_count: int = 0
@@ -153,6 +151,7 @@ class KlingonCMTWorkflow:
         debug: bool = False,
         profile: bool = False,
         verbose: bool = False,
+        workers: Optional[int] = None,
     ) -> None:
         """Initialize the workflow."""
         self._config = config or get_active_config()
@@ -165,6 +164,7 @@ class KlingonCMTWorkflow:
         self.debug = debug
         self.profile = profile
         self.verbose = verbose
+        self._workers_override = workers
         self._thread_local = threading.local()
         self._thread_local.generator = self.commit_generator
         self._progress_snapshots: dict[str, str] = {}
@@ -326,15 +326,87 @@ class KlingonCMTWorkflow:
         # Apply file limit if specified
         if self.file_limit and self.file_limit > 0:
             non_deletion_files = non_deletion_files[: self.file_limit]
-        # Build per-file diffs WITHOUT staging files at all. Instead of the
-        # previous add/diff/reset loop (which spawned three git commands per
-        # file), we read the worktree diff directly so large repositories do
-        # not thrash the index or pay the subprocess overhead. Each commit is
-        # staged only at the last moment inside _commit_single_file.
+        # Build diffs with a batched path for tracked modifications to avoid
+        # spawning one subprocess per file. Untracked files are handled using
+        # the original per-file fallback.
         file_changes: List[FileChange] = []
         collect_start = time.perf_counter()
 
+        # Partition by porcelain status
+        mod_paths: list[str] = []
+        other_entries: list[tuple[str, str]] = []
         for status, file_path in non_deletion_files:
+            trimmed = status.strip()
+            if trimmed.startswith("??"):
+                other_entries.append((status, file_path))
+            elif "M" in trimmed:
+                mod_paths.append(file_path)
+            else:
+                other_entries.append((status, file_path))
+
+        # Batched HEAD diff for modified tracked files
+        if mod_paths:
+            try:
+                diff_start = time.perf_counter()
+                combined = self.git_repo.get_head_diff_for_paths(mod_paths)
+                diff_elapsed = time.perf_counter() - diff_start
+                # Record per-file average for metrics
+                per_file = diff_elapsed / max(1, len(mod_paths))
+                for _ in mod_paths:
+                    self._metrics.record_diff(per_file)
+                if combined.strip():
+                    parsed_changes = self._parse_git_diff(combined)
+                    by_path = {chg.file_path: chg for chg in parsed_changes}
+                    for p in mod_paths:
+                        chg = by_path.get(p)
+                        if chg and chg.diff_content.strip():
+                            file_changes.append(chg)
+                        else:
+                            # Fallback per-file if missing from batch output
+                            try:
+                                single = self.git_repo.get_worktree_diff_for_path(p)
+                                if single.strip():
+                                    file_changes.append(
+                                        FileChange(
+                                            file_path=p,
+                                            change_type="M",
+                                            diff_content=single,
+                                        )
+                                    )
+                            except GitError as e:
+                                results.append(
+                                    CommitResult(
+                                        success=False,
+                                        error=f"Failed to capture diff for {p}: {e}",
+                                        file_path=p,
+                                    )
+                                )
+            except GitError:
+                # If batched path fails, fall back to per-file for mods
+                for p in mod_paths:
+                    try:
+                        start = time.perf_counter()
+                        single = self.git_repo.get_worktree_diff_for_path(p)
+                        self._metrics.record_diff(time.perf_counter() - start)
+                        if single.strip():
+                            file_changes.append(
+                                FileChange(
+                                    file_path=p,
+                                    change_type="M",
+                                    diff_content=single,
+                                )
+                            )
+                    except GitError as ge:
+                        results.append(
+                            CommitResult(
+                                success=False,
+                                error=f"Failed to capture diff for {p}: {ge}",
+                                file_path=p,
+                            )
+                        )
+
+        # Handle untracked and other entries with the existing per-file path
+        for status, file_path in other_entries:
             try:
                 diff_start = time.perf_counter()
                 single_diff = self.git_repo.get_worktree_diff_for_path(file_path)
@@ -407,7 +479,6 @@ class KlingonCMTWorkflow:
             return "A"
         return "M"
 
-
     def _prepare_commit_messages(
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
@@ -419,7 +490,19 @@ class KlingonCMTWorkflow:
         self, file_changes: List[FileChange]
     ) -> List[Tuple[int, PreparedCommit]]:
         cpu_hint = os.cpu_count() or 4
-        workers = max(1, min(len(file_changes), 8, cpu_hint))
+        # Environment/CLI override for concurrency
+        env_workers = os.environ.get("KCMT_PREPARE_WORKERS")
+        try:
+            env_workers_val = int(env_workers) if env_workers else None
+        except ValueError:
+            env_workers_val = None
+        desired_workers = self._workers_override or env_workers_val
+        max_default = max(1, min(len(file_changes), 8, cpu_hint))
+        workers = (
+            max(1, min(len(file_changes), desired_workers))
+            if desired_workers
+            else max_default
+        )
         print(
             f"{MAGENTA}⚙️  Spinning up {workers} worker(s) for "
             f"{len(file_changes)} file(s){RESET}"
@@ -486,15 +569,29 @@ class KlingonCMTWorkflow:
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
-                        call_args = (change, timeout_value) if supports_timeout else (change,)
-                        prepared_commit = await asyncio.wait_for(
-                            asyncio.to_thread(prepare_fn, *call_args),
-                            timeout=timeout_value,
-                        )
+                        if supports_timeout:
+                            prepared_commit = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    prepare_fn,
+                                    change,
+                                    timeout_value,
+                                ),
+                                timeout=timeout_value,
+                            )
+                        else:
+                            prepared_commit = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    prepare_fn,
+                                    change,
+                                ),
+                                timeout=timeout_value,
+                            )
                         llm_elapsed = time.perf_counter() - start
                         if prepared_commit.message:
                             self._metrics.record_llm(llm_elapsed)
-                            avg_llm = self._metrics.llm_total / max(1, self._metrics.llm_count)
+                            avg_llm = self._metrics.llm_total / max(
+                                1, self._metrics.llm_count
+                            )
                             timeout_state["value"] = max(
                                 per_file_timeout,
                                 min(per_file_timeout * 4, avg_llm * 2),
@@ -620,7 +717,6 @@ class KlingonCMTWorkflow:
 
         flush_log()
         return sorted(prepared, key=lambda item: item[0])
-
 
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""

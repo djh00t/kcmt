@@ -1,27 +1,27 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-03T17:37:43Z",
+  "timestamp": "2025-10-14T10:25:35Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "anthropic",
-  "model": "claude-3-5-haiku-20241022",
-  "endpoint": "https://api.anthropic.com",
+  "provider": "openai",
+  "model": "gpt-5-mini-2025-08-07",
+  "endpoint": "https://api.openai.com/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 4.567865,
-  "rate_commits_per_sec": 3.108806,
+  "duration_seconds": 12.453936,
+  "rate_commits_per_sec": 0.328886,
   "counts": {
-    "files_total": 14,
-    "prepared_total": 14,
-    "processed_total": 14,
+    "files_total": 4,
+    "prepared_total": 4,
+    "processed_total": 4,
     "prepared_failures": 0,
     "commit_success": 0,
-    "commit_failure": 14,
+    "commit_failure": 4,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
     "overall_success": 0,
-    "overall_failure": 14,
+    "overall_failure": 4,
     "errors": 0
   },
   "pushed": null,
@@ -46,97 +46,27 @@
       "success": false,
       "commit_hash": null,
       "message": null,
-      "error": "Failed to generate valid commit message for README.md: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "error": "Failed to generate valid commit message for kcmt/core.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
       "file_path": null
     },
     {
       "success": false,
       "commit_hash": null,
       "message": null,
-      "error": "Failed to generate valid commit message for kcmt/cli.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/config.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/llm.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T145836Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T153625Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T163932Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T170508Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T171337Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/benchmarks/benchmark-2025-10-03T171806Z.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/env.example: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/benchmark.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
+      "error": "Failed to generate valid commit message for .github/copilot-instructions.md: LLM unavailable or invalid output after 3 attempts; commit aborted",
       "file_path": null
     }
   ],
   "deletions": [],
   "subjects": [],
   "stats": {
-    "total_files": 14,
-    "prepared": 14,
-    "processed": 14,
+    "total_files": 4,
+    "prepared": 4,
+    "processed": 4,
     "successes": 0,
-    "failures": 14,
-    "elapsed": 4.503337,
-    "rate": 3.108806
+    "failures": 4,
+    "elapsed": 12.162265,
+    "rate": 0.328886
   },
   "auto_push_state": ""
 }

@@ -64,7 +64,7 @@ test-verbose:
 	$(PYTEST) -v
 
 test-strict:
-	$(PYTEST) -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers -o addopts='' tests
+	$(PYTEST) -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers tests
 
 coverage:
 	$(PYTEST) --cov=$(PACKAGE_NAME) --cov-report=html --cov-report=term

@@ -3,12 +3,11 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Iterable
 
-from .config import Config, DEFAULT_MODELS, load_config
+from .config import DEFAULT_MODELS, Config, load_config
 from .exceptions import LLMError
 from .llm import LLMClient
-
 
 # -------------------------------
 # Sample diffs for benchmarking
@@ -24,7 +23,7 @@ def sample_diffs() -> list[tuple[str, str]]:
     return [
         (
             "feature-add",
-            '''diff --git a/app/math.py b/app/math.py
+            """diff --git a/app/math.py b/app/math.py
 index 111..222 100644
 --- a/app/math.py
 +++ b/app/math.py
@@ -41,11 +40,11 @@ index 111..222 100644
  +    if b == 0:
  +        raise ValueError("division by zero")
  +    return a / b
-''',
+""",
         ),
         (
             "bugfix-conditional",
-            '''diff --git a/app/auth.py b/app/auth.py
+            """diff --git a/app/auth.py b/app/auth.py
 index 333..444 100644
 --- a/app/auth.py
 +++ b/app/auth.py
@@ -56,11 +55,11 @@ index 333..444 100644
 +    allow = True
  else:
      allow = False
-''',
+""",
         ),
         (
             "docs-update",
-            '''diff --git a/README.md b/README.md
+            """diff --git a/README.md b/README.md
 index 555..666 100644
 --- a/README.md
 +++ b/README.md
@@ -71,7 +70,7 @@ index 555..666 100644
 +A tool for atomic git commits with AI assistance.
  
  ## Usage
-''',
+""",
         ),
         (
             "refactor-utils",
@@ -90,14 +89,14 @@ index 777..888 100644
         ),
         (
             "tests-add",
-            '''diff --git a/tests/test_math.py b/tests/test_math.py
+            """diff --git a/tests/test_math.py b/tests/test_math.py
 index 999..aaa 100644
 --- a/tests/test_math.py
 +++ b/tests/test_math.py
 @@
  def test_divide():
      assert divide(6, 3) == 2
-''',
+""",
         ),
     ]
 
@@ -207,7 +206,9 @@ def score_quality(diff: str, message: str, max_subject: int = 72) -> dict[str, A
 
     # Specificity: overlap between subject words and diff keywords
     kws = set(extract_keywords_from_diff(diff))
-    subj_words = {w.lower() for w in re.split(r"[^a-zA-Z0-9_]+", subject) if len(w) >= 4}
+    subj_words = {
+        w.lower() for w in re.split(r"[^a-zA-Z0-9_]+", subject) if len(w) >= 4
+    }
     matches = len(kws.intersection(subj_words))
     if matches >= 3:
         pts = 30.0
@@ -315,6 +316,8 @@ def run_benchmark(
     diffs = sample_diffs()
     results: list[BenchResult] = []
     exclusions: list[BenchExclusion] = []
+    provider_model_counts: dict[str, int] = {}
+    total_runs = 0
 
     provider_filter = {p for p in only_providers} if only_providers else None
     model_filter = {str(m) for m in only_models} if only_models else None
@@ -342,9 +345,7 @@ def run_benchmark(
             continue
 
         if model_filter:
-            subset = [
-                item for item in items if str(item.get("id", "")) in model_filter
-            ]
+            subset = [item for item in items if str(item.get("id", "")) in model_filter]
         elif per_provider_limit:
             subset = items[:per_provider_limit]
         else:
@@ -363,56 +364,11 @@ def run_benchmark(
                     )
             prepared[provider] = []
             continue
-
-        prepared_list: list[_PreparedModel] = []
-        for item in subset:
-            model_id = str(item.get("id", ""))
-            in_price = float(item.get("input_price_per_mtok") or 0.0)
-            out_price = float(item.get("output_price_per_mtok") or 0.0)
-            cfg = _build_config(provider, model_id)
-            api_key = cfg.resolve_api_key()
-            if not api_key:
-                detail = (
-                    f"set {cfg.api_key_env} in your environment"
-                    if cfg.api_key_env
-                    else "configure api_key_env for this provider"
-                )
-                exclusions.append(
-                    BenchExclusion(
-                        provider=provider,
-                        model=model_id,
-                        reason="missing_api_key",
-                        detail=detail,
-                    )
-                )
-                continue
-            try:
-                client = LLMClient(cfg, debug=debug)
-            except LLMError as exc:
-                exclusions.append(
-                    BenchExclusion(
-                        provider=provider,
-                        model=model_id,
-                        reason="client_init_error",
-                        detail=str(exc),
-                    )
-                )
-                continue
-            prepared_list.append(
-                _PreparedModel(
-                    provider=provider,
-                    model=model_id,
-                    client=client,
-                    input_price_per_mtok=in_price,
-                    output_price_per_mtok=out_price,
-                )
-            )
-        prepared[provider] = prepared_list
-
-    provider_model_counts = {
-        prov: len(prepared.get(prov, [])) for prov in ordered_providers
-    }
-    total_runs = sum(provider_model_counts.values()) * len(diffs)
+        subset_len = (
+            len(items[:per_provider_limit]) if per_provider_limit else len(items)
+        )
+        provider_model_counts[provider] = subset_len
+        total_runs += subset_len * len(diffs)
 
     if callable(progress):
         try:
@@ -449,6 +405,7 @@ def run_benchmark(
                 )
             except Exception:  # pragma: no cover
                 pass
+        subset = items[:per_provider_limit] if per_provider_limit else items
         model_index = 0
         for prepared_model in prepared_models:
             model_index += 1
@@ -470,7 +427,7 @@ def run_benchmark(
             costs: list[float] = []
             scores: list[float] = []
             successes = 0
-            for (name, diff_text) in diffs:
+            for name, diff_text in diffs:
                 start = time.perf_counter()
                 try:
                     msg = prepared_model.client.generate_commit_message(
@@ -488,9 +445,7 @@ def run_benchmark(
                 out_tokens = approx_tokens(msg or "")
                 cost = (
                     in_tokens * (prepared_model.input_price_per_mtok / 1_000_000.0)
-                ) + (
-                    out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0)
-                )
+                ) + (out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0))
                 costs.append(cost)
                 q = score_quality(diff_text, msg).get("score", 0.0)
                 scores.append(float(q))

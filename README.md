@@ -16,6 +16,7 @@ Key features
 - Strict failure on repeated invalid/empty LLM responses (no heuristic commit synthesis).
 - Prepare phase aborts after 25 per-file failures/timeouts to avoid wasting additional requests.
 - Built-in metrics summary (diff, queue, LLM, commit timings) to diagnose performance quickly.
+- Connection pooling for provider APIs and batched diff collection for speed on large repos.
 - Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
 - Parallel preparation: generate per-file commit messages concurrently with live stats.
 - Automatic push to `origin` on success by default (use `--no-auto-push` to disable).
@@ -67,7 +68,7 @@ kcmt maintains a per-provider settings map in `.kcmt/config.json`. Each supporte
 
 Example (`.kcmt/config.json` excerpt):
 
-```
+```json
 {
   "provider": "openai",
   "model": "gpt-5-mini-2025-08-07",
@@ -124,7 +125,7 @@ Configure API keys for multiple providers
 
 You can still override values at runtime:
 
-```
+```shell
 kcmt --provider openai --model gpt-5-mini-2025-08-07 --endpoint https://api.openai.com/v1 \
      --api-key-env OPENAI_API_KEY --repo-path .
 ```
@@ -146,9 +147,11 @@ Additional LLM behaviour environment variables:
 
 - `KCMT_LLM_REQUEST_TIMEOUT` – per-request HTTP timeout (seconds, default 5)
 - `KCMT_PREPARE_PER_FILE_TIMEOUT` – per-file generation timeout in atomic workflow
+- `KCMT_PREPARE_WORKERS` – override number of concurrent LLM preparations (or use `--workers`)
 - `KCMT_OPENAI_DISABLE_REASONING` – disable reasoning / chain-of-thought (default on)
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
 - `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
+- `KCMT_FAST_LOCAL_FOR_SMALL_DIFFS` – opt-in local conventional subject for tiny diffs (<=3 changed lines)
 - `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
 
 ## List models and pricing
@@ -157,17 +160,21 @@ Additional LLM behaviour environment variables:
 
 Example:
 
-```
+```shell
 kcmt --list-models
 ```
 
 ## Benchmarking
 
+```shell
+kcmt --benchmark
+```
+
 Run a local benchmark across providers/models using a fixed set of example diffs. kcmt measures latency, estimates cost, and scores conventional-commit quality with lightweight heuristics.
 
 Basic usage:
 
-```
+```shell
 kcmt --benchmark --benchmark-limit 5
 ```
 
@@ -182,9 +189,10 @@ Snapshots are saved under `.kcmt/benchmarks/benchmark-<timestamp>.json` for late
 
 ## Quick start (CLI)
 
-```
+```shell
 kcmt --configure              # guided setup -> .kcmt/config.json
 kcmt                          # per-file atomic commits with live stats
+kcmt --workers 8              # explicitly set parallel LLM preparations
 kcmt --oneshot --verbose      # single best-effort commit
 kcmt --file README.md         # commit a specific file
 kcmt --provider xai --model grok-code-fast --api-key-env XAI_API_KEY
@@ -260,7 +268,7 @@ Run the full atomic workflow
 - results = wf.execute_workflow()
 - print(results["summary"])
 - for r in results.get("file_commits", []):
--     print(r.success, r.commit_hash, r.message)
+  - print(r.success, r.commit_hash, r.message)
 
 Using GitRepo directly
 
@@ -270,8 +278,8 @@ Using GitRepo directly
 - repo = GitRepo(cfg.git_repo_path, cfg)
 - print(repo.get_working_diff())
 - if repo.has_working_changes():
--     repo.stage_file("README.md")
--     repo.commit("docs: update readme")
+  - repo.stage_file("README.md")
+  - repo.commit("docs: update readme")
 
 ## API documentation (high-level)
 

@@ -45,9 +45,7 @@ def test_per_file_timeout(monkeypatch, tmp_path):
 
     def slow_suggest(self, *args, **kwargs):  # noqa: D401, ARG002
         context = kwargs.get("context") or ""
-        file_path = (
-            context.split("File: ", 1)[-1] if "File: " in context else context
-        )
+        file_path = context.split("File: ", 1)[-1] if "File: " in context else context
         with lock:
             call_counts[file_path] += 1
         time.sleep(0.2)  # exceed the timeout without heavy LLM work

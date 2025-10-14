@@ -51,13 +51,14 @@ class OpenAIDriver(BaseDriver):
             client_factory = None
 
         def _instantiate(factory: Callable[..., Any]) -> Any:
-            base_kwargs = {
+            # Base keyword arguments for OpenAI client instantiation: includes base_url and api_key.
+            base_kwargs: dict[str, Any] = {
                 "base_url": config.llm_endpoint,
                 "api_key": api_key,
             }
             last_type_error: Exception | None = None
             for include_timeout in (False, True):
-                kwargs = dict(base_kwargs)
+                kwargs: dict[str, Any] = dict(base_kwargs)
                 if include_timeout:
                     kwargs["timeout"] = self._request_timeout
                 try:
@@ -66,7 +67,9 @@ class OpenAIDriver(BaseDriver):
                     last_type_error = exc
                     continue
             if last_type_error is not None:
-                raise LLMError("OpenAI client factory rejected provided arguments") from last_type_error
+                raise LLMError(
+                    "OpenAI client factory rejected provided arguments"
+                ) from last_type_error
             raise LLMError("Failed to instantiate OpenAI client")
 
         self._client: Any
@@ -106,6 +109,19 @@ class OpenAIDriver(BaseDriver):
         except ValueError:
             self._max_completion_tokens = 512
         self._minimal_prompt = False  # orchestrator can flip; kept for compat
+
+        # Pooled HTTP client for model listing and any direct REST calls
+        limits = httpx.Limits(max_connections=60, max_keepalive_connections=30)
+        base_url = self.config.llm_endpoint.rstrip("/")
+        self._http = httpx.Client(
+            base_url=base_url,
+            timeout=self._request_timeout,
+            http2=True,
+            limits=limits,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
 
     # The message-building stays orchestrated; we accept already-built messages
     def _invoke(
@@ -273,7 +289,9 @@ class OpenAIDriver(BaseDriver):
                 system_parts.append(str(content))
             else:
                 user_parts.append(str(content))
-        system_block = ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
+        system_block = (
+            ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
+        )
         return system_block + "\n\n".join(user_parts)
 
     def _extract_choice_content(self, choice: Any) -> tuple[str, Any]:
@@ -298,7 +316,12 @@ class OpenAIDriver(BaseDriver):
             fragments: list[str] = []
             for part in content:
                 if isinstance(part, dict):
-                    txt = part.get("text") or part.get("content") or part.get("value") or ""
+                    txt = (
+                        part.get("text")
+                        or part.get("content")
+                        or part.get("value")
+                        or ""
+                    )
                 else:
                     txt = getattr(part, "text", "") or getattr(part, "content", "")
                 if txt:
@@ -318,7 +341,12 @@ class OpenAIDriver(BaseDriver):
             fragments: list[str] = []
             for item in output:
                 if isinstance(item, dict):
-                    txt = item.get("text") or item.get("content") or item.get("value") or ""
+                    txt = (
+                        item.get("text")
+                        or item.get("content")
+                        or item.get("value")
+                        or ""
+                    )
                 else:
                     txt = getattr(item, "text", "") or getattr(item, "content", "")
                 if txt:
@@ -378,7 +406,10 @@ class OpenAIDriver(BaseDriver):
         async def _call_with_kwargs_async(k: dict[str, Any]) -> Any:
             call_kwargs = dict(k)
             call_kwargs.setdefault("timeout", timeout_value)
-            create_fn = self._client_async.chat.completions.create
+            # mypy: _client_async narrowed via early return above
+            client_async = self._client_async
+            assert client_async is not None
+            create_fn = client_async.chat.completions.create
             return await create_fn(**call_kwargs)
 
         try:
@@ -387,7 +418,9 @@ class OpenAIDriver(BaseDriver):
             msg = str(e)
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 if self.debug:
-                    print("DEBUG(Driver:OpenAI): async fallback to max_completion_tokens")
+                    print(
+                        "DEBUG(Driver:OpenAI): async fallback to max_completion_tokens"
+                    )
                 base_kwargs.pop("max_tokens", None)
                 base_kwargs["max_completion_tokens"] = max_tokens
                 resp = await _call_with_kwargs_async(base_kwargs)
@@ -428,7 +461,9 @@ class OpenAIDriver(BaseDriver):
                 try:
                     responses_attr = getattr(self._client_async, "responses", None)
                     if responses_attr is None:
-                        raise AttributeError("responses API not available on async client")
+                        raise AttributeError(
+                            "responses API not available on async client"
+                        )
                     resp_alt = await responses_attr.create(
                         model=model,
                         input=combined_input,
@@ -457,17 +492,13 @@ class OpenAIDriver(BaseDriver):
         if not content and finish_reason == "length":
             if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): async enabling minimal prompt"
-                    )
+                    print("DEBUG(Driver:OpenAI): async enabling minimal prompt")
                 self._minimal_prompt = True
                 self._max_completion_tokens = max(64, max_tokens // 2)
                 raise LLMError("RETRY_MINIMAL_PROMPT")
             if is_gpt5:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): async gpt-5 shrink tokens for retry"
-                    )
+                    print("DEBUG(Driver:OpenAI): async gpt-5 shrink tokens for retry")
                 reduced = max(64, max_tokens // 2)
                 if reduced < max_tokens:
                     self._max_completion_tokens = reduced
@@ -481,8 +512,9 @@ class OpenAIDriver(BaseDriver):
                             content = candidate2
                         if self.debug:
                             print(
-                                "DEBUG(Driver:OpenAI): async second attempt len={}"
-                                .format(len(content))
+                                "DEBUG(Driver:OpenAI): async second attempt len={}".format(
+                                    len(content)
+                                )
                             )
                     except Exception as retry_err:  # noqa: BLE001
                         if self.debug:
@@ -543,13 +575,12 @@ class OpenAIDriver(BaseDriver):
           - drop object/type
           - convert created -> created_at (ISO 8601 UTC, like Anthropic)
         """
-        base = self.config.llm_endpoint.rstrip("/")
-        url = f"{base}/models"
+        url = "/models"
         key = self.config.resolve_api_key() or ""
         headers = {"Authorization": f"Bearer {key}"}
         items: list[Any] = []
         try:
-            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
+            resp = self._http.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
@@ -580,7 +611,9 @@ class OpenAIDriver(BaseDriver):
                     import datetime as _dt
 
                     ts = int(created)
-                    dt = _dt.datetime.utcfromtimestamp(ts)
+                    # Use timezone-aware UTC timestamps to avoid deprecation
+                    # warnings (utcfromtimestamp/utcnow are deprecated).
+                    dt = _dt.datetime.fromtimestamp(ts, tz=_dt.UTC)
                     entry["created_at"] = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 except (ValueError, OverflowError):
                     pass
@@ -760,3 +793,43 @@ class OpenAIDriver(BaseDriver):
         if cls._contains_disallowed_string(model_id):
             return False
         return True
+
+    # ------------------------
+    # Resource management
+    # ------------------------
+    def close(self) -> None:  # noqa: D401
+        """Release underlying HTTP clients (sync/async) if present."""
+        http = getattr(self, "_http", None)
+        if http is not None:
+            try:
+                http.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        client = getattr(self, "_client", None)
+        if client is not None:
+            try:
+                closer = getattr(client, "close", None)
+                if callable(closer):
+                    closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        aclient = getattr(self, "_client_async", None)
+        if aclient is not None:
+            try:
+                aclose = getattr(aclient, "aclose", None)
+                if callable(aclose):
+                    try:
+                        asyncio.run(aclose())
+                    except RuntimeError:
+                        # Fallback to synchronous close if available
+                        closer = getattr(aclient, "close", None)
+                        if callable(closer):
+                            closer()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass

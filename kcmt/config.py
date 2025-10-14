@@ -79,7 +79,7 @@ class Config:
     #     "openai": {"name": "OpenAI", "endpoint": "https://...", "api_key_env": "OPENAI_API_KEY", "preferred_model": "gpt-4o-mini"},
     #     "anthropic": {...},
     #   }
-    providers: dict[str, dict] = field(default_factory=dict)
+    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -232,7 +232,7 @@ def load_config(
 
     # Build or upgrade the per-provider settings map. Persisted configs
     # might not have this yet, so we synthesise sensible defaults.
-    providers_map: dict[str, dict] = {}
+    providers_map: dict[str, dict[str, Any]] = {}
     if persisted and isinstance(getattr(persisted, "providers", {}), dict):
         # Shallow copy to avoid mutating the persisted object
         providers_map = dict(getattr(persisted, "providers", {}) or {})
@@ -244,7 +244,11 @@ def load_config(
         if not entry.get("endpoint"):
             # If the previously persisted (legacy) top-level endpoint was for
             # this provider, carry it over; otherwise use provider default.
-            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "llm_endpoint", None):
+            if (
+                persisted
+                and getattr(persisted, "provider", None) == prov
+                and getattr(persisted, "llm_endpoint", None)
+            ):
                 entry["endpoint"] = persisted.llm_endpoint
             else:
                 entry["endpoint"] = meta["endpoint"]
@@ -256,12 +260,14 @@ def load_config(
             ) or {}
             # If the previously persisted (legacy) top-level api_key_env was for
             # this provider, carry it over; otherwise use overrides/defaults.
-            if persisted and getattr(persisted, "provider", None) == prov and getattr(persisted, "api_key_env", None):
+            if (
+                persisted
+                and getattr(persisted, "provider", None) == prov
+                and getattr(persisted, "api_key_env", None)
+            ):
                 entry["api_key_env"] = getattr(persisted, "api_key_env")
             else:
-                entry["api_key_env"] = (
-                    legacy_map.get(prov) or meta["api_key_env"]
-                )
+                entry["api_key_env"] = legacy_map.get(prov) or meta["api_key_env"]
         # Carry over any previously selected model for this provider via
         # (1) explicit provider entry, (2) legacy top-level model when the
         # active provider matches, or (3) leave unset to indicate "first use".
@@ -301,12 +307,15 @@ def load_config(
         if (persisted and persisted.provider == provider)
         else None
     )
-    provider_endpoint = providers_map.get(provider, {}).get("endpoint") if providers_map else None
+    provider_endpoint = (
+        providers_map.get(provider, {}).get("endpoint") if providers_map else None
+    )
+    # Endpoint precedence: overrides > env > per-provider map > persisted > default
     endpoint = (
         overrides.get("endpoint")
+        or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or provider_endpoint
         or persisted_endpoint
-        or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
         or defaults["endpoint"]
     )
 
