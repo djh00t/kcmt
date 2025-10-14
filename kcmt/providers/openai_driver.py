@@ -611,7 +611,9 @@ class OpenAIDriver(BaseDriver):
                     import datetime as _dt
 
                     ts = int(created)
-                    dt = _dt.datetime.utcfromtimestamp(ts)
+                    # Use timezone-aware UTC timestamps to avoid deprecation
+                    # warnings (utcfromtimestamp/utcnow are deprecated).
+                    dt = _dt.datetime.fromtimestamp(ts, tz=_dt.UTC)
                     entry["created_at"] = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
                 except (ValueError, OverflowError):
                     pass
