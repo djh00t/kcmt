@@ -183,9 +183,16 @@ class LLMClient:
                         )
                     )
                 simple_prompt = self._build_prompt(cleaned_diff, context, "simple")
-                retry_raw = self._call_provider(
-                    simple_prompt, request_timeout=request_timeout
-                )
+                if self._mode == "anthropic":
+                    retry_raw = self._call_anthropic(
+                        simple_prompt,
+                        request_timeout=request_timeout,
+                        system_text=self._build_system_simple(),
+                    )
+                else:
+                    retry_raw = self._call_provider(
+                        simple_prompt, request_timeout=request_timeout
+                    )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
@@ -242,9 +249,16 @@ class LLMClient:
                         )
                     )
                 simple_prompt = self._build_prompt(cleaned_diff, context, "simple")
-                retry_raw = await self._call_provider_async(
-                    simple_prompt, request_timeout=request_timeout
-                )
+                if self._mode == "anthropic":
+                    retry_raw = await self._call_anthropic_async(
+                        simple_prompt,
+                        request_timeout=request_timeout,
+                        system_text=self._build_system_simple(),
+                    )
+                else:
+                    retry_raw = await self._call_provider_async(
+                        simple_prompt, request_timeout=request_timeout
+                    )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
@@ -527,53 +541,36 @@ class LLMClient:
         return content
 
     def _call_anthropic(
-        self, prompt: str, request_timeout: float | None = None
+        self, prompt: str, request_timeout: float | None = None, *, system_text: str | None = None
     ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
+        sys_txt = system_text or self._build_system_strict()
         if request_timeout is None:
-            return driver.invoke(prompt)
-        return driver.invoke(prompt, request_timeout=request_timeout)
+            return driver.invoke(prompt, system=sys_txt)
+        return driver.invoke(prompt, request_timeout=request_timeout, system=sys_txt)
 
     async def _call_anthropic_async(
-        self, prompt: str, request_timeout: float | None = None
+        self, prompt: str, request_timeout: float | None = None, *, system_text: str | None = None
     ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic_async invoked for non-anthropic provider")
         driver = cast(AnthropicDriver, self._driver)
+        sys_txt = system_text or self._build_system_strict()
         if request_timeout is None:
-            return await driver.invoke_async(prompt)
-        return await driver.invoke_async(prompt, request_timeout=request_timeout)
+            return await driver.invoke_async(prompt, system=sys_txt)
+        return await driver.invoke_async(prompt, request_timeout=request_timeout, system=sys_txt)
 
     # ------------------------------------------------------------------
     # Prompt helpers
     # ------------------------------------------------------------------
     def _build_messages(self, prompt: str) -> list[dict[str, str]]:
-        system_lines = [
-            "You are a strict conventional commit message generator.",
-            "Output ONLY: type(scope): description",
-            "",  # blank line
-            "Rules:",
-            "- types: feat fix docs style refactor perf test build ci chore",
-            "  revert",
-            "- scope REQUIRED (api ui auth db config tests deps build core)",
-            "- subject <= 50 chars, no trailing period",
-            "- add body if >5 changed lines",
-            "- wrap body at 72 chars",
-            "- body explains WHAT and WHY",
-            "",  # blank line
-            "Return only the commit message.",
-        ]
-        if getattr(self, "_minimal_prompt", False) and not self.model.startswith(
-            "gpt-5"
-        ):
-            system_lines = [
-                "You output a single concise conventional commit message.",
-                "Format: type(scope): description",
-                "No explanation, no code blocks, no reasoning.",
-            ]
-        system_content = "\n".join(system_lines)
+        # Choose system text based on minimal flag and model
+        if getattr(self, "_minimal_prompt", False) and not self.model.startswith("gpt-5"):
+            system_content = self._build_system_simple()
+        else:
+            system_content = self._build_system_strict()
         return [
             {"role": "system", "content": system_content},
             {"role": "user", "content": prompt},
@@ -586,18 +583,38 @@ class LLMClient:
         extra wording to minimize chance of empty responses when
         finish_reason=length occurs.
         """
-        system_lines = [
+        system_content = self._build_system_simple()
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+
+    def _build_system_strict(self) -> str:
+        lines = [
+            "You are a strict conventional commit message generator.",
+            "Output ONLY: type(scope): description",
+            "",
+            "Rules:",
+            "- types: feat fix docs style refactor perf test build ci chore revert",
+            "- scope REQUIRED (api ui auth db config tests deps build core)",
+            "- subject <= 50 chars, no trailing period",
+            "- add body if >5 changed lines",
+            "- wrap body at 72 chars",
+            "- body explains WHAT and WHY",
+            "",
+            "Return only the commit message.",
+        ]
+        return "\n".join(lines)
+
+    def _build_system_simple(self) -> str:
+        lines = [
             "Output a conventional commit message only.",
             "Header format: type(scope): description (scope REQUIRED).",
             "Subject <= 50 chars. No trailing period.",
             "If >5 changed lines, add a body wrapped at 72 chars.",
             "No code fences, no quotes, no explanations.",
         ]
-        system_content = "\n".join(system_lines)
-        return [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": prompt},
-        ]
+        return "\n".join(lines)
 
     def _build_prompt(self, diff: str, context: str, style: str) -> str:
         """Construct the textual prompt fed into the provider messages."""
