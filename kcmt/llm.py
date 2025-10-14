@@ -156,9 +156,7 @@ class LLMClient:
                     self._minimal_prompt = True
                 elif self.debug:
                     print("DEBUG: minimal_prompt suppressed (gpt-5 model)")
-                retry_raw = self._call_provider(
-                    prompt, request_timeout=request_timeout
-                )
+                retry_raw = self._call_provider(prompt, request_timeout=request_timeout)
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             # For gpt-5 models, fall back to simplified system prompt
             if (
@@ -167,15 +165,16 @@ class LLMClient:
                 and self.model.startswith("gpt-5")
             ):
                 if self.debug:
-                    print(
-                        "DEBUG: sanitize.retry -> forcing simple gpt-5 system prompt"
-                    )
+                    print("DEBUG: sanitize.retry -> forcing simple gpt-5 system prompt")
                 retry_raw = self._call_openai(
                     prompt, request_timeout=request_timeout, force_simple=True
                 )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             # Apply equivalent simplified prompt retry for non-OpenAI providers
-            if "missing conventional commit header" in str(e) and self._mode != "openai":
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode != "openai"
+            ):
                 if self.debug:
                     print(
                         "DEBUG: sanitize.retry -> simplified prompt for provider '{}'".format(
@@ -241,7 +240,10 @@ class LLMClient:
                     prompt, request_timeout=request_timeout, force_simple=True
                 )
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
-            if "missing conventional commit header" in str(e) and self._mode != "openai":
+            if (
+                "missing conventional commit header" in str(e)
+                and self._mode != "openai"
+            ):
                 if self.debug:
                     print(
                         "DEBUG: sanitize.retry(async) -> simplified prompt for provider '{}'".format(
@@ -262,10 +264,7 @@ class LLMClient:
                 return self._postprocess_message(retry_raw, cleaned_diff, context)
             raise
 
-
-    def _prepare_prompt(
-        self, diff: str, context: str, style: str
-    ) -> tuple[str, str]:
+    def _prepare_prompt(self, diff: str, context: str, style: str) -> tuple[str, str]:
         if self.debug:
             print("DEBUG: generate_commit_message called")
             print(f"  Diff length: {len(diff)} characters")
@@ -277,7 +276,9 @@ class LLMClient:
             file_path_hint = context.split("File:", 1)[1].strip()
         diff_for_prompt = diff
         binary_summary = None
-        if self._is_binary_diff(diff) and not self._looks_like_text_file(file_path_hint):
+        if self._is_binary_diff(diff) and not self._looks_like_text_file(
+            file_path_hint
+        ):
             if self.debug:
                 print("DEBUG: Detected binary diff; summarising for LLM prompt")
             snippet = diff[:400].strip()
@@ -365,9 +366,7 @@ class LLMClient:
             print("  --- FINAL MESSAGE END ---")
         return processed
 
-    def _call_provider(
-        self, prompt: str, request_timeout: float | None = None
-    ) -> str:
+    def _call_provider(self, prompt: str, request_timeout: float | None = None) -> str:
         if self._mode == "openai":
             if request_timeout is None:
                 return self._call_openai(prompt)
@@ -387,9 +386,8 @@ class LLMClient:
             )
         if request_timeout is None:
             return await self._call_anthropic_async(prompt)
-        return await self._call_anthropic_async(
-            prompt, request_timeout=request_timeout
-        )
+        return await self._call_anthropic_async(prompt, request_timeout=request_timeout)
+
     # ------------------------------------------------------------------
     # Provider calls
     # ------------------------------------------------------------------
@@ -426,7 +424,7 @@ class LLMClient:
         if request_timeout is not None:
             invoke_kwargs["request_timeout"] = request_timeout
         try:
-                content = driver.invoke_messages(**invoke_kwargs)
+            content = driver.invoke_messages(**invoke_kwargs)
         except LLMError as e:
             msg = str(e)
             if "RETRY_MINIMAL_PROMPT" in msg and minimal_allowed:
@@ -541,7 +539,11 @@ class LLMClient:
         return content
 
     def _call_anthropic(
-        self, prompt: str, request_timeout: float | None = None, *, system_text: str | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        *,
+        system_text: str | None = None,
     ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic invoked for non-anthropic provider")
@@ -552,7 +554,11 @@ class LLMClient:
         return driver.invoke(prompt, request_timeout=request_timeout, system=sys_txt)
 
     async def _call_anthropic_async(
-        self, prompt: str, request_timeout: float | None = None, *, system_text: str | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        *,
+        system_text: str | None = None,
     ) -> str:
         if self._mode != "anthropic":  # defensive
             raise LLMError("_call_anthropic_async invoked for non-anthropic provider")
@@ -560,14 +566,18 @@ class LLMClient:
         sys_txt = system_text or self._build_system_strict()
         if request_timeout is None:
             return await driver.invoke_async(prompt, system=sys_txt)
-        return await driver.invoke_async(prompt, request_timeout=request_timeout, system=sys_txt)
+        return await driver.invoke_async(
+            prompt, request_timeout=request_timeout, system=sys_txt
+        )
 
     # ------------------------------------------------------------------
     # Prompt helpers
     # ------------------------------------------------------------------
     def _build_messages(self, prompt: str) -> list[dict[str, str]]:
         # Choose system text based on minimal flag and model
-        if getattr(self, "_minimal_prompt", False) and not self.model.startswith("gpt-5"):
+        if getattr(self, "_minimal_prompt", False) and not self.model.startswith(
+            "gpt-5"
+        ):
             system_content = self._build_system_simple()
         else:
             system_content = self._build_system_strict()
