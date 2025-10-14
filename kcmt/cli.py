@@ -1120,7 +1120,8 @@ Examples:
         """
         # Build per-provider model lists (same enrichment/filters as list-models)
         selected_provider = getattr(args, "provider", None)
-        if selected_provider:
+        providers: tuple[str, ...]
+        if isinstance(selected_provider, str) and selected_provider:
             providers = (selected_provider,)
         else:
             providers = tuple(DEFAULT_MODELS.keys())
@@ -1222,12 +1223,8 @@ Examples:
                 # Never let progress updates break the benchmark
                 pass
 
-        model_filter = (
-            {str(args.model)} if getattr(args, "model", None) else None
-        )
-        provider_filter = (
-            {str(selected_provider)} if selected_provider else None
-        )
+        model_filter = {str(args.model)} if getattr(args, "model", None) else None
+        provider_filter = {str(selected_provider)} if selected_provider else None
         results, exclusions = run_benchmark(
             models_map,
             per_provider_limit=limit,
