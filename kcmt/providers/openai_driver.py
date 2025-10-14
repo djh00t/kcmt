@@ -66,7 +66,9 @@ class OpenAIDriver(BaseDriver):
                     last_type_error = exc
                     continue
             if last_type_error is not None:
-                raise LLMError("OpenAI client factory rejected provided arguments") from last_type_error
+                raise LLMError(
+                    "OpenAI client factory rejected provided arguments"
+                ) from last_type_error
             raise LLMError("Failed to instantiate OpenAI client")
 
         self._client: Any
@@ -286,7 +288,9 @@ class OpenAIDriver(BaseDriver):
                 system_parts.append(str(content))
             else:
                 user_parts.append(str(content))
-        system_block = ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
+        system_block = (
+            ("\n\n".join(system_parts).strip() + "\n\n") if system_parts else ""
+        )
         return system_block + "\n\n".join(user_parts)
 
     def _extract_choice_content(self, choice: Any) -> tuple[str, Any]:
@@ -311,7 +315,12 @@ class OpenAIDriver(BaseDriver):
             fragments: list[str] = []
             for part in content:
                 if isinstance(part, dict):
-                    txt = part.get("text") or part.get("content") or part.get("value") or ""
+                    txt = (
+                        part.get("text")
+                        or part.get("content")
+                        or part.get("value")
+                        or ""
+                    )
                 else:
                     txt = getattr(part, "text", "") or getattr(part, "content", "")
                 if txt:
@@ -331,7 +340,12 @@ class OpenAIDriver(BaseDriver):
             fragments: list[str] = []
             for item in output:
                 if isinstance(item, dict):
-                    txt = item.get("text") or item.get("content") or item.get("value") or ""
+                    txt = (
+                        item.get("text")
+                        or item.get("content")
+                        or item.get("value")
+                        or ""
+                    )
                 else:
                     txt = getattr(item, "text", "") or getattr(item, "content", "")
                 if txt:
@@ -400,7 +414,9 @@ class OpenAIDriver(BaseDriver):
             msg = str(e)
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 if self.debug:
-                    print("DEBUG(Driver:OpenAI): async fallback to max_completion_tokens")
+                    print(
+                        "DEBUG(Driver:OpenAI): async fallback to max_completion_tokens"
+                    )
                 base_kwargs.pop("max_tokens", None)
                 base_kwargs["max_completion_tokens"] = max_tokens
                 resp = await _call_with_kwargs_async(base_kwargs)
@@ -441,7 +457,9 @@ class OpenAIDriver(BaseDriver):
                 try:
                     responses_attr = getattr(self._client_async, "responses", None)
                     if responses_attr is None:
-                        raise AttributeError("responses API not available on async client")
+                        raise AttributeError(
+                            "responses API not available on async client"
+                        )
                     resp_alt = await responses_attr.create(
                         model=model,
                         input=combined_input,
@@ -470,17 +488,13 @@ class OpenAIDriver(BaseDriver):
         if not content and finish_reason == "length":
             if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): async enabling minimal prompt"
-                    )
+                    print("DEBUG(Driver:OpenAI): async enabling minimal prompt")
                 self._minimal_prompt = True
                 self._max_completion_tokens = max(64, max_tokens // 2)
                 raise LLMError("RETRY_MINIMAL_PROMPT")
             if is_gpt5:
                 if self.debug:
-                    print(
-                        "DEBUG(Driver:OpenAI): async gpt-5 shrink tokens for retry"
-                    )
+                    print("DEBUG(Driver:OpenAI): async gpt-5 shrink tokens for retry")
                 reduced = max(64, max_tokens // 2)
                 if reduced < max_tokens:
                     self._max_completion_tokens = reduced
@@ -494,8 +508,9 @@ class OpenAIDriver(BaseDriver):
                             content = candidate2
                         if self.debug:
                             print(
-                                "DEBUG(Driver:OpenAI): async second attempt len={}"
-                                .format(len(content))
+                                "DEBUG(Driver:OpenAI): async second attempt len={}".format(
+                                    len(content)
+                                )
                             )
                     except Exception as retry_err:  # noqa: BLE001
                         if self.debug:
