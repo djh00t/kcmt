@@ -74,7 +74,9 @@ class AnthropicDriver(BaseDriver):
         url, headers, payload = self._build_messages_request(prompt, system)
         timeout = request_timeout or self._request_timeout
         try:
-            response = self._http.post(url, headers=headers, json=payload, timeout=timeout)
+            response = self._http.post(
+                url, headers=headers, json=payload, timeout=timeout
+            )
         except httpx.HTTPError as e:  # pragma: no cover - network handling
             raise LLMError(
                 f"Anthropic network error during messages request: {e}"
@@ -91,7 +93,9 @@ class AnthropicDriver(BaseDriver):
         timeout = request_timeout or self._request_timeout
         client = self._http_async
         try:
-            response = await client.post(url, headers=headers, json=payload, timeout=timeout)
+            response = await client.post(
+                url, headers=headers, json=payload, timeout=timeout
+            )
         except httpx.HTTPError as e:  # pragma: no cover - network handling
             raise LLMError(
                 f"Anthropic network error during messages request: {e}"
