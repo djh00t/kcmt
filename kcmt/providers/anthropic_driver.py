@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -33,6 +33,31 @@ class AnthropicDriver(BaseDriver):
             self._request_timeout = default_timeout
         self._api_key = config.resolve_api_key()
 
+        # Persistent HTTP clients (keep-alive, HTTP/2) to reduce handshake
+        # overhead across multiple calls in one run.
+        base_url = self.config.llm_endpoint.rstrip("/")
+        limits = httpx.Limits(max_connections=40, max_keepalive_connections=20)
+        self._http = httpx.Client(
+            base_url=base_url,
+            timeout=self._request_timeout,
+            http2=True,
+            limits=limits,
+            headers={
+                "x-api-key": self._api_key or "",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        self._http_async = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=self._request_timeout,
+            http2=True,
+            limits=limits,
+            headers={
+                "x-api-key": self._api_key or "",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
     def generate(self, diff: str, context: str, style: str) -> str:  # noqa: D401,E501
         # Driver is low-level; expects already rendered prompt text.
         raise LLMError(
@@ -40,13 +65,16 @@ class AnthropicDriver(BaseDriver):
             "LLMClient orchestrates prompts."
         )
 
-    def invoke(self, prompt: str, request_timeout: float | None = None) -> str:
-        url, headers, payload = self._build_messages_request(prompt)
+    def invoke(
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        system: Optional[str] = None,
+    ) -> str:
+        url, headers, payload = self._build_messages_request(prompt, system)
         timeout = request_timeout or self._request_timeout
         try:
-            response = httpx.post(
-                url, headers=headers, json=payload, timeout=timeout
-            )
+            response = self._http.post(url, headers=headers, json=payload, timeout=timeout)
         except httpx.HTTPError as e:  # pragma: no cover - network handling
             raise LLMError(
                 f"Anthropic network error during messages request: {e}"
@@ -54,26 +82,38 @@ class AnthropicDriver(BaseDriver):
         return self._handle_messages_response(response)
 
     async def invoke_async(
-        self, prompt: str, request_timeout: float | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        system: Optional[str] = None,
     ) -> str:
-        url, headers, payload = self._build_messages_request(prompt)
+        url, headers, payload = self._build_messages_request(prompt, system)
         timeout = request_timeout or self._request_timeout
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            try:
-                response = await client.post(url, headers=headers, json=payload)
-            except httpx.HTTPError as e:  # pragma: no cover - network handling
-                raise LLMError(
-                    f"Anthropic network error during messages request: {e}"
-                ) from e
+        client = self._http_async
+        try:
+            response = await client.post(url, headers=headers, json=payload, timeout=timeout)
+        except httpx.HTTPError as e:  # pragma: no cover - network handling
+            raise LLMError(
+                f"Anthropic network error during messages request: {e}"
+            ) from e
         return self._handle_messages_response(response)
 
-    def _build_messages_request(self, prompt: str) -> tuple[str, Dict[str, str], Dict[str, Any]]:
+    def _build_messages_request(
+        self, prompt: str, system: Optional[str] = None
+    ) -> tuple[str, Dict[str, str], Dict[str, Any]]:
         url = self.config.llm_endpoint.rstrip("/") + "/v1/messages"
         headers = {
             "x-api-key": self._api_key or "",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        system_text = system or (
+            "Output a conventional commit message only.\n"
+            "Header format: type(scope): description (scope REQUIRED).\n"
+            "Subject <= 50 chars. No trailing period.\n"
+            "If >5 changed lines, add a body wrapped at 72 chars.\n"
+            "No code fences, no quotes, no explanations."
+        )
         payload: Dict[str, Any] = {
             "model": self.config.model,
             "max_output_tokens": 512,
@@ -83,18 +123,12 @@ class AnthropicDriver(BaseDriver):
                     "content": [
                         {
                             "type": "text",
-                            "text": (
-                                "Generate a conventional commit "
-                                "message diff.\n" + prompt
-                            ),
+                            "text": prompt,
                         }
                     ],
                 }
             ],
-            "system": (
-                "You are a strict conventional commit message generator. "
-                "Always respond with type(scope): description."
-            ),
+            "system": system_text,
         }
         return url, headers, payload
 
@@ -120,13 +154,13 @@ class AnthropicDriver(BaseDriver):
         Requires valid API key; returns a simplified list of dicts with 'id'
         and any other attributes present in the provider response object.
         """
-        url = self.config.llm_endpoint.rstrip("/") + "/v1/models"
+        url = "/v1/models"
         headers = {
             "x-api-key": self._api_key or "",
             "anthropic-version": "2023-06-01",
         }
         try:
-            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
+            resp = self._http.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"Anthropic list_models failed: {e}") from e
