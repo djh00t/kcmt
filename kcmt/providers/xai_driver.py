@@ -23,15 +23,22 @@ class XAIDriver(OpenAIDriver):
     # Override to mark ownership as XAI
     def list_models(self) -> list[dict[str, object]]:
         # Query XAI endpoint directly to avoid OpenAI-specific enrichment
-        base = self.config.llm_endpoint.rstrip("/")
-        url = f"{base}/models"
+        url = "/models"
         key = self.config.resolve_api_key() or ""
         headers = {"Authorization": f"Bearer {key}"}
         out: list[dict[str, object]] = []
         ids: list[str] = []
         items: list[Any] = []
         try:
-            resp = httpx.get(url, headers=headers, timeout=self._request_timeout)
+            # Reuse parent's pooled client if present, else a one-off
+            http = getattr(self, "_http", None)
+            if http is None:
+                http = httpx.Client(
+                    base_url=self.config.llm_endpoint.rstrip("/"),
+                    timeout=self._request_timeout,
+                    http2=True,
+                )
+            resp = http.get(url, headers=headers, timeout=self._request_timeout)
             resp.raise_for_status()
             data = resp.json()
             payload_items = data.get("data") if isinstance(data, dict) else None
