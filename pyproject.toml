@@ -61,12 +61,16 @@ pattern = "__version__\\s*=\\s*[\"'](?P<version>[^\"']+)[\"']"
 packages = ["kcmt"]
 include = ["LICENSE"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"kcmt/ui/ink" = "kcmt/ui/ink"
+
 
 [tool.hatch.build.targets.sdist]
 include = [
   "kcmt",
   "README.md",
   "LICENSE",
+  "kcmt/ui/ink",
 ]
 
 [dependency-groups]
@@ -80,7 +84,7 @@ dev = [
     "pytest-bdd>=8.1.0",
     "pytest-cov>=7.0.0",
     "pytest-xdist>=3.6.1",
-    "ruff>=0.6.9",
+    "ruff>=0.13.2",
     "twine>=5.1.1",
 ]
 [tool.isort]
