@@ -3,10 +3,10 @@
   "model": "grok-code-fast-1",
   "llm_endpoint": "https://api.x.ai/v1",
   "api_key_env": "XAI_API_KEY",
-  "secondary_provider": "openai",
-  "secondary_model": "gpt-5-mini-2025-08-07",
-  "secondary_llm_endpoint": "https://api.openai.com/v1",
-  "secondary_api_key_env": "OPENAI_API_KEY",
+  "secondary_provider": null,
+  "secondary_model": null,
+  "secondary_llm_endpoint": null,
+  "secondary_api_key_env": null,
   "git_repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "max_commit_length": 72,
   "auto_push": true,
@@ -20,8 +20,7 @@
     "openai": {
       "name": "OpenAI",
       "endpoint": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
-      "preferred_model": "gpt-5-mini-2025-08-07"
+      "api_key_env": "OPENAI_API_KEY"
     },
     "anthropic": {
       "name": "Anthropic",
