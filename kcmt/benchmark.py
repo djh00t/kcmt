@@ -5,10 +5,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .config import Config, DEFAULT_MODELS, load_config
+from .config import DEFAULT_MODELS, Config, load_config
 from .exceptions import LLMError
 from .llm import LLMClient
-
 
 # -------------------------------
 # Sample diffs for benchmarking
