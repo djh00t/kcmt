@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T11:44:51Z",
+  "timestamp": "2025-10-26T01:07:12Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast-1",
@@ -8,54 +8,46 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 11.375034,
-  "rate_commits_per_sec": 0.180131,
+  "duration_seconds": 8.575868,
+  "rate_commits_per_sec": 0.119987,
   "counts": {
-    "files_total": 2,
-    "prepared_total": 2,
-    "processed_total": 2,
+    "files_total": 1,
+    "prepared_total": 1,
+    "processed_total": 1,
     "prepared_failures": 0,
-    "commit_success": 2,
+    "commit_success": 1,
     "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 2,
+    "overall_success": 1,
     "overall_failure": 0,
     "errors": 0
   },
   "pushed": true,
-  "summary": "Successfully completed 2 commits. Committed 2 file change(s)",
+  "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
   "errors": [],
   "commits": [
     {
       "success": true,
-      "commit_hash": "c697dc3",
-      "message": "chore(kcmt): update last run log with provider switch\n\nSwitched from OpenAI to X.AI provider and updated model to grok-code-\nfast-1. Recorded successful commits for test isolation and dependency\nbump, with improved processing stats and auto-push enabled. Reduced file\ncount from 4 to 2, achieving full success.",
+      "commit_hash": "9505353",
+      "message": "chore(kcmt): update last run log with latest execution stats\n\nUpdate timestamps, durations, commit hashes, messages, file paths, and\nprocessing rates in the last run JSON log to reflect the most recent\nkcmt execution. This ensures accurate tracking of tool performance,\nsuccessful commits, and metadata for debugging and monitoring purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
-    },
-    {
-      "success": true,
-      "commit_hash": "abfb032",
-      "message": "feat(cli): add Ink runtime availability check\n\nAdd a new method to probe for a usable Node+Ink runtime by checking for\nthe node executable and resolving required packages (react, ink). This\nprevents noisy stack traces when dependencies are missing and ensures\ngraceful fallback to the legacy CLI. The existing check method now uses\nthis probe in addition to path existence.",
-      "error": null,
-      "file_path": "kcmt/cli.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "chore(kcmt): update last run log with provider switch",
-    "feat(cli): add Ink runtime availability check"
+    "chore(kcmt): update last run log with latest execution stats"
   ],
   "stats": {
-    "total_files": 2,
-    "prepared": 2,
-    "processed": 2,
-    "successes": 2,
+    "total_files": 1,
+    "prepared": 1,
+    "processed": 1,
+    "successes": 1,
     "failures": 0,
-    "elapsed": 11.103029,
-    "rate": 0.180131
+    "elapsed": 8.334222,
+    "rate": 0.119987
   },
   "auto_push_state": "pushed"
 }
