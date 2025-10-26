@@ -20,6 +20,7 @@ from typing import Any, Optional, cast
 from .commit import CommitGenerator
 from .config import (
     DEFAULT_MODELS,
+    PROVIDER_DISPLAY_NAMES,
     Config,
     describe_provider,
     detect_available_providers,
@@ -53,6 +54,9 @@ GREEN = "\033[92m"
 YELLOW = "\033[93m"
 MAGENTA = "\033[95m"
 RED = "\033[91m"
+
+PROVIDER_ORDER = ["openai", "anthropic", "xai", "github"]
+MAX_PRIORITY = 5
 
 
 class DecimalFriendlyJSONEncoder(json.JSONEncoder):
@@ -616,112 +620,144 @@ Examples:
 
     def _run_configuration(self, args: argparse.Namespace, repo_root: Path) -> int:
         detected = detect_available_providers()
-        provider = args.provider or self._prompt_provider(detected)
+        config = load_config(repo_root=repo_root)
 
-        provider_meta = DEFAULT_MODELS[provider]
-        # Rich model selection with pricing, but remain compatible with freeform
-        # manual entry used by tests and power users.
-        model = args.model or self._prompt_model_with_menu(
-            provider, provider_meta["model"]
-        )
-        endpoint = args.endpoint or self._prompt_endpoint(
-            provider, provider_meta["endpoint"]
-        )
-        api_key_env = args.api_key_env or self._prompt_api_key_env(provider, detected)
+        providers_map: dict[str, dict[str, Any]] = dict(getattr(config, "providers", {}) or {})
+        for prov, meta in DEFAULT_MODELS.items():
+            entry = providers_map.get(prov, {}) or {}
+            entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
+            entry.setdefault("endpoint", meta["endpoint"])
+            entry.setdefault("api_key_env", meta["api_key_env"])
+            entry.setdefault("preferred_model", meta["model"])
+            providers_map[prov] = entry
 
-        # Sanity-check and correct common mix-ups (URL pasted as env var, etc.)
         def looks_like_url(value: str) -> bool:
             return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
 
         def looks_like_env(value: str) -> bool:
             return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
 
-        if looks_like_url(api_key_env) and looks_like_env(endpoint) and not looks_like_url(endpoint):
-            api_key_env, endpoint = endpoint, api_key_env
-        if not looks_like_env(api_key_env):
-            api_key_env = DEFAULT_MODELS[provider]["api_key_env"]
+        if args.provider and args.provider in providers_map:
+            if args.endpoint:
+                providers_map[args.provider]["endpoint"] = args.endpoint
+            if args.api_key_env:
+                providers_map[args.provider]["api_key_env"] = args.api_key_env
 
-        # Optional secondary configuration block
-        sec_provider: Optional[str] = None
-        sec_model: Optional[str] = None
-        sec_endpoint: Optional[str] = None
-        sec_api_key_env: Optional[str] = None
+        for prov in PROVIDER_ORDER:
+            entry = providers_map[prov]
+            self._print_heading(f"{PROVIDER_DISPLAY_NAMES.get(prov, prov)} endpoint")
+            endpoint = self._prompt_endpoint(prov, entry["endpoint"])
+            self._print_heading(f"API key env for {PROVIDER_DISPLAY_NAMES.get(prov, prov)}")
+            env_choice = self._prompt_api_key_env(prov, detected)
 
-        is_non_interactive = (
-            bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
-        )
-        choice = ""
-        if not is_non_interactive:
-            try:
-                choice = (
-                    input(f"{MAGENTA}Configure a secondary provider?{RESET} [y/N]: ")
-                    .strip()
-                    .lower()
-                )
-            except EOFError:
-                choice = ""
-        if choice in {"y", "yes"}:
-            # Exclude already chosen provider from the quick list indicator,
-            # but still allow selecting it if user insists.
-            self._print_heading("Secondary provider")
-            sec_provider = self._prompt_provider(detected)
-            sec_meta = DEFAULT_MODELS[sec_provider]
-            sec_model = self._prompt_model_with_menu(sec_provider, sec_meta["model"])
-            sec_endpoint = self._prompt_endpoint(sec_provider, sec_meta["endpoint"])
-            sec_api_key_env = self._prompt_api_key_env(sec_provider, detected)
+            if looks_like_url(env_choice) and looks_like_env(endpoint) and not looks_like_url(endpoint):
+                env_choice, endpoint = endpoint, env_choice
+            if not looks_like_env(env_choice):
+                env_choice = DEFAULT_MODELS[prov]["api_key_env"]
+            if not looks_like_url(endpoint):
+                endpoint = DEFAULT_MODELS[prov]["endpoint"]
 
-        # Start from existing providers map if present to preserve prior edits
-        from .config import DEFAULT_MODELS as _DM
-        from .config import PROVIDER_DISPLAY_NAMES
+            entry["endpoint"] = endpoint
+            entry["api_key_env"] = env_choice
+            providers_map[prov] = entry
 
-        existing = load_persisted_config(repo_root)
-        providers_map: dict[str, dict[str, Any]] = {}
-        if existing and isinstance(getattr(existing, "providers", {}), dict):
-            providers_map = dict(existing.providers)
-        # Ensure all providers have an entry with defaults
-        for prov, meta in _DM.items():
-            ent = providers_map.get(prov, {}) or {}
-            ent.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
-            ent.setdefault("endpoint", meta["endpoint"])
-            ent.setdefault("api_key_env", meta["api_key_env"])
-            providers_map[prov] = ent
-        # Apply primary choices
-        p_entry = providers_map.get(provider, {})
-        p_entry["endpoint"] = endpoint
-        p_entry["api_key_env"] = api_key_env
-        p_entry["preferred_model"] = model
-        providers_map[provider] = p_entry
-        # Apply secondary choices if any
-        if sec_provider:
-            sp_meta = _DM[sec_provider]
-            sp_entry = providers_map.get(sec_provider, {})
-            sp_entry.setdefault(
-                "name", PROVIDER_DISPLAY_NAMES.get(sec_provider, sec_provider)
+        eligible_providers = [
+            prov
+            for prov in PROVIDER_ORDER
+            if providers_map[prov]["api_key_env"] and os.environ.get(providers_map[prov]["api_key_env"])
+        ]
+        if not eligible_providers:
+            self._print_warning(
+                "No providers with detected API keys. Model priority can still be set, "
+                "but only configured providers will be available."
             )
-            sp_entry["endpoint"] = sec_endpoint or sp_meta["endpoint"]
-            sp_entry["api_key_env"] = sec_api_key_env or sp_meta["api_key_env"]
-            sp_entry["preferred_model"] = sec_model or sp_meta["model"]
-            providers_map[sec_provider] = sp_entry
+            eligible_providers = PROVIDER_ORDER
 
-        # Keep legacy mapping in sync for compatibility
-        provider_env_overrides = {
-            prov: str(ent.get("api_key_env") or _DM[prov]["api_key_env"])
-            for prov, ent in providers_map.items()
-        }
+        slots: list[Optional[dict[str, str]]] = [None] * MAX_PRIORITY
+        existing_priority = getattr(config, "model_priority", []) or []
+        for idx, pref in enumerate(existing_priority[:MAX_PRIORITY]):
+            if isinstance(pref, dict) and pref.get("provider") and pref.get("model"):
+                slots[idx] = {"provider": pref["provider"], "model": pref["model"]}
 
-        config = Config(
-            provider=provider,
-            model=model,
-            llm_endpoint=endpoint,
-            api_key_env=api_key_env,
-            secondary_provider=sec_provider,
-            secondary_model=sec_model,
-            secondary_llm_endpoint=sec_endpoint,
-            secondary_api_key_env=sec_api_key_env,
-            git_repo_path=str(repo_root.expanduser().resolve(strict=False)),
-            providers=providers_map,
-            provider_env_overrides=provider_env_overrides,
-        )
+        if args.provider and args.provider in DEFAULT_MODELS:
+            model_override = args.model or providers_map[args.provider].get("preferred_model") or DEFAULT_MODELS[args.provider]["model"]
+            slots[0] = {"provider": args.provider, "model": model_override}
+
+        def prompt_priority_provider(slot_index: int, current: Optional[str]) -> Optional[str]:
+            while True:
+                self._print_heading(f"Priority {slot_index + 1} provider")
+                for idx, prov in enumerate(eligible_providers, start=1):
+                    badge = GREEN + "●" + RESET if os.environ.get(providers_map[prov]["api_key_env"]) else YELLOW + "○" + RESET
+                    print(f"  {idx}. {badge} {PROVIDER_DISPLAY_NAMES.get(prov, prov)}")
+                if slot_index > 0:
+                    print("  0. Done (leave remaining empty)")
+                prompt = f"{MAGENTA}Choice{RESET} [{current or eligible_providers[0]}]: "
+                try:
+                    choice = input(prompt).strip()
+                except EOFError:
+                    choice = ""
+                if not choice:
+                    return current or eligible_providers[0]
+                if slot_index > 0 and choice == "0":
+                    return None
+                if choice.isdigit():
+                    index = int(choice)
+                    if 1 <= index <= len(eligible_providers):
+                        return eligible_providers[index - 1]
+                lowered = choice.lower()
+                for prov in eligible_providers:
+                    label = PROVIDER_DISPLAY_NAMES.get(prov, prov).lower()
+                    if lowered in {prov.lower(), label}:
+                        return prov
+                self._print_warning("Invalid selection. Please choose again.")
+
+        for idx in range(MAX_PRIORITY):
+            current_provider = slots[idx]["provider"] if slots[idx] else None
+            provider_choice = prompt_priority_provider(idx, current_provider)
+            if provider_choice is None:
+                for rest in range(idx, MAX_PRIORITY):
+                    slots[rest] = None
+                break
+            default_model = (
+                slots[idx]["model"] if slots[idx] else providers_map[provider_choice].get("preferred_model") or DEFAULT_MODELS[provider_choice]["model"]
+            )
+            model_choice = self._prompt_model_with_menu(provider_choice, default_model)
+            slots[idx] = {"provider": provider_choice, "model": model_choice}
+
+        priority = [slot for slot in slots if slot]
+        seen_pairs: set[tuple[str, str]] = set()
+        deduped: list[dict[str, str]] = []
+        for pref in priority:
+            pair = (pref["provider"], pref["model"])
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            deduped.append(pref)
+            if len(deduped) >= MAX_PRIORITY:
+                break
+        if not deduped:
+            fallback_provider = eligible_providers[0]
+            deduped.append({
+                "provider": fallback_provider,
+                "model": DEFAULT_MODELS[fallback_provider]["model"],
+            })
+
+        primary_provider = deduped[0]["provider"]
+        primary_model = deduped[0]["model"]
+        config.provider = primary_provider
+        config.model = primary_model
+        config.llm_endpoint = providers_map[primary_provider]["endpoint"]
+        config.api_key_env = providers_map[primary_provider]["api_key_env"]
+
+        first_by_provider: dict[str, str] = {}
+        for pref in deduped:
+            first_by_provider.setdefault(pref["provider"], pref["model"])
+        for prov, entry in providers_map.items():
+            if prov in first_by_provider:
+                entry["preferred_model"] = first_by_provider[prov]
+
+        config.providers = providers_map
+        config.model_priority = deduped
         save_config(config, repo_root)
 
         self._print_success(
@@ -784,22 +820,24 @@ Examples:
                 git_repo_path=str(repo_root),
             )
 
-        # Build/extend the mapping
-        overrides = dict(getattr(cfg, "provider_env_overrides", {}) or {})
         providers_map = dict(getattr(cfg, "providers", {}) or {})
+        for prov, meta in DEFAULT_MODELS.items():
+            entry = providers_map.get(prov, {}) or {}
+            entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
+            entry.setdefault("endpoint", meta["endpoint"])
+            entry.setdefault("api_key_env", meta["api_key_env"])
+            entry.setdefault("preferred_model", meta["model"])
+            providers_map[prov] = entry
+
         for prov in selected:
             self._print_heading(f"API key for {prov}")
             env_key = self._prompt_api_key_env(prov, det)
-            overrides[prov] = env_key
-            # Ensure providers map entry exists and is updated
-            entry = providers_map.get(prov, {})
-            entry["api_key_env"] = env_key
-            entry.setdefault("name", describe_provider(prov).split(" (")[0])
-            entry.setdefault("endpoint", DEFAULT_MODELS[prov]["endpoint"])
-            providers_map[prov] = entry
+            if env_key:
+                providers_map[prov]["api_key_env"] = env_key
 
-        cfg.provider_env_overrides = overrides
         cfg.providers = providers_map
+        if cfg.provider in providers_map:
+            cfg.api_key_env = providers_map[cfg.provider].get("api_key_env", cfg.api_key_env)
         save_config(cfg, repo_root)
         self._print_success(
             "Saved API key env var mapping for: {}".format(", ".join(selected))
