@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T10:38:49Z",
+  "timestamp": "2025-10-14T11:44:51Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast-1",
@@ -8,8 +8,8 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 9.660309,
-  "rate_commits_per_sec": 0.215032,
+  "duration_seconds": 11.375034,
+  "rate_commits_per_sec": 0.180131,
   "counts": {
     "files_total": 2,
     "prepared_total": 2,
@@ -30,23 +30,23 @@
   "commits": [
     {
       "success": true,
-      "commit_hash": "de1e199",
-      "message": "test(tests): isolate main entrypoint test with temp directory",
+      "commit_hash": "c697dc3",
+      "message": "chore(kcmt): update last run log with provider switch\n\nSwitched from OpenAI to X.AI provider and updated model to grok-code-\nfast-1. Recorded successful commits for test isolation and dependency\nbump, with improved processing stats and auto-push enabled. Reduced file\ncount from 4 to 2, achieving full success.",
       "error": null,
-      "file_path": "tests/test_main_entrypoint.py"
+      "file_path": ".kcmt/last_run.json"
     },
     {
       "success": true,
-      "commit_hash": "1af5ad1",
-      "message": "chore(deps): bump kcmt version to 0.2.0",
+      "commit_hash": "abfb032",
+      "message": "feat(cli): add Ink runtime availability check\n\nAdd a new method to probe for a usable Node+Ink runtime by checking for\nthe node executable and resolving required packages (react, ink). This\nprevents noisy stack traces when dependencies are missing and ensures\ngraceful fallback to the legacy CLI. The existing check method now uses\nthis probe in addition to path existence.",
       "error": null,
-      "file_path": "uv.lock"
+      "file_path": "kcmt/cli.py"
     }
   ],
   "deletions": [],
   "subjects": [
-    "test(tests): isolate main entrypoint test with temp directory",
-    "chore(deps): bump kcmt version to 0.2.0"
+    "chore(kcmt): update last run log with provider switch",
+    "feat(cli): add Ink runtime availability check"
   ],
   "stats": {
     "total_files": 2,
@@ -54,8 +54,8 @@
     "processed": 2,
     "successes": 2,
     "failures": 0,
-    "elapsed": 9.300922,
-    "rate": 0.215032
+    "elapsed": 11.103029,
+    "rate": 0.180131
   },
   "auto_push_state": "pushed"
 }
