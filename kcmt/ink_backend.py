@@ -55,8 +55,9 @@ def _serialise(value: Any) -> Any:
 
 def _emit(event: str, payload: Dict[str, Any]) -> None:
     message = {"event": event, "payload": _serialise(payload)}
-    sys.stdout.write(json.dumps(message) + "\n")
-    sys.stdout.flush()
+    target = sys.stderr if event == "tick" else sys.stdout
+    target.write(json.dumps(message) + "\n")
+    target.flush()
 
 
 def _resolve_repo_root(repo_path: Optional[str]) -> Path:
