@@ -92,8 +92,26 @@ function buildRegistry(payload) {
 
 function renderProviderSections(payload) {
   const registry = buildRegistry(payload);
+  const exclusions = Array.isArray(payload?.exclusions) ? payload.exclusions : [];
   if (!registry.size) {
-    return [h(Text, {key: 'bench-empty', dimColor: true}, 'No benchmark results yet.')];
+    const messages = [];
+    messages.push(h(Text, {key: 'bench-empty', dimColor: true}, 'No benchmark results yet.'));
+    if (exclusions.length) {
+      messages.push(h(Text, {key: 'bench-exc-title', color: 'yellow'}, 'Provider exclusions:'));
+      exclusions.slice(0, 10).forEach((item, idx) => {
+        const provider = item?.provider || 'unknown';
+        const model = item?.model || '*';
+        const reason = item?.reason || item?.message || 'unavailable';
+        messages.push(
+          h(
+            Text,
+            {key: `bench-exc-${idx}`, dimColor: true},
+            `${provider} / ${model}: ${reason}`,
+          ),
+        );
+      });
+    }
+    return messages;
   }
 
   const providers = new Map();
