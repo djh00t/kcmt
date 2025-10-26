@@ -186,13 +186,15 @@ export default function WorkflowView({onBack}) {
           {flexDirection: 'column'},
           h(Text, {color: 'greenBright'}, summary?.result?.summary || 'Workflow complete'),
           Array.isArray(summary?.result?.file_commits)
-            ? summary.result.file_commits.map((item, idx) =>
-                h(
-                  Text,
-                  {key: idx, dimColor: true},
-                  `${item.file_path || item.filePath}: ${item.message || item.subject || item.commit_message}`,
-                ),
-              )
+            ? summary.result.file_commits.flatMap((item, idx) => {
+                const file = item.file_path || item.filePath || '';
+                const raw = String(item.message || item.subject || item.commit_message || '');
+                const subject = raw.split(/\r?\n/)[0];
+                return [
+                  h(Text, {key: `commit-${idx}`, dimColor: true}, `${file}: ${subject}`),
+                  h(Text, {key: `sp-${idx}`}, ''),
+                ];
+              })
             : null,
         )
       : null,
