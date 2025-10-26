@@ -15,11 +15,11 @@ const PROVIDER_LABELS = {
 };
 
 const SCORE_COLUMNS = [
-  {key: 'avg_latency_ms', label: 'Latency (ms)', width: 14, format: value => (value != null ? value.toFixed(1) : '—')},
-  {key: 'avg_cost_usd', label: 'Cost ($)', width: 11, format: value => (value != null ? `$${value.toFixed(4)}` : '—')},
-  {key: 'quality', label: 'Quality', width: 10, format: value => (value != null ? value.toFixed(1) : '—')},
-  {key: 'success_rate', label: 'Success %', width: 11, format: value => (value != null ? `${(value * 100).toFixed(0)}%` : '—')},
-  {key: 'runs', label: 'Runs', width: 6, format: value => (value != null ? String(value) : '—')},
+  {key: 'avg_latency_ms', label: 'Latency (ms)', width: 14, align: 'end', format: value => (value != null ? value.toFixed(1) : '—')},
+  {key: 'avg_cost_usd', label: 'Cost ($)', width: 11, align: 'end', format: value => (value != null ? `$${value.toFixed(4)}` : '—')},
+  {key: 'quality', label: 'Quality', width: 10, align: 'end', format: value => (value != null ? value.toFixed(1) : '—')},
+  {key: 'success_rate', label: 'Success %', width: 11, align: 'end', format: value => (value != null ? `${(value * 100).toFixed(0)}%` : '—')},
+  {key: 'runs', label: 'Runs', width: 6, align: 'end', format: value => (value != null ? String(value) : '—')},
 ];
 
 const CATEGORY_COLUMNS = [
@@ -93,7 +93,7 @@ function buildRegistry(payload) {
 function renderProviderSections(payload) {
   const registry = buildRegistry(payload);
   if (!registry.size) {
-    return [h(Text, {dimColor: true}, 'No benchmark results yet.')];
+    return [h(Text, {key: 'bench-empty', dimColor: true}, 'No benchmark results yet.')];
   }
 
   const providers = new Map();
@@ -111,7 +111,7 @@ function renderProviderSections(payload) {
     ...CATEGORY_COLUMNS.map(col => pad(col.label, col.width)),
   ].join(' ');
 
-  const divider = header.replace(/./g, '-');
+  const divider = header.replace(/\S/g, '-');
 
   const sortedProviders = Array.from(providers.keys()).sort((a, b) => a.localeCompare(b));
   sortedProviders.forEach((provider, idx) => {
@@ -134,7 +134,7 @@ function renderProviderSections(payload) {
       const scoreCells = SCORE_COLUMNS.map(col => {
         const raw = row[col.key];
         const formatted = col.format(raw);
-        const padded = pad(formatted, col.width);
+        const padded = pad(formatted, col.width, col.align || 'start');
         return raw != null ? chalk.cyan(padded) : padded;
       });
 
