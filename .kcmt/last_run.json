@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-26T01:12:30Z",
+  "timestamp": "2025-10-26T01:14:23Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
   "provider": "xai",
   "model": "grok-code-fast-1",
@@ -8,8 +8,8 @@
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 7.919121,
-  "rate_commits_per_sec": 0.13003,
+  "duration_seconds": 22.57949,
+  "rate_commits_per_sec": 0.044773,
   "counts": {
     "files_total": 1,
     "prepared_total": 1,
@@ -30,7 +30,7 @@
   "commits": [
     {
       "success": true,
-      "commit_hash": "9b44046",
+      "commit_hash": "f331101",
       "message": "chore(kcmt): update execution stats in last run log\n\nUpdated timestamp, duration, processing rate, and commit details in the\nJSON log to reflect the latest kcmt execution. This maintains accurate\nperformance tracking and metadata for debugging purposes.",
       "error": null,
       "file_path": ".kcmt/last_run.json"
@@ -46,8 +46,8 @@
     "processed": 1,
     "successes": 1,
     "failures": 0,
-    "elapsed": 7.690544,
-    "rate": 0.13003
+    "elapsed": 22.334718,
+    "rate": 0.044773
   },
   "auto_push_state": "pushed"
 }
