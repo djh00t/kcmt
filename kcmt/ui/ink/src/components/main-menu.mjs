@@ -3,6 +3,7 @@ import {Box, Text} from 'ink';
 import SelectInput from 'ink-select-input';
 import gradient from 'gradient-string';
 import {AppContext} from '../app.mjs';
+const h = React.createElement;
 
 const palette = gradient(['#ff6a88', '#ff99ac', '#f2f5f7']);
 
@@ -29,14 +30,13 @@ const menuItems = [
   },
 ];
 
-const MenuItem = ({isSelected, label, hint}) => (
-  <Box flexDirection="column">
-    <Text color={isSelected ? 'cyanBright' : 'white'}>{label}</Text>
-    {hint ? (
-      <Text dimColor>{hint}</Text>
-    ) : null}
-  </Box>
-);
+const MenuItem = ({isSelected, label, hint}) =>
+  h(
+    Box,
+    {flexDirection: 'column'},
+    h(Text, {color: isSelected ? 'cyanBright' : 'white'}, label),
+    hint ? h(Text, {dimColor: true}, hint) : null,
+  );
 
 export default function MainMenu({onNavigate}) {
   const {bootstrap} = useContext(AppContext);
@@ -53,25 +53,26 @@ export default function MainMenu({onNavigate}) {
     };
   }, [bootstrap]);
 
-  return (
-    <Box flexDirection="column" padding={1} gap={1} borderStyle="round" borderColor="cyan">
-      <Box flexDirection="column">
-        <Text>{palette.multiline('kcmt ✨')}</Text>
-        {repoInfo ? (
-          <Text dimColor>
-            Repo: {repoInfo.repo} • Provider: {repoInfo.provider} • Model: {repoInfo.model}
-          </Text>
-        ) : null}
-      </Box>
-      <SelectInput
-        onSelect={item => onNavigate(item.value)}
-        items={menuItems.map(item => ({
-          label: item.label,
-          value: item.value,
-          hint: item.hint,
-        }))}
-        itemComponent={MenuItem}
-      />
-    </Box>
+  return h(
+    Box,
+    {flexDirection: 'column', padding: 1, gap: 1, borderStyle: 'round', borderColor: 'cyan'},
+    h(
+      Box,
+      {flexDirection: 'column'},
+      h(Text, null, palette.multiline('kcmt ✨')),
+      h(Text, {dimColor: true}, 'UI: TUI (Ink)'),
+      repoInfo
+        ? h(
+            Text,
+            {dimColor: true},
+            `Repo: ${repoInfo.repo} • Provider: ${repoInfo.provider} • Model: ${repoInfo.model}`,
+          )
+        : null,
+    ),
+    h(SelectInput, {
+      onSelect: item => onNavigate(item.value),
+      items: menuItems.map(item => ({label: item.label, value: item.value, hint: item.hint})),
+      itemComponent: MenuItem,
+    }),
   );
 }
