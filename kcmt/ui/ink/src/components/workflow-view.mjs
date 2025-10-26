@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import gradient from 'gradient-string';
 import {AppContext} from '../app.mjs';
+const h = React.createElement;
 
 const headerGradient = gradient(['#00c6ff', '#0072ff']);
 
@@ -14,41 +15,36 @@ function ProgressBar({label, stats}) {
   const width = 32;
   const filled = Math.round(width * percent);
   const bar = `${'█'.repeat(filled)}${'░'.repeat(Math.max(0, width - filled))}`;
-  return (
-    <Box flexDirection="column">
-      <Text>{label}</Text>
-      <Text>
-        {chalk.cyan(bar)} {Math.round(percent * 100)}% ({processed}/{total})
-      </Text>
-    </Box>
+  return h(
+    Box,
+    {flexDirection: 'column'},
+    h(Text, null, label),
+    h(Text, null, `${chalk.cyan(bar)} ${Math.round(percent * 100)}% (${processed}/${total})`),
   );
 }
 
 function Timeline({events}) {
   if (!events.length) {
-    return (
-      <Text dimColor>{'Waiting for the first AI-prepared commit…'}</Text>
-    );
+    return h(Text, {dimColor: true}, 'Waiting for the first AI-prepared commit…');
   }
-  return (
-    <Box flexDirection="column" gap={0}>
-      {events.slice(-6).map((event, idx) => (
-        <Box key={`${event.type}-${idx}`} flexDirection="column">
-          <Text
-            color={
-              event.type === 'commit'
-                ? 'greenBright'
-                : event.type === 'warning'
-                  ? 'yellow'
-                  : 'cyan'
-            }
-          >
-            {event.icon} {event.title}
-          </Text>
-          {event.detail ? <Text dimColor>{event.detail}</Text> : null}
-        </Box>
-      ))}
-    </Box>
+  return h(
+    Box,
+    {flexDirection: 'column', gap: 0},
+    ...events.slice(-6).map((event, idx) =>
+      h(
+        Box,
+        {key: `${event.type}-${idx}`, flexDirection: 'column'},
+        h(
+          Text,
+          {
+            color:
+              event.type === 'commit' ? 'greenBright' : event.type === 'warning' ? 'yellow' : 'cyan',
+          },
+          `${event.icon} ${event.title}`,
+        ),
+        event.detail ? h(Text, {dimColor: true}, event.detail) : null,
+      ),
+    ),
   );
 }
 
@@ -170,44 +166,44 @@ export default function WorkflowView({onBack}) {
     }
   });
 
-  return (
-    <Box flexDirection="column" padding={1} gap={1} borderStyle="round" borderColor="blueBright">
-      <Text>{headerGradient('🧠 kcmt workflow')}</Text>
-      <ProgressBar label={`Stage: ${stage.toUpperCase()}`} stats={stats} />
-      <Box flexDirection="column" gap={1}>
-        <Text color="whiteBright">Live queue</Text>
-        <Timeline events={events} />
-      </Box>
-      {status === 'running' ? (
-        <Text dimColor>
-          <Spinner type="runner" /> Press ESC to abort.
-        </Text>
-      ) : null}
-      {summary ? (
-        <Box flexDirection="column">
-          <Text color="greenBright">{summary?.result?.summary || 'Workflow complete'}</Text>
-          {Array.isArray(summary?.result?.file_commits)
-            ? summary.result.file_commits.map((item, idx) => (
-                <Text key={idx} dimColor>
-                  {item.file_path || item.filePath}: {item.message || item.subject || item.commit_message}
-                </Text>
-              ))
-            : null}
-        </Box>
-      ) : null}
-      {errors.length ? (
-        <Box flexDirection="column">
-          <Text color="redBright">Issues</Text>
-          {errors.slice(-5).map((err, idx) => (
-            <Text key={idx} dimColor>
-              • {err}
-            </Text>
-          ))}
-        </Box>
-      ) : null}
-      {status !== 'running' ? (
-        <Text dimColor>Press q to return to the main menu.</Text>
-      ) : null}
-    </Box>
+  return h(
+    Box,
+    {flexDirection: 'column', padding: 1, gap: 1, borderStyle: 'round', borderColor: 'blueBright'},
+    h(Text, null, headerGradient('🧠 kcmt workflow')),
+    h(ProgressBar, {label: `Stage: ${stage.toUpperCase()}`, stats}),
+    h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, {color: 'whiteBright'}, 'Live queue'),
+      h(Timeline, {events}),
+    ),
+    status === 'running'
+      ? h(Text, {dimColor: true}, h(Spinner, {type: 'runner'}), ' Press ESC to abort.')
+      : null,
+    summary
+      ? h(
+          Box,
+          {flexDirection: 'column'},
+          h(Text, {color: 'greenBright'}, summary?.result?.summary || 'Workflow complete'),
+          Array.isArray(summary?.result?.file_commits)
+            ? summary.result.file_commits.map((item, idx) =>
+                h(
+                  Text,
+                  {key: idx, dimColor: true},
+                  `${item.file_path || item.filePath}: ${item.message || item.subject || item.commit_message}`,
+                ),
+              )
+            : null,
+        )
+      : null,
+    errors.length
+      ? h(
+          Box,
+          {flexDirection: 'column'},
+          h(Text, {color: 'redBright'}, 'Issues'),
+          ...errors.slice(-5).map((err, idx) => h(Text, {key: idx, dimColor: true}, `• ${err}`)),
+        )
+      : null,
+    status !== 'running' ? h(Text, {dimColor: true}, 'Press q to return to the main menu.') : null,
   );
 }
