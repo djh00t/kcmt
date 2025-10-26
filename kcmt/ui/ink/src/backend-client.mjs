@@ -106,8 +106,8 @@ export function createBackendClient(argv) {
     run,
     stream,
     bootstrap: () => run('bootstrap', {argv}),
-    saveConfig: config => run('save-config', {config}),
-    savePreferences: preferences => run('save-preferences', {preferences}),
+    saveConfig: config => Promise.resolve(run('save-config', {config})),
+    savePreferences: preferences => Promise.resolve(run('save-preferences', {preferences})),
     runBenchmark: options => stream('benchmark', options),
     runWorkflow: options => stream('workflow', options),
   };
