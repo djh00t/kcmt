@@ -23,25 +23,27 @@ const initialMode = argv.benchmark
     ? 'configure'
     : null;
 
+const h = React.createElement;
 const gradientBanner = gradient(['#4facfe', '#00f2fe']);
 
-const LoadingScreen = ({label = 'Connecting to kcmt magic'} = {}) => (
-  <Box flexDirection="column" padding={1} borderStyle="round" borderColor="cyan">
-    <Text>{gradientBanner('🚀 kcmt')}</Text>
-    <Text>
-      <Spinner type="earth" /> {label}
-    </Text>
-  </Box>
-);
+const LoadingScreen = ({label = 'Connecting to kcmt magic'} = {}) =>
+  h(
+    Box,
+    {flexDirection: 'column', padding: 1, borderStyle: 'round', borderColor: 'cyan'},
+    h(Text, null, gradientBanner('🚀 kcmt')),
+    h(Text, {dimColor: true}, 'Mode: TUI (Ink)'),
+    h(Text, null, h(Spinner, {type: 'earth'}), ' ', label),
+  );
 
-const ErrorScreen = ({message}) => (
-  <Box flexDirection="column" padding={1} borderStyle="round" borderColor="red">
-    <Text color="redBright">✖ {message}</Text>
-    <Text dimColor>
-      Press Ctrl+C to exit.
-    </Text>
-  </Box>
-);
+const ErrorScreen = ({message}) =>
+  h(
+    Box,
+    {flexDirection: 'column', padding: 1, borderStyle: 'round', borderColor: 'red'},
+    h(Text, null, gradientBanner('🚀 kcmt')),
+    h(Text, {dimColor: true}, 'Mode: TUI (Ink)'),
+    h(Text, {color: 'redBright'}, `✖ ${message}`),
+    h(Text, {dimColor: true}, 'Press Ctrl+C to exit.'),
+  );
 
 export default function App() {
   const backend = useMemo(() => createBackendClient(argv), []);
@@ -76,11 +78,11 @@ export default function App() {
   }, []);
 
   if (status === 'loading') {
-    return <LoadingScreen />;
+    return h(LoadingScreen, null);
   }
 
   if (status === 'error' || !bootstrap) {
-    return <ErrorScreen message={error?.message || 'Failed to start kcmt backend'} />;
+    return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
   }
 
   const contextValue = {
@@ -92,42 +94,39 @@ export default function App() {
   };
 
   if (view === 'benchmark') {
-    return (
-      <AppContext.Provider value={contextValue}>
-        <BenchmarkView onBack={() => setView('menu')} />
-      </AppContext.Provider>
+    return h(
+      AppContext.Provider,
+      {value: contextValue},
+      h(BenchmarkView, {onBack: () => setView('menu')}),
     );
   }
 
   if (view === 'configure') {
-    return (
-      <AppContext.Provider value={contextValue}>
-        <ConfigureView
-          onBack={() => setView('menu')}
-          showAdvanced={Boolean(argv['configure-all'])}
-        />
-      </AppContext.Provider>
+    return h(
+      AppContext.Provider,
+      {value: contextValue},
+      h(ConfigureView, {onBack: () => setView('menu'), showAdvanced: Boolean(argv['configure-all'])}),
     );
   }
 
   if (view === 'workflow') {
-    return (
-      <AppContext.Provider value={contextValue}>
-        <WorkflowView onBack={() => setView('menu')} />
-      </AppContext.Provider>
+    return h(
+      AppContext.Provider,
+      {value: contextValue},
+      h(WorkflowView, {onBack: () => setView('menu')}),
     );
   }
 
-  return (
-    <AppContext.Provider value={contextValue}>
-      <MainMenu
-        onNavigate={mode => {
-          if (mode === 'exit') {
-            process.exit(0);
-          }
-          setView(mode);
-        }}
-      />
-    </AppContext.Provider>
+  return h(
+    AppContext.Provider,
+    {value: contextValue},
+    h(MainMenu, {
+      onNavigate: mode => {
+        if (mode === 'exit') {
+          process.exit(0);
+        }
+        setView(mode);
+      },
+    }),
   );
 }
