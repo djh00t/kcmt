@@ -209,11 +209,8 @@ export default function WorkflowView({onBack}) {
   }, [appendMessages, backend, bootstrap, overrides, argv]);
 
   useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === 'c')) {
+    if (key.escape || (key.ctrl && input === 'c') || input === 'q') {
       emitterRef.current?.cancel?.();
-      onBack();
-    }
-    if (input === 'q' && status !== 'running') {
       onBack();
     }
   });
