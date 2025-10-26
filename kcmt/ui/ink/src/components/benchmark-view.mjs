@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import gradient from 'gradient-string';
 import {AppContext} from '../app.mjs';
+const h = React.createElement;
 
 const titleGradient = gradient(['#f6d365', '#fda085']);
 
@@ -12,20 +13,19 @@ function Leaderboard({title, rows}) {
     return null;
   }
   const headers = ['Provider', 'Model', 'Latency', 'Cost', 'Quality', 'Success'];
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text color="whiteBright">{title}</Text>
-      <Text dimColor>{headers.join('  │  ')}</Text>
-      {rows.slice(0, 8).map((row, idx) => {
-        const line = `${chalk.cyan(row.provider.padEnd(8))} │ ${chalk.green(
-          row.model.padEnd(24)
-        )} │ ${row.avg_latency_ms.toFixed(1)} ms │ $${row.avg_cost_usd
-          .toFixed(4)} │ ${row.quality.toFixed(1)} │ ${(
-          row.success_rate * 100
-        ).toFixed(0)}%`;
-        return <Text key={`${row.provider}-${row.model}-${idx}`}>{line}</Text>;
-      })}
-    </Box>
+  return h(
+    Box,
+    {flexDirection: 'column', marginTop: 1},
+    h(Text, {color: 'whiteBright'}, title),
+    h(Text, {dimColor: true}, headers.join('  │  ')),
+    ...rows.slice(0, 8).map((row, idx) => {
+      const line = `${chalk.cyan(row.provider.padEnd(8))} │ ${chalk.green(
+        row.model.padEnd(24),
+      )} │ ${row.avg_latency_ms.toFixed(1)} ms │ $${row.avg_cost_usd.toFixed(4)} │ ${row.quality.toFixed(1)} │ ${(
+        row.success_rate * 100
+      ).toFixed(0)}%`;
+      return h(Text, {key: `${row.provider}-${row.model}-${idx}`}, line);
+    }),
   );
 }
 
@@ -85,29 +85,28 @@ export default function BenchmarkView({onBack}) {
     }
   });
 
-  return (
-    <Box flexDirection="column" padding={1} gap={1} borderStyle="round" borderColor="yellow">
-      <Text>{titleGradient('🧪 kcmt benchmark lab')}</Text>
-      <Text dimColor>
-        {status === 'running' ? (
-          <>
-            <Spinner type="dots" /> {progress.label || 'Crunching diffs across providers…'}
-          </>
-        ) : status === 'error' ? (
-          `⚠️ ${progress.label || 'Benchmark failed'}`
-        ) : (
-          'Benchmark complete'
-        )}
-      </Text>
-      {payload ? (
-        <>
-          <Leaderboard title="🏆 Overall" rows={payload.overall} />
-          <Leaderboard title="⚡ Fastest" rows={payload.fastest} />
-          <Leaderboard title="💰 Cheapest" rows={payload.cheapest} />
-          <Leaderboard title="🎯 Best Quality" rows={payload.best_quality} />
-        </>
-      ) : null}
-      <Text dimColor>Press q to return.</Text>
-    </Box>
+  const statusLine =
+    status === 'running'
+      ? h(React.Fragment, null, h(Spinner, {type: 'dots'}), ' ', progress.label || 'Crunching diffs across providers…')
+      : status === 'error'
+        ? `⚠️ ${progress.label || 'Benchmark failed'}`
+        : 'Benchmark complete';
+
+  return h(
+    Box,
+    {flexDirection: 'column', padding: 1, gap: 1, borderStyle: 'round', borderColor: 'yellow'},
+    h(Text, null, titleGradient('🧪 kcmt benchmark lab')),
+    h(Text, {dimColor: true}, statusLine),
+    payload
+      ? h(
+          React.Fragment,
+          null,
+          h(Leaderboard, {title: '🏆 Overall', rows: payload.overall}),
+          h(Leaderboard, {title: '⚡ Fastest', rows: payload.fastest}),
+          h(Leaderboard, {title: '💰 Cheapest', rows: payload.cheapest}),
+          h(Leaderboard, {title: '🎯 Best Quality', rows: payload.best_quality}),
+        )
+      : null,
+    h(Text, {dimColor: true}, 'Press q to return.'),
   );
 }
