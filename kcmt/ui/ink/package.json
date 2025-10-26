@@ -9,7 +9,7 @@
     "gradient-string": "^2.0.2",
     "ink": "^4.4.1",
     "ink-box": "^5.0.0",
-    "ink-select-input": "^6.0.0",
+    "ink-select-input": "^5.0.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.1.0",
     "lodash.merge": "^4.6.2",
