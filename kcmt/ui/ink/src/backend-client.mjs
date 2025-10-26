@@ -79,8 +79,27 @@ export function createBackendClient(argv) {
       }
     });
 
+    let errBuffer = '';
     child.stderr.on('data', chunk => {
-      emitter.emit('stderr', chunk.toString());
+      errBuffer += chunk.toString();
+      let idx = errBuffer.indexOf('\n');
+      while (idx !== -1) {
+        const line = errBuffer.slice(0, idx).trim();
+        errBuffer = errBuffer.slice(idx + 1);
+        if (line) {
+          try {
+            const message = JSON.parse(line);
+            emitter.emit('event', message);
+            if (message.event === 'error') {
+              const detail = message.payload?.message || 'Backend error';
+              emitter.emit('error', new Error(detail));
+            }
+          } catch (error) {
+            emitter.emit('stderr', line);
+          }
+        }
+        idx = errBuffer.indexOf('\n');
+      }
     });
 
     child.on('close', code => {
