@@ -157,14 +157,7 @@ export default function WorkflowView({onBack}) {
         ]);
       }
       if (event === 'log') {
-        const rawMessage = String(data?.message || '').trim();
-        if (!rawMessage) {
-          return;
-        }
-        if (/^\{\s*"event"/.test(rawMessage)) {
-          return; // suppress raw JSON diagnostic traces
-        }
-        appendMessages(rawMessage);
+        return;
       }
       if (event === 'prepare-error') {
         const file = data?.file || 'unknown file';
@@ -201,11 +194,10 @@ export default function WorkflowView({onBack}) {
       }
     });
 
-    emitter.on('error', err => {
-      setStatus('error');
-      setErrors(prev => [...prev, err.message]);
-      appendMessages(chalk.red(`✖ ${err.message}`));
-    });
+      emitter.on('error', err => {
+        setStatus('error');
+        setErrors(prev => [...prev, err.message]);
+      });
 
     emitter.on('done', () => {
       setStatus(prev => (prev === 'running' ? 'completed' : prev));
@@ -305,6 +297,9 @@ export default function WorkflowView({onBack}) {
   const rootProps = {flexDirection: 'column', paddingX: 0, paddingY: 0};
   if (stdoutRows) {
     rootProps.height = stdoutRows;
+  } else {
+    rootProps.flexGrow = 1;
+    rootProps.alignItems = 'stretch';
   }
 
   return h(
