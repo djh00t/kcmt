@@ -270,6 +270,8 @@ class InkWorkflow(KlingonCMTWorkflow):
 def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(repo_path)
     overrides = payload.get("overrides") or {}
+    argv_payload = payload.get("argv")
+    argv = argv_payload if isinstance(argv_payload, dict) else {}
     persisted = load_persisted_config(repo_root)
     if persisted:
         config = persisted
@@ -289,6 +291,7 @@ def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
         "providerDetection": detection,
         "preferences": preferences,
         "modelCatalog": catalog,
+        "argv": argv,
     }
     _emit("complete", response)
     return 0
