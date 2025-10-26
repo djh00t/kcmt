@@ -85,3 +85,4 @@ venv.bak/
 **/._*
 
 test-
+.kcmt/last_run.json
