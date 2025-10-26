@@ -108,7 +108,118 @@ class CLI:
             )
         except Exception:
             return False
-        return completed.returncode == 0
+        if completed.returncode == 0:
+            return True
+
+        # Attempt a one-time auto-install of Ink UI dependencies when
+        # Node is present but modules are missing. This keeps `pip install`
+        # sufficient for Python deps and lazily prepares the TUI.
+        # Respect opt-out via KCMT_AUTO_INSTALL_INK_DEPS=0/false.
+        auto_env = os.environ.get("KCMT_AUTO_INSTALL_INK_DEPS", "1").lower()
+        if auto_env in {"0", "false", "no", "off"}:
+            return False
+
+        # Do not attempt network installs during tests.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
+
+        installer_cmds: list[list[str]] = []
+        if shutil.which("npm") is not None:
+            installer_cmds.extend(
+                [
+                    [
+                        "npm",
+                        "install",
+                        "--silent",
+                        "--no-audit",
+                        "--no-fund",
+                    ],
+                    [
+                        "npm",
+                        "install",
+                        "--legacy-peer-deps",
+                        "--silent",
+                        "--no-audit",
+                        "--no-fund",
+                    ],
+                    [
+                        "npm",
+                        "install",
+                        "--force",
+                        "--silent",
+                        "--no-audit",
+                        "--no-fund",
+                    ],
+                ]
+            )
+        if shutil.which("pnpm") is not None:
+            installer_cmds.extend(
+                [
+                    [
+                        "pnpm",
+                        "install",
+                        "--silent",
+                    ],
+                    [
+                        "pnpm",
+                        "install",
+                        "--silent",
+                        "--no-strict-peer-dependencies",
+                    ],
+                ]
+            )
+        if shutil.which("yarn") is not None:
+            installer_cmds.extend(
+                [
+                    [
+                        "yarn",
+                        "install",
+                        "--silent",
+                        "--non-interactive",
+                    ],
+                    [
+                        "yarn",
+                        "install",
+                        "--silent",
+                        "--non-interactive",
+                        "--ignore-engines",
+                    ],
+                ]
+            )
+
+        for cmd in installer_cmds:
+            try:
+                completed_install = subprocess.run(
+                    cmd,
+                    cwd=str(INK_APP_PATH.parent),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=120.0,
+                )
+            except Exception:
+                continue
+            if completed_install.returncode == 0:
+                # Re-probe after successful install
+                try:
+                    completed_probe = subprocess.run(
+                        [
+                            "node",
+                            "--input-type=module",
+                            "-e",
+                            probe,
+                        ],
+                        cwd=str(INK_APP_PATH.parent),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                        timeout=2.0,
+                    )
+                except Exception:
+                    return False
+                return completed_probe.returncode == 0
+
+        return False
 
     def _run_with_ink(self, args: Optional[list[str]]) -> Optional[int]:
         if not INK_APP_PATH.exists():
