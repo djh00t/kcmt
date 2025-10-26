@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict, is_dataclass
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -298,9 +299,31 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
         return 2
     repo_root = _resolve_repo_root(repo_path)
     base = load_config(repo_root=repo_root)
-    for field in ("provider", "model", "llm_endpoint", "api_key_env"):
-        if field in config_payload:
-            setattr(base, field, str(config_payload[field]))
+
+    # Extract incoming values with sanitisation
+    provider = str(config_payload.get("provider", base.provider))
+    model = str(config_payload.get("model", base.model))
+    endpoint_raw = str(config_payload.get("llm_endpoint", base.llm_endpoint))
+    api_env_raw = str(config_payload.get("api_key_env", base.api_key_env))
+
+    def looks_like_url(value: str) -> bool:
+        return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
+
+    def looks_like_env(value: str) -> bool:
+        return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+
+    # If user accidentally swapped endpoint and env, correct it
+    if looks_like_url(api_env_raw) and looks_like_env(endpoint_raw) and not looks_like_url(endpoint_raw):
+        api_env_raw, endpoint_raw = endpoint_raw, api_env_raw
+
+    # If env still looks invalid, fall back to provider default
+    if not looks_like_env(api_env_raw):
+        api_env_raw = str(DEFAULT_MODELS.get(provider, {}).get("api_key_env", base.api_key_env))
+
+    base.provider = provider
+    base.model = model
+    base.llm_endpoint = endpoint_raw
+    base.api_key_env = api_env_raw
     base.git_repo_path = str(repo_root)
     providers_map = dict(getattr(base, "providers", {}) or {})
     entry = providers_map.get(base.provider, {})
