@@ -44,41 +44,43 @@ class CommitGenerator:
         self.debug = debug
         self._memo: dict[str, str] = {}
 
-    # ----------------------------
-    # Secondary provider fallback
-    # ----------------------------
-    def _build_secondary_config(self) -> Config | None:
-        """Construct a secondary Config from persisted secondary fields.
-
-        Returns None if no secondary provider configured.
-        """
-        sec_prov = getattr(self._config, "secondary_provider", None)
-        if not sec_prov:
+    def _config_for_preference(self, provider: str, model: str) -> Config | None:
+        if provider not in DEFAULT_MODELS:
             return None
-        defaults = DEFAULT_MODELS.get(sec_prov, {})
-        sec_model = getattr(self._config, "secondary_model", None) or defaults.get(
-            "model"
-        )
-        sec_endpoint = (
-            getattr(self._config, "secondary_llm_endpoint", None)
-            or defaults.get("endpoint")
-            or ""
-        )
-        sec_key_env = (
-            getattr(self._config, "secondary_api_key_env", None)
-            or defaults.get("api_key_env")
-            or ""
-        )
-        # Mirror other properties from primary config
+        defaults = DEFAULT_MODELS[provider]
+        providers_map = getattr(self._config, "providers", {}) or {}
+        entry = providers_map.get(provider, {}) or {}
+        endpoint = entry.get("endpoint") or defaults.get("endpoint") or ""
+        api_key_env = entry.get("api_key_env") or defaults.get("api_key_env") or ""
         return Config(
-            provider=sec_prov,
-            model=str(sec_model or ""),
-            llm_endpoint=str(sec_endpoint or ""),
-            api_key_env=str(sec_key_env or ""),
+            provider=provider,
+            model=str(model),
+            llm_endpoint=str(endpoint),
+            api_key_env=str(api_key_env),
             git_repo_path=self._config.git_repo_path,
             max_commit_length=self._config.max_commit_length,
             auto_push=self._config.auto_push,
+            providers=self._config.providers,
+            model_priority=self._config.model_priority,
         )
+
+    def _iter_priority_clients(self) -> list[tuple[Config, LLMClient]]:
+        chain: list[tuple[Config, LLMClient]] = [(self._config, self.llm_client)]
+        priority = getattr(self._config, "model_priority", []) or []
+        for pref in priority[1:]:
+            prov = pref.get("provider") if isinstance(pref, dict) else None
+            model = pref.get("model") if isinstance(pref, dict) else None
+            if not prov or not model:
+                continue
+            cfg = self._config_for_preference(str(prov), str(model))
+            if not cfg or not cfg.resolve_api_key():
+                continue
+            try:
+                client = LLMClient(cfg, debug=self.debug)
+            except LLMError:
+                continue
+            chain.append((cfg, client))
+        return chain
 
     def _attempt_with_client(
         self,
@@ -243,20 +245,14 @@ class CommitGenerator:
             "yes",
             "on",
         }
-        try:
-            import hashlib
+        digest: str | None = None
+        if not disable_memo:
+            try:
+                import hashlib
 
-            memo_key = None
-            if not disable_memo:
                 digest = hashlib.sha256(diff.encode("utf-8", "ignore")).hexdigest()
-                memo_key = f"{self._config.provider}:{self._config.model}:{digest}"
-                cached = self._memo.get(memo_key)
-                if cached:
-                    if self.debug:
-                        print("DEBUG: commit.memo hit")
-                    return cached
-        except Exception:  # pragma: no cover - memo is best-effort
-            memo_key = None
+            except Exception:  # pragma: no cover - memo is best-effort
+                digest = None
 
         # Optional local fast path for tiny diffs when explicitly enabled.
         fast_local = str(
@@ -284,46 +280,36 @@ class CommitGenerator:
                 if self.validate_conventional_commit(subject):
                     return subject
 
-        # First try primary provider
-        try:
-            result_primary = self._attempt_with_client(
-                self.llm_client, diff, context, style, request_timeout
-            )
-            if memo_key and result_primary:
-                self._memo[memo_key] = result_primary
-            return result_primary
-        except LLMError as primary_error:
-            # Try secondary provider if configured and key available
-            sec_cfg = self._build_secondary_config()
-            if self.debug:
-                print("DEBUG: primary provider failed; evaluating secondary fallback")
-            if not sec_cfg or not sec_cfg.resolve_api_key():
-                raise primary_error
-            try:
-                secondary_client = LLMClient(sec_cfg, debug=self.debug)
-            except LLMError:
-                # Missing key or bad config; no fallback
-                raise primary_error
-            if self.debug:
+        last_error: LLMError | None = None
+        for idx, (cfg, client) in enumerate(self._iter_priority_clients()):
+            current_key = None
+            if digest:
+                current_key = f"{cfg.provider}:{cfg.model}:{digest}"
+                cached = self._memo.get(current_key)
+                if cached:
+                    if self.debug:
+                        print("DEBUG: commit.memo hit")
+                    return cached
+            if idx > 0 and self.debug:
                 print(
-                    "DEBUG: attempting secondary provider '{}' model '{}'".format(
-                        sec_cfg.provider, sec_cfg.model
+                    "DEBUG: attempting fallback provider '{}' model '{}'".format(
+                        cfg.provider, cfg.model
                     )
                 )
             try:
-                result_secondary = self._attempt_with_client(
-                    secondary_client, diff, context, style, request_timeout
+                result = self._attempt_with_client(
+                    client, diff, context, style, request_timeout
                 )
-                if memo_key and result_secondary:
-                    self._memo[memo_key] = result_secondary
-                return result_secondary
-            except LLMError as secondary_error:
-                # Chain both errors for context
-                combined = LLMError(
-                    "Primary provider failed; secondary provider failed as well"
-                )
-                combined.__cause__ = secondary_error
-                raise combined from primary_error
+                if current_key and result:
+                    self._memo[current_key] = result
+                return result
+            except LLMError as err:
+                last_error = err
+                continue
+
+        if last_error:
+            raise last_error
+        raise LLMError("LLM unavailable; no providers succeeded")
 
     def _synthesize_small_diff_subject(self, file_path: str) -> str:
         """Heuristic conventional subject for tiny diffs (opt-in).
@@ -426,34 +412,23 @@ class CommitGenerator:
                 ).format(3)
             ) from last_error
 
-        try:
-            return await _attempt_async(self.llm_client)
-        except LLMError as primary_error:
-            sec_cfg = self._build_secondary_config()
-            if self.debug:
+        last_error: LLMError | None = None
+        for idx, (cfg, client) in enumerate(self._iter_priority_clients()):
+            if idx > 0 and self.debug:
                 print(
-                    "DEBUG: primary provider failed(async); evaluating secondary fallback"
-                )
-            if not sec_cfg or not sec_cfg.resolve_api_key():
-                raise primary_error
-            try:
-                secondary_client = LLMClient(sec_cfg, debug=self.debug)
-            except LLMError:
-                raise primary_error
-            if self.debug:
-                print(
-                    "DEBUG: attempting secondary provider '{}' model '{}' (async)".format(
-                        sec_cfg.provider, sec_cfg.model
+                    "DEBUG: attempting fallback provider '{}' model '{}' (async)".format(
+                        cfg.provider, cfg.model
                     )
                 )
             try:
-                return await _attempt_async(secondary_client)
-            except LLMError as secondary_error:
-                combined = LLMError(
-                    "Primary provider failed; secondary provider failed as well"
-                )
-                combined.__cause__ = secondary_error
-                raise combined from primary_error
+                return await _attempt_async(client)
+            except LLMError as err:
+                last_error = err
+                continue
+
+        if last_error:
+            raise last_error
+        raise LLMError("LLM unavailable; no providers succeeded")
 
     def validate_conventional_commit(self, message: str) -> bool:
         """Validate if a commit message follows conventional commit format.
