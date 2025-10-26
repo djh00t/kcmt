@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState, useRef} from 'react';
 import {Box, Text} from 'ink';
 import Spinner from 'ink-spinner';
 import minimist from 'minimist';
@@ -51,6 +51,7 @@ export default function App() {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
   const [view, setView] = useState(initialMode || 'menu');
+  const initialisedRef = useRef(false);
 
   const refreshBootstrap = useCallback(async () => {
     setStatus('loading');
@@ -72,10 +73,22 @@ export default function App() {
   }, [refreshBootstrap]);
 
   useEffect(() => {
-    if (initialMode) {
-      setView(initialMode);
+    if (status === 'ready' && !initialisedRef.current) {
+      initialisedRef.current = true;
+      const argvFlags = (bootstrap && bootstrap.argv) || {};
+      let requestedMode = null;
+      if (argvFlags.benchmark) {
+        requestedMode = 'benchmark';
+      } else if (argvFlags.configure || argvFlags['configure-all']) {
+        requestedMode = 'configure';
+      } else if (initialMode) {
+        requestedMode = initialMode;
+      }
+      if (requestedMode) {
+        setView(requestedMode);
+      }
     }
-  }, []);
+  }, [status, bootstrap]);
 
   if (status === 'loading') {
     return h(LoadingScreen, null);
