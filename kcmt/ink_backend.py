@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from .benchmark import BenchExclusion, BenchResult, run_benchmark
 from .config import (
     DEFAULT_MODELS,
+    PROVIDER_DISPLAY_NAMES,
     Config,
     detect_available_providers,
     load_config,
@@ -297,14 +298,9 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
     if not isinstance(config_payload, dict):
         _emit("error", {"message": "config payload missing"})
         return 2
+
     repo_root = _resolve_repo_root(repo_path)
     base = load_config(repo_root=repo_root)
-
-    # Extract incoming values with sanitisation
-    provider = str(config_payload.get("provider", base.provider))
-    model = str(config_payload.get("model", base.model))
-    endpoint_raw = str(config_payload.get("llm_endpoint", base.llm_endpoint))
-    api_env_raw = str(config_payload.get("api_key_env", base.api_key_env))
 
     def looks_like_url(value: str) -> bool:
         return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
@@ -312,26 +308,107 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
     def looks_like_env(value: str) -> bool:
         return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
 
-    # If user accidentally swapped endpoint and env, correct it
+    # Start from existing providers map, ensuring default structure.
+    providers_map: dict[str, dict[str, Any]] = {
+        prov: dict(entry or {}) for prov, entry in (base.providers or {}).items()
+    }
+    for prov, meta in DEFAULT_MODELS.items():
+        entry = providers_map.get(prov, {}) or {}
+        entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
+        entry.setdefault("endpoint", meta["endpoint"])
+        entry.setdefault("api_key_env", meta["api_key_env"])
+        entry.setdefault("preferred_model", None)
+        providers_map[prov] = entry
+
+    incoming_providers = config_payload.get("providers")
+    if isinstance(incoming_providers, dict):
+        for prov, raw_entry in incoming_providers.items():
+            if prov not in DEFAULT_MODELS or not isinstance(raw_entry, dict):
+                continue
+            default_endpoint = DEFAULT_MODELS[prov]["endpoint"]
+            default_env = DEFAULT_MODELS[prov]["api_key_env"]
+            endpoint_val = str(raw_entry.get("endpoint", providers_map[prov]["endpoint"]))
+            api_env_val = str(raw_entry.get("api_key_env", providers_map[prov]["api_key_env"]))
+
+            if looks_like_url(api_env_val) and looks_like_env(endpoint_val) and not looks_like_url(endpoint_val):
+                api_env_val, endpoint_val = endpoint_val, api_env_val
+            if not looks_like_env(api_env_val):
+                api_env_val = default_env
+            if not looks_like_url(endpoint_val):
+                endpoint_val = default_endpoint
+
+            providers_map[prov]["endpoint"] = endpoint_val
+            providers_map[prov]["api_key_env"] = api_env_val
+            if raw_entry.get("preferred_model"):
+                providers_map[prov]["preferred_model"] = str(raw_entry["preferred_model"])
+
+    # Top-level provider/model overrides (may be omitted when using priority list)
+    provider = str(config_payload.get("provider", base.provider)) or base.provider
+    model = str(config_payload.get("model", base.model)) or base.model
+    endpoint_raw = str(config_payload.get("llm_endpoint", providers_map.get(provider, {}).get("endpoint", base.llm_endpoint)))
+    api_env_raw = str(config_payload.get("api_key_env", providers_map.get(provider, {}).get("api_key_env", base.api_key_env)))
+
     if looks_like_url(api_env_raw) and looks_like_env(endpoint_raw) and not looks_like_url(endpoint_raw):
         api_env_raw, endpoint_raw = endpoint_raw, api_env_raw
+    if provider in DEFAULT_MODELS and not looks_like_env(api_env_raw):
+        api_env_raw = DEFAULT_MODELS[provider]["api_key_env"]
+    if provider in DEFAULT_MODELS and not looks_like_url(endpoint_raw):
+        endpoint_raw = DEFAULT_MODELS[provider]["endpoint"]
 
-    # If env still looks invalid, fall back to provider default
-    if not looks_like_env(api_env_raw):
-        api_env_raw = str(DEFAULT_MODELS.get(provider, {}).get("api_key_env", base.api_key_env))
+    priority_payload = config_payload.get("model_priority")
+    priority_list: list[dict[str, str]] = []
+    if isinstance(priority_payload, list):
+        for item in priority_payload:
+            if not isinstance(item, dict):
+                continue
+            prov = str(item.get("provider", "")).strip()
+            model_name = str(item.get("model", "")).strip()
+            if prov in DEFAULT_MODELS and model_name:
+                priority_list.append({"provider": prov, "model": model_name})
 
-    base.provider = provider
-    base.model = model
+    if not priority_list and provider in DEFAULT_MODELS and model:
+        priority_list.append({"provider": provider, "model": model})
+
+    seen_pairs: set[tuple[str, str]] = set()
+    sanitised_priority: list[dict[str, str]] = []
+    for pref in priority_list:
+        pair = (pref["provider"], pref["model"])
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        sanitised_priority.append(pref)
+        if len(sanitised_priority) >= 5:
+            break
+    if not sanitised_priority and provider in DEFAULT_MODELS:
+        sanitised_priority.append({"provider": provider, "model": DEFAULT_MODELS[provider]["model"]})
+
+    active_provider = sanitised_priority[0]["provider"]
+    active_model = sanitised_priority[0]["model"]
+
+    # Ensure providers map aligns with active selection
+    for prov, entry in providers_map.items():
+        entry.setdefault("endpoint", DEFAULT_MODELS[prov]["endpoint"])
+        entry.setdefault("api_key_env", DEFAULT_MODELS[prov]["api_key_env"])
+        entry.setdefault("preferred_model", DEFAULT_MODELS[prov]["model"])
+    providers_map[active_provider]["endpoint"] = endpoint_raw
+    providers_map[active_provider]["api_key_env"] = api_env_raw
+    providers_map[active_provider]["preferred_model"] = active_model
+
+    first_by_provider: dict[str, str] = {}
+    for pref in sanitised_priority:
+        first_by_provider.setdefault(pref["provider"], pref["model"])
+    for prov, entry in providers_map.items():
+        if prov in first_by_provider:
+            entry["preferred_model"] = first_by_provider[prov]
+
+    base.provider = active_provider
+    base.model = active_model
     base.llm_endpoint = endpoint_raw
     base.api_key_env = api_env_raw
     base.git_repo_path = str(repo_root)
-    providers_map = dict(getattr(base, "providers", {}) or {})
-    entry = providers_map.get(base.provider, {})
-    entry["endpoint"] = base.llm_endpoint
-    entry["api_key_env"] = base.api_key_env
-    entry["preferred_model"] = base.model
-    providers_map[base.provider] = entry
     base.providers = providers_map
+    base.model_priority = sanitised_priority
+
     save_config(base, repo_root)
     _emit("complete", {"config": _serialise(base)})
     return 0
@@ -466,10 +543,18 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
         return 1
 
     result = result_holder.get("result", {})
+    metrics_summary: str | None = None
+    metrics_obj = getattr(workflow, "_metrics", None)
+    if metrics_obj is not None:
+        try:
+            metrics_summary = str(metrics_obj.summary())
+        except Exception:  # pragma: no cover - defensive
+            metrics_summary = None
     response = {
         "result": _serialise(result),
         "stats": workflow.stats_snapshot(),
         "commit_subjects": workflow.commit_subjects(),
+        "metrics_summary": metrics_summary,
     }
     _emit("complete", response)
     return 0
