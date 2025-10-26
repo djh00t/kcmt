@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import inspect
 import json
 import os
@@ -627,6 +628,18 @@ Examples:
             provider, provider_meta["endpoint"]
         )
         api_key_env = args.api_key_env or self._prompt_api_key_env(provider, detected)
+
+        # Sanity-check and correct common mix-ups (URL pasted as env var, etc.)
+        def looks_like_url(value: str) -> bool:
+            return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
+
+        def looks_like_env(value: str) -> bool:
+            return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+
+        if looks_like_url(api_key_env) and looks_like_env(endpoint) and not looks_like_url(endpoint):
+            api_key_env, endpoint = endpoint, api_key_env
+        if not looks_like_env(api_key_env):
+            api_key_env = DEFAULT_MODELS[provider]["api_key_env"]
 
         # Optional secondary configuration block
         sec_provider: Optional[str] = None
