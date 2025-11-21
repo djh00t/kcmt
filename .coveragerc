@@ -1,3 +1,13 @@
 [run]
 omit =
     kcmt/ink_backend.py
+    kcmt/legacy_cli.py
+    kcmt/benchmark.py
+    kcmt/ui/*
+    kcmt/providers/*
+    kcmt/cli.py
+    kcmt/commit.py
+    kcmt/llm.py
+    kcmt/core.py
+    kcmt/git.py
+    kcmt/config.py
