@@ -101,6 +101,9 @@ class WorkflowStats:
 
     def __init__(self) -> None:
         self.total_files = 0
+        self.diffs_built = 0
+        self.requested = 0
+        self.responded = 0
         self.prepared = 0
         self.processed = 0
         self.successes = 0
@@ -112,9 +115,21 @@ class WorkflowStats:
         with self._lock:
             self.total_files = total
 
+    def mark_diff(self) -> None:
+        with self._lock:
+            self.diffs_built += 1
+
     def mark_prepared(self) -> None:
         with self._lock:
             self.prepared += 1
+
+    def mark_request(self) -> None:
+        with self._lock:
+            self.requested += 1
+
+    def mark_response(self) -> None:
+        with self._lock:
+            self.responded += 1
 
     def mark_result(self, success: bool) -> None:
         with self._lock:
@@ -129,6 +144,9 @@ class WorkflowStats:
             elapsed = max(time.time() - self._start, 1e-6)
             return {
                 "total_files": self.total_files,
+                "diffs_built": self.diffs_built,
+                "requests": self.requested,
+                "responses": self.responded,
                 "prepared": self.prepared,
                 "processed": self.processed,
                 "successes": self.successes,
@@ -782,12 +800,15 @@ class KlingonCMTWorkflow:
             )
 
         self._progress_event("diff-ready", file=change.file_path)
+        self._stats.mark_diff()
 
         def _llm_progress(status: str) -> None:
             key = status.strip().lower()
             if key in {"request-sent", "request sent"}:
+                self._stats.mark_request()
                 self._progress_event("request-sent", file=change.file_path)
             elif key in {"response-received", "response received"}:
+                self._stats.mark_response()
                 self._progress_event("response", file=change.file_path)
             else:
                 self._progress_event(
@@ -945,6 +966,9 @@ class KlingonCMTWorkflow:
     def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
         total = snapshot["total_files"]
+        diffs = snapshot.get("diffs_built", 0)
+        requests = snapshot.get("requests", 0)
+        responses = snapshot.get("responses", 0)
         prepared = snapshot["prepared"]
         processed = snapshot["processed"]
         success = snapshot["successes"]
@@ -962,8 +986,9 @@ class KlingonCMTWorkflow:
         return (
             f"{BOLD}{icon} kcmt{RESET} "
             f"{color}{stage_label:<7}{RESET} │ "
-            f"{GREEN}{processed:>3}{RESET}/{total:>3} files │ "
-            f"{CYAN}{prepared:>3}{RESET}/{total:>3} ready │ "
+            f"{DIM}Δ {diffs:>3}{RESET}/{total:>3} │ "
+            f"{CYAN}req {requests:>3}{RESET}/{responses:>3} res │ "
+            f"{GREEN}{prepared:>3}{RESET}/{total:>3} ready │ "
             f"{GREEN}✓ {success:>3}{RESET} │ "
             f"{RED}✗ {failures:>3}{RESET} │ "
             f"{DIM}{rate:5.2f} commits/s{RESET}   "
