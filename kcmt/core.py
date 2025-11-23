@@ -991,7 +991,7 @@ class KlingonCMTWorkflow:
             f"{GREEN}{prepared:>3}{RESET}/{total:>3} ready │ "
             f"{GREEN}✓ {success:>3}{RESET} │ "
             f"{RED}✗ {failures:>3}{RESET} │ "
-            f"{DIM}{rate:5.2f} commits/s{RESET}   "
+            f"{DIM}{rate:5.2f} commits/s{RESET}"
         )
 
     def _print_progress(self, stage: str) -> None:
