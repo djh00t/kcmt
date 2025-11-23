@@ -266,6 +266,13 @@ class InkWorkflow(KlingonCMTWorkflow):
             self._emitter("log", {"message": leftover})
         return result
 
+    def _progress_event(self, kind: str, **info: object) -> None:
+        message = self._format_progress_message(kind, info)
+        if not message:
+            return
+        payload = {"message": message, "stage": kind, **info}
+        self._emitter("status", payload)
+
 
 def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(repo_path)
@@ -412,6 +419,18 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
     base.git_repo_path = str(repo_root)
     base.providers = providers_map
     base.model_priority = sanitised_priority
+    use_batch_val = bool(config_payload.get("use_batch")) if active_provider == "openai" else False
+    base.use_batch = use_batch_val
+    if active_provider == "openai":
+        batch_model_val = config_payload.get("batch_model") or providers_map["openai"].get("preferred_model") or base.model
+        base.batch_model = str(batch_model_val)
+        timeout_raw = config_payload.get("batch_timeout_seconds") or base.batch_timeout_seconds
+        try:
+            base.batch_timeout_seconds = int(float(timeout_raw))
+        except (TypeError, ValueError):
+            pass
+    else:
+        base.batch_model = None
 
     save_config(base, repo_root)
     _emit("complete", {"config": _serialise(base)})
