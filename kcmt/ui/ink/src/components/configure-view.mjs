@@ -16,6 +16,22 @@ const PROVIDER_LABELS = {
 };
 const MAX_PRIORITY = 5;
 
+function looksLikeEnv(value) {
+  return Boolean(value) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value));
+}
+
+function defaultEnv(bootstrap, provider) {
+  return bootstrap?.defaultModels?.[provider]?.api_key_env || '';
+}
+
+function defaultModel(bootstrap, provider) {
+  return bootstrap?.defaultModels?.[provider]?.model || '';
+}
+
+function providerSupportsBatch(provider) {
+  return provider === 'openai';
+}
+
 function buildInitialProviders(bootstrap) {
   const defaults = bootstrap?.defaultModels || {};
   const existing = bootstrap?.config?.providers || {};
@@ -96,7 +112,6 @@ export default function ConfigureView({onBack}) {
       buildInitialProviders(bootstrap).openai?.preferred_model ||
       '',
   );
-  const [pendingOpenAIModel, setPendingOpenAIModel] = useState(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
 
@@ -145,6 +160,47 @@ export default function ConfigureView({onBack}) {
     }));
   }, []);
 
+  const applyProviderModel = useCallback(
+    (provider, model) => {
+      applyProviderUpdate(provider, {preferred_model: model});
+      setPriorityState(prev => {
+        const next = [...prev];
+        let placed = false;
+        for (let i = 0; i < next.length; i += 1) {
+          if (next[i] && next[i].provider === provider) {
+            next[i] = {provider, model};
+            placed = true;
+          }
+        }
+        if (!placed) {
+          const emptyIdx = next.findIndex(entry => !entry);
+          if (emptyIdx !== -1) {
+            next[emptyIdx] = {provider, model};
+            placed = true;
+          }
+        }
+        if (!placed && next.length) {
+          next[next.length - 1] = {provider, model};
+        }
+        return next;
+      });
+    },
+    [applyProviderUpdate],
+  );
+
+  const inferPriority = useCallback(() => {
+    const inferred = [];
+    for (const prov of PROVIDER_ORDER) {
+      const meta = providersState[prov] || {};
+      const env = meta.api_key_env || defaultEnv(bootstrap, prov);
+      const model = meta.preferred_model || defaultModel(bootstrap, prov);
+      if (!env || !model) continue;
+      inferred.push({provider: prov, model});
+      if (inferred.length >= MAX_PRIORITY) break;
+    }
+    return inferred;
+  }, [bootstrap, providersState]);
+
   const clearPrioritySlot = useCallback(slotIndex => {
     setPriorityState(prev => {
       const next = [...prev];
@@ -157,7 +213,10 @@ export default function ConfigureView({onBack}) {
     if (savingRef.current) {
       return;
     }
-    const filtered = priorityState.filter(Boolean);
+    let filtered = priorityState.filter(Boolean);
+    if (!filtered.length) {
+      filtered = inferPriority();
+    }
     if (!filtered.length) {
       return;
     }
@@ -183,7 +242,7 @@ export default function ConfigureView({onBack}) {
         savingRef.current = false;
         setSaving(false);
       });
-  }, [backend, onBack, priorityState, providersState, refreshBootstrap]);
+  }, [backend, batchEnabled, batchModel, bootstrap, inferPriority, onBack, priorityState, providersState, refreshBootstrap]);
 
   useInput((input, key) => {
     if (savingRef.current) {
@@ -198,6 +257,23 @@ export default function ConfigureView({onBack}) {
         onBack();
         return;
       }
+      if (step === 'provider-menu') {
+        setActiveProvider(null);
+        setStep('providers');
+        return;
+      }
+      if (
+        step === 'provider-endpoint' ||
+        step === 'provider-env' ||
+        step === 'provider-model' ||
+        step === 'provider-model-manual' ||
+        step === 'provider-batch-mode' ||
+        step === 'provider-batch-model' ||
+        step === 'provider-batch-manual'
+      ) {
+        setStep('provider-menu');
+        return;
+      }
       if (step === 'priority') {
         setStep('providers');
         return;
@@ -206,11 +282,6 @@ export default function ConfigureView({onBack}) {
         setSlotProvider(null);
         setActiveSlot(null);
         setStep('priority');
-        return;
-      }
-      if (step === 'provider-endpoint' || step === 'provider-env') {
-        setActiveProvider(null);
-        setStep('providers');
         return;
       }
     }
@@ -228,25 +299,32 @@ export default function ConfigureView({onBack}) {
       ...PROVIDER_ORDER.map(prov => {
         const info = providersState[prov];
         const status = hasApiKey(prov) ? '🟢' : '🟡';
-        const envLabel = info.api_key_env ? ` • env ${info.api_key_env}` : '';
+        const envValue = looksLikeEnv(info.api_key_env) ? info.api_key_env : '';
+        const envLabel = envValue ? ` • env ${envValue}` : '';
+        const modelLabel = info.preferred_model ? ` • model ${info.preferred_model}` : '';
         return {
-          label: `${status} ${info.name}${envLabel}`,
+          label: `${status} ${info.name}${envLabel}${modelLabel}`,
           value: prov,
         };
       }),
-      {label: '✅ Continue to models', value: '__continue__'},
+      {label: '📊 Set model priority', value: '__priority__'},
+      {label: '✅ Review & Save', value: '__summary__'},
       {label: '↩️  Cancel', value: '__cancel__'},
     ];
     return h(
       Box,
       {flexDirection: 'column', gap: 1},
       h(Text, null, chalk.bold('Configure providers')),
-      h(Text, {dimColor: true}, 'Select a provider to edit endpoint/API key, or continue.'),
+      h(Text, {dimColor: true}, 'Select a provider to edit API key, URL, model, or batch mode.'),
       h(SelectInput, {
         items,
         onSelect: item => {
-          if (item.value === '__continue__') {
+          if (item.value === '__priority__') {
             setStep('priority');
+            return;
+          }
+          if (item.value === '__summary__') {
+            setStep('summary');
             return;
           }
           if (item.value === '__cancel__') {
@@ -254,7 +332,70 @@ export default function ConfigureView({onBack}) {
             return;
           }
           setActiveProvider(item.value);
-          setStep('provider-endpoint');
+          setStep('provider-menu');
+        },
+      }),
+    );
+  }
+
+  if (step === 'provider-menu' && activeProvider) {
+    const info = providersState[activeProvider] || {};
+    const envLabelValue = looksLikeEnv(info.api_key_env) ? info.api_key_env : defaultEnv(bootstrap, activeProvider);
+    const items = [
+      {
+        label: `🔑 API Key (${envLabelValue || 'default'})`,
+        value: 'api-key',
+      },
+      {
+        label: `🌐 API URL (${info.endpoint || bootstrap?.defaultModels?.[activeProvider]?.endpoint || 'default'})`,
+        value: 'endpoint',
+      },
+      {
+        label: `🧠 Model selection (${info.preferred_model || defaultModel(bootstrap, activeProvider) || 'default'})`,
+        value: 'model',
+      },
+    ];
+    if (providerSupportsBatch(activeProvider)) {
+      items.push({
+        label: `📦 Batch mode (${batchEnabled ? 'on' : 'off'})`,
+        value: 'batch',
+      });
+    }
+    items.push({label: '✅ Save & exit', value: '__summary__'});
+    items.push({label: '↩️  Back', value: '__back__'});
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Provider: ${info.name}`)),
+      h(Text, {dimColor: true}, 'Choose a field to edit, then save.'),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setActiveProvider(null);
+            setStep('providers');
+            return;
+          }
+          if (item.value === '__summary__') {
+            setStep('summary');
+            return;
+          }
+          if (item.value === 'api-key') {
+            setStep('provider-env');
+            return;
+          }
+          if (item.value === 'endpoint') {
+            setStep('provider-endpoint');
+            return;
+          }
+          if (item.value === 'model') {
+            setStep('provider-model');
+            return;
+          }
+          if (item.value === 'batch') {
+            setStep('provider-batch-mode');
+          }
         },
       }),
     );
@@ -268,26 +409,80 @@ export default function ConfigureView({onBack}) {
       placeholder: bootstrap?.defaultModels?.[activeProvider]?.endpoint || info.endpoint,
       onSubmit: value => {
         applyProviderUpdate(activeProvider, {endpoint: value});
-        setStep('provider-env');
+        setStep('provider-menu');
       },
-      onCancel: () => setStep('providers'),
+      onCancel: () => setStep('provider-menu'),
     });
   }
 
   if (step === 'provider-env' && activeProvider) {
     const info = providersState[activeProvider];
+    const defaultValue = defaultEnv(bootstrap, activeProvider);
+    const placeholderEnv = looksLikeEnv(info.api_key_env) ? info.api_key_env : defaultValue;
     return h(Prompt, {
       label: `API key environment variable for ${info.name}`,
-      value: info.api_key_env,
-      placeholder: bootstrap?.defaultModels?.[activeProvider]?.api_key_env || info.api_key_env,
+      value: '',
+      placeholder: placeholderEnv,
       onSubmit: value => {
         applyProviderUpdate(activeProvider, {api_key_env: value});
-        setActiveProvider(null);
-        setStep('providers');
+        setStep('provider-menu');
       },
       onCancel: () => {
-        setActiveProvider(null);
-        setStep('providers');
+        setStep('provider-menu');
+      },
+    });
+  }
+
+  if (step === 'provider-model' && activeProvider) {
+    const catalogue = Array.isArray(providerModels[activeProvider]) ? providerModels[activeProvider] : [];
+    const items = catalogue.map(entry => ({
+      label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
+      value: entry.id,
+    }));
+    const defaultChoice =
+      providersState[activeProvider]?.preferred_model || defaultModel(bootstrap, activeProvider);
+    if (!items.length && defaultChoice) {
+      items.push({label: defaultChoice, value: defaultChoice});
+    }
+    items.push({label: '✏️  Manual entry…', value: '__manual__'});
+    items.push({label: '↩️  Back', value: '__back__'});
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Model for ${PROVIDER_LABELS[activeProvider] || activeProvider}`)),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setStep('provider-menu');
+            return;
+          }
+          if (item.value === '__manual__') {
+            setStep('provider-model-manual');
+            return;
+          }
+          applyProviderModel(activeProvider, item.value);
+          if (providerSupportsBatch(activeProvider)) {
+            setBatchModel(prev => prev || item.value);
+          }
+          setStep('provider-menu');
+        },
+      }),
+    );
+  }
+
+  if (step === 'provider-model-manual' && activeProvider) {
+    return h(Prompt, {
+      label: `Manual model entry for ${PROVIDER_LABELS[activeProvider] || activeProvider}`,
+      onSubmit: value => {
+        applyProviderModel(activeProvider, value);
+        if (providerSupportsBatch(activeProvider)) {
+          setBatchModel(prev => prev || value);
+        }
+        setStep('provider-menu');
+      },
+      onCancel: () => {
+        setStep('provider-model');
       },
     });
   }
@@ -397,17 +592,9 @@ export default function ConfigureView({onBack}) {
             return;
           }
           applyPrioritySelection(activeSlot, slotProvider, item.value);
-          if (activeSlot === 0 && slotProvider === 'openai') {
-            setPendingOpenAIModel(item.value);
-            setBatchModel(prev => prev || item.value);
-            setSlotProvider(null);
-            setActiveSlot(null);
-            setStep('openai-mode');
-          } else {
-            setSlotProvider(null);
-            setActiveSlot(null);
-            setStep('priority');
-          }
+          setSlotProvider(null);
+          setActiveSlot(null);
+          setStep('priority');
         },
       }),
     );
@@ -418,17 +605,9 @@ export default function ConfigureView({onBack}) {
       label: `Manual model entry for ${PROVIDER_LABELS[slotProvider] || slotProvider}`,
       onSubmit: value => {
         applyPrioritySelection(activeSlot, slotProvider, value);
-        if (activeSlot === 0 && slotProvider === 'openai') {
-          setPendingOpenAIModel(value);
-          setBatchModel(prev => prev || value);
-          setSlotProvider(null);
-          setActiveSlot(null);
-          setStep('openai-mode');
-        } else {
-          setSlotProvider(null);
-          setActiveSlot(null);
-          setStep('priority');
-        }
+        setSlotProvider(null);
+        setActiveSlot(null);
+        setStep('priority');
       },
       onCancel: () => {
         setStep('priority-model');
@@ -438,7 +617,8 @@ export default function ConfigureView({onBack}) {
 
   if (step === 'summary') {
     const filtered = priorityState.filter(Boolean);
-    const primary = filtered[0];
+    const effectivePriority = filtered.length ? filtered : inferPriority();
+    const primary = effectivePriority[0];
     const primaryProvider = primary ? providersState[primary.provider] : null;
     const batchLine =
       primary && primary.provider === 'openai'
@@ -451,7 +631,7 @@ export default function ConfigureView({onBack}) {
       primary
         ? h(Text, null, `Primary: ${primary.provider} → ${primary.model}`)
         : h(Text, {color: 'red'}, 'No primary model selected'),
-      ...filtered.map((entry, idx) =>
+      ...effectivePriority.map((entry, idx) =>
         h(Text, {key: `prio-${idx}`, dimColor: idx === 0}, `${idx + 1}. ${entry.provider} → ${entry.model}`),
       ),
       h(Text, null, ''),
@@ -466,8 +646,20 @@ export default function ConfigureView({onBack}) {
     );
   }
 
-  if (step === 'openai-mode') {
-    const pending = pendingOpenAIModel || batchModel;
+  if (step === 'provider-batch-mode' && activeProvider) {
+    if (!providerSupportsBatch(activeProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.yellow('Batch mode not available for this provider.')),
+        h(Text, {dimColor: true}, 'Press Back to continue.'),
+      );
+    }
+    const modelHint =
+      providersState[activeProvider]?.preferred_model ||
+      batchModel ||
+      defaultModel(bootstrap, activeProvider) ||
+      'model';
     const items = [
       {label: 'Standard mode', value: 'standard'},
       {label: 'Batch mode (OpenAI Batch API)', value: 'batch'},
@@ -476,30 +668,37 @@ export default function ConfigureView({onBack}) {
     return h(
       Box,
       {flexDirection: 'column', gap: 1},
-      h(Text, null, chalk.bold(`Mode for OpenAI (model ${pending})`)),
+      h(Text, null, chalk.bold(`Mode for ${PROVIDER_LABELS[activeProvider] || activeProvider} (model ${modelHint})`)),
       h(SelectInput, {
         items,
         onSelect: item => {
           if (item.value === '__back__') {
-            setStep('priority');
+            setStep('provider-menu');
             return;
           }
           if (item.value === 'standard') {
             setBatchEnabled(false);
-            setPendingOpenAIModel(null);
-            setStep('priority');
+            setStep('provider-menu');
             return;
           }
           setBatchEnabled(true);
-          setPendingOpenAIModel(null);
-          setStep('openai-batch-model');
+          setBatchModel(prev => prev || modelHint);
+          setStep('provider-batch-model');
         },
       }),
     );
   }
 
-  if (step === 'openai-batch-model') {
-    const catalogue = Array.isArray(providerModels.openai) ? providerModels.openai : [];
+  if (step === 'provider-batch-model' && activeProvider) {
+    if (!providerSupportsBatch(activeProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.yellow('Batch mode not available for this provider.')),
+        h(Text, {dimColor: true}, 'Press Back to continue.'),
+      );
+    }
+    const catalogue = Array.isArray(providerModels[activeProvider]) ? providerModels[activeProvider] : [];
     const items = catalogue.map(entry => ({
       label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
       value: entry.id,
@@ -512,34 +711,42 @@ export default function ConfigureView({onBack}) {
     return h(
       Box,
       {flexDirection: 'column', gap: 1},
-      h(Text, null, chalk.bold('Select batch model for OpenAI')),
+      h(Text, null, chalk.bold('Select batch model')),
       h(SelectInput, {
         items,
         onSelect: item => {
           if (item.value === '__back__') {
-            setStep('openai-mode');
+            setStep('provider-batch-mode');
             return;
           }
           if (item.value === '__manual__') {
-            setStep('openai-batch-manual');
+            setStep('provider-batch-manual');
             return;
           }
           setBatchModel(item.value);
-          setStep('priority');
+          setStep('provider-menu');
         },
       }),
     );
   }
 
-  if (step === 'openai-batch-manual') {
+  if (step === 'provider-batch-manual' && activeProvider) {
+    if (!providerSupportsBatch(activeProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.yellow('Batch mode not available for this provider.')),
+        h(Text, {dimColor: true}, 'Press Back to continue.'),
+      );
+    }
     return h(Prompt, {
-      label: 'Manual batch model for OpenAI',
+      label: 'Manual batch model',
       value: batchModel,
       onSubmit: value => {
         setBatchModel(value);
-        setStep('priority');
+        setStep('provider-menu');
       },
-      onCancel: () => setStep('openai-batch-model'),
+      onCancel: () => setStep('provider-batch-model'),
     });
   }
 
