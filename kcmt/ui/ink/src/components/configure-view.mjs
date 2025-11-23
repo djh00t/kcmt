@@ -89,6 +89,14 @@ export default function ConfigureView({onBack}) {
   const [activeProvider, setActiveProvider] = useState(null);
   const [activeSlot, setActiveSlot] = useState(null);
   const [slotProvider, setSlotProvider] = useState(null);
+  const [batchEnabled, setBatchEnabled] = useState(Boolean(bootstrap?.config?.use_batch));
+  const [batchModel, setBatchModel] = useState(
+    () =>
+      bootstrap?.config?.batch_model ||
+      buildInitialProviders(bootstrap).openai?.preferred_model ||
+      '',
+  );
+  const [pendingOpenAIModel, setPendingOpenAIModel] = useState(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
 
@@ -162,6 +170,8 @@ export default function ConfigureView({onBack}) {
       api_key_env: providerSettings.api_key_env,
       providers: providersState,
       model_priority: filtered,
+      use_batch: primary.provider === 'openai' ? Boolean(batchEnabled) : false,
+      batch_model: primary.provider === 'openai' ? batchModel || primary.model : null,
     };
     savingRef.current = true;
     setSaving(true);
@@ -387,9 +397,17 @@ export default function ConfigureView({onBack}) {
             return;
           }
           applyPrioritySelection(activeSlot, slotProvider, item.value);
-          setSlotProvider(null);
-          setActiveSlot(null);
-          setStep('priority');
+          if (activeSlot === 0 && slotProvider === 'openai') {
+            setPendingOpenAIModel(item.value);
+            setBatchModel(prev => prev || item.value);
+            setSlotProvider(null);
+            setActiveSlot(null);
+            setStep('openai-mode');
+          } else {
+            setSlotProvider(null);
+            setActiveSlot(null);
+            setStep('priority');
+          }
         },
       }),
     );
@@ -400,9 +418,17 @@ export default function ConfigureView({onBack}) {
       label: `Manual model entry for ${PROVIDER_LABELS[slotProvider] || slotProvider}`,
       onSubmit: value => {
         applyPrioritySelection(activeSlot, slotProvider, value);
-        setSlotProvider(null);
-        setActiveSlot(null);
-        setStep('priority');
+        if (activeSlot === 0 && slotProvider === 'openai') {
+          setPendingOpenAIModel(value);
+          setBatchModel(prev => prev || value);
+          setSlotProvider(null);
+          setActiveSlot(null);
+          setStep('openai-mode');
+        } else {
+          setSlotProvider(null);
+          setActiveSlot(null);
+          setStep('priority');
+        }
       },
       onCancel: () => {
         setStep('priority-model');
@@ -414,6 +440,10 @@ export default function ConfigureView({onBack}) {
     const filtered = priorityState.filter(Boolean);
     const primary = filtered[0];
     const primaryProvider = primary ? providersState[primary.provider] : null;
+    const batchLine =
+      primary && primary.provider === 'openai'
+        ? `Mode: ${batchEnabled ? 'Batch' : 'Standard'}${batchEnabled ? ` (model ${batchModel || primary.model})` : ''}`
+        : null;
     return h(
       Box,
       {flexDirection: 'column', gap: 1},
@@ -431,8 +461,86 @@ export default function ConfigureView({onBack}) {
       primaryProvider
         ? h(Text, {dimColor: true}, `API key env: ${primaryProvider.api_key_env}`)
         : null,
+      batchLine ? h(Text, {dimColor: true}, batchLine) : null,
       h(Text, {dimColor: true}, 'Press Enter to save, Esc to adjust models.'),
     );
+  }
+
+  if (step === 'openai-mode') {
+    const pending = pendingOpenAIModel || batchModel;
+    const items = [
+      {label: 'Standard mode', value: 'standard'},
+      {label: 'Batch mode (OpenAI Batch API)', value: 'batch'},
+      {label: '↩️  Back', value: '__back__'},
+    ];
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Mode for OpenAI (model ${pending})`)),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setStep('priority');
+            return;
+          }
+          if (item.value === 'standard') {
+            setBatchEnabled(false);
+            setPendingOpenAIModel(null);
+            setStep('priority');
+            return;
+          }
+          setBatchEnabled(true);
+          setPendingOpenAIModel(null);
+          setStep('openai-batch-model');
+        },
+      }),
+    );
+  }
+
+  if (step === 'openai-batch-model') {
+    const catalogue = Array.isArray(providerModels.openai) ? providerModels.openai : [];
+    const items = catalogue.map(entry => ({
+      label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
+      value: entry.id,
+    }));
+    if (!items.length && batchModel) {
+      items.push({label: batchModel, value: batchModel});
+    }
+    items.push({label: '✏️  Manual entry…', value: '__manual__'});
+    items.push({label: '↩️  Back', value: '__back__'});
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold('Select batch model for OpenAI')),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setStep('openai-mode');
+            return;
+          }
+          if (item.value === '__manual__') {
+            setStep('openai-batch-manual');
+            return;
+          }
+          setBatchModel(item.value);
+          setStep('priority');
+        },
+      }),
+    );
+  }
+
+  if (step === 'openai-batch-manual') {
+    return h(Prompt, {
+      label: 'Manual batch model for OpenAI',
+      value: batchModel,
+      onSubmit: value => {
+        setBatchModel(value);
+        setStep('priority');
+      },
+      onCancel: () => setStep('openai-batch-model'),
+    });
   }
 
   return h(Box, null, h(Text, null, 'Unsupported configuration state.'));
