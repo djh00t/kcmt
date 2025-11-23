@@ -173,6 +173,7 @@ class KlingonCMTWorkflow:
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
         self._metrics = WorkflowMetrics()
+        self._progress_history: list[str] = []
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -234,10 +235,13 @@ class KlingonCMTWorkflow:
         )
         if any_success and getattr(self._config, "auto_push", False):
             try:
+                self._progress_event("push-start")
                 self.git_repo.push()
                 results["pushed"] = True
+                self._progress_event("push-done")
             except GitError as e:  # pragma: no cover - network dependent
                 results.setdefault("errors", []).append(f"Auto-push failed: {e}")
+                self._progress_event("push-error", detail=str(e))
 
         total_elapsed = time.perf_counter() - workflow_start
         self._profile(
@@ -520,6 +524,15 @@ class KlingonCMTWorkflow:
             )
         except ValueError:
             per_file_timeout = provider_default_timeout
+        # Batch workflows can take longer; align per-file timeout with batch timeout
+        if getattr(self._config, "use_batch", False):
+            batch_timeout_cfg = getattr(self._config, "batch_timeout_seconds", None)
+            try:
+                batch_timeout_val = float(batch_timeout_cfg) if batch_timeout_cfg else None
+            except (TypeError, ValueError):
+                batch_timeout_val = None
+            if batch_timeout_val and batch_timeout_val > per_file_timeout:
+                per_file_timeout = min(batch_timeout_val, 600.0)
 
         timeout_retry_limit = 3
         timeout_attempt_limit = timeout_retry_limit + 1
@@ -529,6 +542,7 @@ class KlingonCMTWorkflow:
         abort_event = asyncio.Event()
 
         prepared: list[tuple[int, PreparedCommit]] = []
+        prepared_by_idx: dict[int, PreparedCommit] = {}
         log_queue: dict[int, PreparedCommit] = {}
         next_log_index = 0
         completed: set[int] = set()
@@ -569,7 +583,15 @@ class KlingonCMTWorkflow:
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
-                        if supports_timeout:
+                        if getattr(self._config, "use_batch", False):
+                            prepared_commit = await asyncio.wait_for(
+                                self._prepare_single_change_async(
+                                    change,
+                                    request_timeout=timeout_value,
+                                ),
+                                timeout=timeout_value,
+                            )
+                        elif supports_timeout:
                             prepared_commit = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     prepare_fn,
@@ -649,9 +671,17 @@ class KlingonCMTWorkflow:
 
         def mark_prepared(idx: int, prepared_commit: PreparedCommit) -> None:
             nonlocal failure_count
-            if idx in completed:
+            existing = prepared_by_idx.get(idx)
+            if existing and existing.message and prepared_commit.error:
+                return
+            if existing and existing.error and prepared_commit.message:
+                prepared_by_idx[idx] = prepared_commit
+                log_queue[idx] = prepared_commit
+                return
+            if idx in completed and existing:
                 return
             prepared.append((idx, prepared_commit))
+            prepared_by_idx[idx] = prepared_commit
             self._stats.mark_prepared()
             self._print_progress(stage="prepare")
             log_queue[idx] = prepared_commit
@@ -716,7 +746,12 @@ class KlingonCMTWorkflow:
             self._refresh_progress_line()
 
         flush_log()
-        return sorted(prepared, key=lambda item: item[0])
+        ordered_prepared: list[tuple[int, PreparedCommit]] = []
+        for idx in sorted(prepared_by_idx):
+            ordered_prepared.append((idx, prepared_by_idx[idx]))
+        if not ordered_prepared:
+            ordered_prepared = sorted(prepared, key=lambda item: item[0])
+        return ordered_prepared
 
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""
@@ -746,32 +781,36 @@ class KlingonCMTWorkflow:
                 )
             )
 
+        self._progress_event("diff-ready", file=change.file_path)
+
+        def _llm_progress(status: str) -> None:
+            key = status.strip().lower()
+            if key in {"request-sent", "request sent"}:
+                self._progress_event("request-sent", file=change.file_path)
+            elif key in {"response-received", "response received"}:
+                self._progress_event("response", file=change.file_path)
+            else:
+                self._progress_event(
+                    "llm",
+                    file=change.file_path,
+                    detail=status,
+                )
+
         suggest_fn = generator.suggest_commit_message
         try:
-            if request_timeout is not None:
-                try:
-                    sig = inspect.signature(suggest_fn)
-                except (TypeError, ValueError):
-                    sig = None
-                if sig and "request_timeout" in sig.parameters:
-                    commit_message = suggest_fn(
-                        change.diff_content,
-                        context=f"File: {change.file_path}",
-                        style="conventional",
-                        request_timeout=request_timeout,
-                    )
-                else:
-                    commit_message = suggest_fn(
-                        change.diff_content,
-                        context=f"File: {change.file_path}",
-                        style="conventional",
-                    )
-            else:
-                commit_message = suggest_fn(
-                    change.diff_content,
-                    context=f"File: {change.file_path}",
-                    style="conventional",
-                )
+            call_kwargs: dict[str, object] = {
+                "context": f"File: {change.file_path}",
+                "style": "conventional",
+            }
+            try:
+                sig = inspect.signature(suggest_fn)
+            except (TypeError, ValueError):
+                sig = None
+            if request_timeout is not None and sig and "request_timeout" in sig.parameters:
+                call_kwargs["request_timeout"] = request_timeout
+            if sig and "progress_callback" in sig.parameters:
+                call_kwargs["progress_callback"] = _llm_progress
+            commit_message = suggest_fn(change.diff_content, **call_kwargs)
             validated = generator.validate_and_fix_commit_message(commit_message)
             if self.debug:
                 print(
@@ -807,6 +846,78 @@ class KlingonCMTWorkflow:
             )
         # Defensive: unexpected exceptions outside kcmt domain should not
         # crash the entire preparation; convert to generic error.
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            return PreparedCommit(
+                change=change,
+                message=None,
+                error=(
+                    "Unexpected non-kcmt error preparing commit for "
+                    f"{change.file_path}: {exc}"
+                ),
+            )
+
+    async def _prepare_single_change_async(
+        self, change: FileChange, request_timeout: float | None = None
+    ) -> PreparedCommit:
+        generator = self._get_thread_commit_generator()
+        if self.debug:
+            snippet = change.diff_content.splitlines()[:20]
+            preview = "\n".join(snippet)
+            print(
+                ("DEBUG: prepare.file path={} change_type={} diff_preview=\n{}").format(
+                    change.file_path,
+                    change.change_type,
+                    preview,
+                )
+            )
+
+        self._progress_event("diff-ready", file=change.file_path)
+
+        def _llm_progress(status: str) -> None:
+            key = status.strip().lower()
+            if key in {"request-sent", "request sent"}:
+                self._progress_event("request-sent", file=change.file_path)
+            elif key in {"response-received", "response received"}:
+                self._progress_event("response", file=change.file_path)
+            else:
+                self._progress_event(
+                    "llm",
+                    file=change.file_path,
+                    detail=status,
+                )
+
+        try:
+            commit_message = await generator.suggest_commit_message_async(
+                change.diff_content,
+                context=f"File: {change.file_path}",
+                style="conventional",
+                request_timeout=request_timeout,
+                progress_callback=_llm_progress,
+            )
+            validated = generator.validate_and_fix_commit_message(commit_message)
+            if self.debug:
+                print(
+                    "DEBUG: prepare.success path={} header='{}'".format(
+                        change.file_path,
+                        validated.splitlines()[0] if validated else "",
+                    )
+                )
+            return PreparedCommit(change=change, message=validated)
+        except (ValidationError, LLMError) as exc:
+            if self.debug:
+                print(
+                    "DEBUG: prepare.failure path={} error='{}'".format(
+                        change.file_path, str(exc)[:200]
+                    )
+                )
+            return PreparedCommit(
+                change=change,
+                message=None,
+                error=(
+                    "Failed to generate valid commit message for "
+                    f"{change.file_path}: {exc}"
+                ),
+            )
         except Exception as exc:  # pragma: no cover  # noqa: BLE001
             return PreparedCommit(
                 change=change,
@@ -944,6 +1055,46 @@ class KlingonCMTWorkflow:
         elif prepared.error:
             self._print_prepare_error(prepared.change.file_path, prepared.error)
 
+    def _format_progress_message(self, kind: str, info: dict[str, object]) -> str | None:
+        file_path = str(info.get("file") or "")
+        detail = str(info.get("detail") or "")
+        provider = getattr(self._config, "provider", "")
+        model = getattr(self._config, "model", "")
+
+        if kind == "diff-ready":
+            return f"🧠 diff ready: {file_path}"
+        if kind == "request-sent":
+            target = f"{provider}/{model}".strip("/")
+            return f"📤 sent {file_path} → {target}"
+        if kind == "response":
+            return f"📥 response received: {file_path}"
+        if kind == "commit-start":
+            return f"📝 committing {file_path}"
+        if kind == "commit-done":
+            return f"✅ committed {file_path}"
+        if kind == "commit-error":
+            return f"⚠️ commit failed for {file_path}: {detail}"
+        if kind == "push-start":
+            return "⏫ pushing to remote…"
+        if kind == "push-done":
+            return "📡 push complete"
+        if kind == "push-error":
+            return f"⚠️ push failed: {detail}"
+        if kind == "llm":
+            label = detail or "LLM status"
+            return f"🤖 {label}"
+        return None
+
+    def _progress_event(self, kind: str, **info: object) -> None:
+        message = self._format_progress_message(kind, info)
+        if not message:
+            return
+        if getattr(self, "_show_progress", False):
+            self._clear_progress_line()
+            print(message)
+            self._refresh_progress_line()
+        self._progress_history.append(message)
+
     def _parse_git_diff(self, diff: str) -> List[FileChange]:
         """Parse git diff output to extract file changes."""
         changes: List[FileChange] = []
@@ -1062,12 +1213,21 @@ class KlingonCMTWorkflow:
             )
 
         commit_start = time.perf_counter()
+        self._progress_event("commit-start", file=change.file_path)
         result = self._attempt_commit(
             validated_message,
             max_retries=self.max_retries,
             file_path=change.file_path,
         )
         self._metrics.record_commit(time.perf_counter() - commit_start)
+        if result.success:
+            self._progress_event("commit-done", file=change.file_path)
+        else:
+            self._progress_event(
+                "commit-error",
+                file=change.file_path,
+                detail=str(result.error or ""),
+            )
         return result
 
     def _generate_file_commit_message(self, change: FileChange) -> str:
