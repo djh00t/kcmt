@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 from kcmt.config import (
+    config_file_path,
     DEFAULT_MODELS,
     Config,
     clear_active_config,
@@ -114,7 +115,7 @@ def test_cli_config_saved_in_repo_root_from_nested_path(monkeypatch, tmp_path):
     )
 
     assert exit_code == 0
-    cfg_path = tmp_path / ".kcmt" / "config.json"
+    cfg_path = config_file_path(tmp_path)
     assert cfg_path.exists()
     persisted = load_persisted_config(tmp_path)
     assert persisted is not None
