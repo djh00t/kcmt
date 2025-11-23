@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -193,6 +194,7 @@ class KlingonCMTWorkflow:
         self._metrics = WorkflowMetrics()
         self._progress_history: list[str] = []
         self._progress_header_shown = False
+        self._progress_block_height = 0
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -995,45 +997,55 @@ class KlingonCMTWorkflow:
             f"{DIM}{rate:5.2f} commits/s{RESET}"
         )
 
-    def _print_progress(self, stage: str) -> None:
+    def _render_progress_block(self) -> None:
+        """Render the progress table pinned to the bottom of the output."""
+
         if not getattr(self, "_show_progress", False):
             return
 
-        if not getattr(self, "_progress_header_shown", False):
-            header = (
-                f"{DIM}stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s{RESET}"
-            )
-            separator = f"{DIM}{'─' * len('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')}{RESET}"
-            print(header)
-            print(separator)
-            self._progress_header_shown = True
-
-        status_line = self._build_progress_line(stage)
-        self._progress_snapshots[stage] = status_line
-        self._last_progress_stage = stage
-        print(f"\r{status_line}", end="", flush=True)
-
-    def _finalize_progress(self) -> None:
-        if not getattr(self, "_show_progress", False):
-            return
-
-        self._progress_snapshots["done"] = self._build_progress_line("done")
-        print("\r\033[K", end="")
-
+        header = f"{DIM}stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s{RESET}"
+        separator = f"{DIM}{'─' * len('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')}{RESET}"
         ordered_stages = ["prepare", "commit", "done"]
         block_lines = [
             self._progress_snapshots[stage]
             for stage in ordered_stages
             if stage in self._progress_snapshots
         ]
+        if not block_lines:
+            return
+        lines = [header, separator, *block_lines]
 
-        if block_lines:
-            print("\n".join(block_lines))
-        else:
-            print()
+        if self._progress_block_height:
+            sys.stdout.write(f"\x1b[{self._progress_block_height}F")
+        for idx, line in enumerate(lines):
+            # Clear line then write content; add newline except last line.
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write(line)
+            if idx < len(lines) - 1:
+                sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._progress_block_height = len(lines)
 
-        # Reset header flag for next run
+    def _print_progress(self, stage: str) -> None:
+        if not getattr(self, "_show_progress", False):
+            return
+
+        status_line = self._build_progress_line(stage)
+        self._progress_snapshots[stage] = status_line
+        self._last_progress_stage = stage
+        self._render_progress_block()
+
+    def _finalize_progress(self) -> None:
+        if not getattr(self, "_show_progress", False):
+            return
+
+        self._progress_snapshots["done"] = self._build_progress_line("done")
+        self._render_progress_block()
+
+        # Leave a newline after the block and reset state for the next run.
+        print()
         self._progress_header_shown = False
+        self._progress_block_height = 0
 
         if self._commit_subjects:
             print()
