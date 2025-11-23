@@ -20,6 +20,9 @@ function normaliseStats(stats = {}) {
   if (!stats) {
     return {
       total_files: 0,
+      diffs_built: 0,
+      requests: 0,
+      responses: 0,
       prepared: 0,
       processed: 0,
       successes: 0,
@@ -34,12 +37,18 @@ function normaliseStats(stats = {}) {
     successes: stats.successes ?? 0,
     failures: stats.failures ?? 0,
     rate: stats.rate ?? 0,
+    diffs_built: stats.diffs_built ?? 0,
+    requests: stats.requests ?? 0,
+    responses: stats.responses ?? 0,
   };
 }
 
 function buildProgressLine(stage, stats, maxWidth) {
   const snapshot = normaliseStats(stats);
   const total = Math.max(0, snapshot.total_files);
+  const diffs = Math.max(0, Math.min(snapshot.diffs_built, total));
+  const requests = Math.max(0, snapshot.requests);
+  const responses = Math.max(0, snapshot.responses);
   const processed = Math.max(0, Math.min(snapshot.processed, total));
   const prepared = Math.max(0, Math.min(snapshot.prepared, total));
   const success = Math.max(0, snapshot.successes);
@@ -54,9 +63,12 @@ function buildProgressLine(stage, stats, maxWidth) {
   const {icon, color} = stageStyles[stage] || stageStyles.prepare;
   const stageLabel = (stage || 'progress').toUpperCase().padEnd(7);
 
+  const diffStr = String(diffs).padStart(3);
   const processedStr = String(processed).padStart(3);
   const totalStr = String(total).padStart(3);
   const preparedStr = String(prepared).padStart(3);
+  const reqStr = String(requests).padStart(3);
+  const resStr = String(responses).padStart(3);
   const successStr = String(success).padStart(3);
   const failureStr = String(failures).padStart(3);
   const rateStr = rate.toFixed(2).padStart(5);
@@ -64,8 +76,9 @@ function buildProgressLine(stage, stats, maxWidth) {
   const line = (
     `${chalk.bold(`${icon} kcmt`)} ` +
     `${color(stageLabel)} │ ` +
-    `${chalk.green(processedStr)}/${totalStr} files │ ` +
-    `${chalk.cyan(preparedStr)}/${totalStr} ready │ ` +
+    `${chalk.dim(`Δ ${diffStr}`)}/${totalStr} │ ` +
+    `${chalk.cyan(`req ${reqStr}`)}/${chalk.cyan(`${resStr} res`)} │ ` +
+    `${chalk.green(preparedStr)}/${totalStr} ready │ ` +
     `${chalk.green(`✓ ${successStr}`)} │ ` +
     `${chalk.red(`✗ ${failureStr}`)} │ ` +
     `${chalk.dim(`${rateStr} commits/s`)}`
@@ -286,7 +299,7 @@ export default function WorkflowView({onBack}) {
   }
 
   const footerElements = [];
-  const legendLine = chalk.dim('Legend: processed/total files | ready/total ready | ✓ successes | ✗ failures | commits/s');
+  const legendLine = chalk.dim('Legend: Δ diffs/total | req/resp | ready/total | ✓ successes | ✗ failures | commits/s');
   if (status === 'running') {
     if (currentProgressLine) {
       footerElements.push(h(Text, {key: 'progress-live'}, currentProgressLine));
