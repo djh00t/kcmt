@@ -94,6 +94,31 @@ class Config:
 _CONFIG_STATE: Dict[str, Optional[Config]] = {"active": None}
 
 
+def _safe_load_json(path: Path) -> Optional[Any]:
+    """Load JSON from ``path`` tolerating encoding issues.
+
+    Falls back to replacement decoding when utf-8 decoding fails so a single
+    bad byte does not crash the CLI.
+    """
+
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        pass
+    except json.JSONDecodeError:
+        return None
+
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return None
+
+
 def _ensure_path(path_like: Optional[Path]) -> Path:
     if path_like is None:
         return Path.cwd().resolve(strict=False)
@@ -179,7 +204,9 @@ def load_persisted_config(
     cfg_path = _config_file(repo_root)
     if not cfg_path.exists():
         return None
-    data = json.loads(cfg_path.read_text())
+    data = _safe_load_json(cfg_path)
+    if not isinstance(data, dict):
+        return None
     data.pop("allow_fallback", None)
     if "auto_push" not in data:  # backward compat; now default is True
         data["auto_push"] = True
@@ -224,10 +251,7 @@ def load_preferences(repo_root: Optional[Path] = None) -> Dict[str, Any]:
     pref_path = _preferences_file(repo_root)
     if not pref_path.exists():
         return {}
-    try:
-        data = json.loads(pref_path.read_text())
-    except json.JSONDecodeError:
-        return {}
+    data = _safe_load_json(pref_path)
     if isinstance(data, dict):
         return data
     return {}
