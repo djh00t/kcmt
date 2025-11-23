@@ -5,6 +5,15 @@ import gradient from 'gradient-string';
 import {AppContext} from '../app.mjs';
 const h = React.createElement;
 
+function ellipsize(text, maxLength) {
+  const value = text == null ? '' : String(text);
+  if (!maxLength || value.length <= maxLength) {
+    return value;
+  }
+  const limit = Math.max(1, maxLength - 1);
+  return `${value.slice(0, limit)}…`;
+}
+
 const palette = gradient(['#ff6a88', '#ff99ac', '#f2f5f7']);
 
 const menuItems = [
@@ -40,6 +49,8 @@ const MenuItem = ({isSelected, label, hint}) =>
 
 export default function MainMenu({onNavigate}) {
   const {bootstrap} = useContext(AppContext);
+  const columns = process.stdout && process.stdout.columns ? Number(process.stdout.columns) : undefined;
+  const widthHint = columns ? Math.max(40, columns - 4) : undefined;
   const repoInfo = useMemo(() => {
     if (!bootstrap) {
       return null;
@@ -47,11 +58,11 @@ export default function MainMenu({onNavigate}) {
     const provider = bootstrap?.config?.provider || 'openai';
     const model = bootstrap?.config?.model;
     return {
-      repo: bootstrap.repoRoot,
+      repo: ellipsize(bootstrap.repoRoot, widthHint ? widthHint - 20 : undefined),
       provider,
       model,
     };
-  }, [bootstrap]);
+  }, [bootstrap, widthHint]);
 
   return h(
     Box,
