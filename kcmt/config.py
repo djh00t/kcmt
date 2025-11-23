@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-CONFIG_DIR_NAME = ".kcmt"
+CONFIG_DIR_NAME = "kcmt"
 CONFIG_FILE_NAME = "config.json"
 PREFERENCES_FILE_NAME = "preferences.json"
+
+# Default batch timeout (seconds). The Batch API is asynchronous and may take
+# longer than typical completion calls; we cap waits at five minutes by default.
+DEFAULT_BATCH_TIMEOUT_SECONDS = 300
 
 DEFAULT_MODELS = {
     "openai": {
@@ -71,6 +77,10 @@ class Config:
     providers: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Ordered list (priority ascending) of preferred provider/model pairs.
     model_priority: list[dict[str, str]] = field(default_factory=list)
+    # Optional OpenAI batch settings
+    use_batch: bool = False
+    batch_model: Optional[str] = None
+    batch_timeout_seconds: int = DEFAULT_BATCH_TIMEOUT_SECONDS
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -90,8 +100,28 @@ def _ensure_path(path_like: Optional[Path]) -> Path:
     return Path(path_like).expanduser().resolve(strict=False)
 
 
-def _config_dir(repo_root: Optional[Path] = None) -> Path:
-    return _ensure_path(repo_root) / CONFIG_DIR_NAME
+def _config_home() -> Path:
+    """Return the base config directory independent of repo root."""
+    env_home = os.environ.get("KCMT_CONFIG_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve(strict=False)
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".config"
+    return (base / CONFIG_DIR_NAME).resolve(strict=False)
+
+
+def _repo_namespace(repo_root: Optional[Path]) -> str:
+    """Stable namespace for per-repo cached artifacts (benchmarks/snapshots)."""
+    root = _ensure_path(repo_root)
+    digest = hashlib.sha256(str(root).encode("utf-8", "ignore")).hexdigest()[:8]
+    tail = root.name or "repo"
+    safe_tail = re.sub(r"[^a-zA-Z0-9_.-]", "-", tail) or "repo"
+    return f"{safe_tail}-{digest}"
+
+
+def _config_dir(_repo_root: Optional[Path] = None) -> Path:
+    # Config is global; repo_root is ignored for location but retained in API.
+    return _config_home()
 
 
 def _config_file(repo_root: Optional[Path] = None) -> Path:
@@ -102,8 +132,29 @@ def _preferences_file(repo_root: Optional[Path] = None) -> Path:
     return _config_dir(repo_root) / PREFERENCES_FILE_NAME
 
 
+def config_dir(repo_root: Optional[Path] = None) -> Path:
+    """Expose the config directory path (global)."""
+    return _config_dir(repo_root)
+
+
+def config_file_path(repo_root: Optional[Path] = None) -> Path:
+    """Expose the config.json path (global)."""
+    return _config_file(repo_root)
+
+
+def preferences_file_path(repo_root: Optional[Path] = None) -> Path:
+    """Expose the preferences.json path (global)."""
+    return _preferences_file(repo_root)
+
+
+def state_dir(repo_root: Optional[Path] = None) -> Path:
+    """Directory for repo-scoped cached artifacts (benchmarks, snapshots)."""
+    base = _config_home() / "repos" / _repo_namespace(repo_root)
+    return base.resolve(strict=False)
+
+
 def save_config(config: Config, repo_root: Optional[Path] = None) -> None:
-    """Persist configuration JSON within the repository."""
+    """Persist configuration JSON to the global config directory."""
     cfg_path = _config_file(repo_root)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     data = config.to_dict()
@@ -151,8 +202,7 @@ def load_persisted_config(
         data.pop(legacy_key, None)
     if "model_priority" in data and not isinstance(data["model_priority"], list):
         data.pop("model_priority", None)
-    resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
-    resolved_root = _ensure_path(resolved_root)
+    resolved_root = _ensure_path(repo_root) if repo_root else Path.cwd()
     git_path = data.get("git_repo_path")
     if git_path:
         candidate = Path(git_path).expanduser()
@@ -323,6 +373,9 @@ def load_config(
     if api_override:
         provider_entry["api_key_env"] = api_override
     api_key_env = provider_entry.get("api_key_env") or _select_env_var_for_provider(provider)
+    # Sanity: if persisted value looks like a URL, reset to default env var
+    if isinstance(api_key_env, str) and ("://" in api_key_env or api_key_env.startswith("http")):
+        api_key_env = DEFAULT_MODELS[provider]["api_key_env"]
     provider_entry["api_key_env"] = api_key_env
 
     # Sync preferred models per provider based on priority list
@@ -367,6 +420,47 @@ def load_config(
     else:
         auto_push = True
 
+    batch_env = os.environ.get("KCMT_USE_BATCH")
+    batch_override = overrides.get("use_batch")
+    if batch_override is not None:
+        use_batch = str(batch_override).lower() in {"1", "true", "yes", "on"}
+    elif persisted is not None and hasattr(persisted, "use_batch"):
+        use_batch = bool(getattr(persisted, "use_batch"))
+    elif batch_env:
+        use_batch = batch_env.lower() in {"1", "true", "yes", "on"}
+    else:
+        use_batch = False
+    if provider != "openai":
+        use_batch = False
+
+    default_batch_model = (
+        providers_map.get("openai", {}).get("preferred_model")
+        or DEFAULT_MODELS["openai"]["model"]
+    )
+    batch_model_override = overrides.get("batch_model") or os.environ.get(
+        "KCMT_BATCH_MODEL"
+    )
+    batch_model = (
+        batch_model_override
+        or (getattr(persisted, "batch_model", None) if persisted else None)
+        or default_batch_model
+    )
+    batch_timeout_raw = (
+        overrides.get("batch_timeout_seconds")
+        or overrides.get("batch_timeout")
+        or os.environ.get("KCMT_BATCH_TIMEOUT")
+        or (
+            getattr(persisted, "batch_timeout_seconds", None)
+            if persisted
+            else DEFAULT_BATCH_TIMEOUT_SECONDS
+        )
+        or DEFAULT_BATCH_TIMEOUT_SECONDS
+    )
+    try:
+        batch_timeout_seconds = int(float(batch_timeout_raw))
+    except (TypeError, ValueError):
+        batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
+
     config = Config(
         provider=provider,
         model=model,
@@ -377,6 +471,9 @@ def load_config(
         auto_push=bool(auto_push),
         providers=providers_map,
         model_priority=priority_list,
+        use_batch=use_batch,
+        batch_model=str(batch_model) if batch_model is not None else None,
+        batch_timeout_seconds=batch_timeout_seconds,
     )
 
     set_active_config(config)
