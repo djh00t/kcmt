@@ -286,10 +286,12 @@ export default function WorkflowView({onBack}) {
   }
 
   const footerElements = [];
+  const legendLine = chalk.dim('Legend: processed/total files | ready/total ready | ✓ successes | ✗ failures | commits/s');
   if (status === 'running') {
     if (currentProgressLine) {
       footerElements.push(h(Text, {key: 'progress-live'}, currentProgressLine));
     }
+    footerElements.push(h(Text, {key: 'progress-legend'}, legendLine));
     footerElements.push(h(Text, {key: 'footer-running', dimColor: true}, h(Spinner, {type: 'runner'}), ' Press ESC to abort.'));
   }
 
@@ -333,6 +335,7 @@ export default function WorkflowView({onBack}) {
     });
     if (stageBlock.length) {
       footerElements.unshift(h(Text, {key: 'progress-gap-top'}, ''));
+      footerElements.unshift(h(Text, {key: 'progress-legend'}, legendLine));
       footerElements.unshift(...stageBlock);
     }
     const exitText = status === 'error'
