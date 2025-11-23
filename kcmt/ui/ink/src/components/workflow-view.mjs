@@ -7,6 +7,15 @@ const h = React.createElement;
 
 const STAGE_ORDER = ['prepare', 'commit', 'done'];
 
+function ellipsize(text, maxLength) {
+  const value = text == null ? '' : String(text);
+  if (!maxLength || value.length <= maxLength) {
+    return value;
+  }
+  const limit = Math.max(1, maxLength - 1);
+  return `${value.slice(0, limit)}…`;
+}
+
 function normaliseStats(stats = {}) {
   if (!stats) {
     return {
@@ -28,7 +37,7 @@ function normaliseStats(stats = {}) {
   };
 }
 
-function buildProgressLine(stage, stats) {
+function buildProgressLine(stage, stats, maxWidth) {
   const snapshot = normaliseStats(stats);
   const total = Math.max(0, snapshot.total_files);
   const processed = Math.max(0, Math.min(snapshot.processed, total));
@@ -52,7 +61,7 @@ function buildProgressLine(stage, stats) {
   const failureStr = String(failures).padStart(3);
   const rateStr = rate.toFixed(2).padStart(5);
 
-  return (
+  const line = (
     `${chalk.bold(`${icon} kcmt`)} ` +
     `${color(stageLabel)} │ ` +
     `${chalk.green(processedStr)}/${totalStr} files │ ` +
@@ -61,6 +70,11 @@ function buildProgressLine(stage, stats) {
     `${chalk.red(`✗ ${failureStr}`)} │ ` +
     `${chalk.dim(`${rateStr} commits/s`)}`
   );
+
+  if (!maxWidth) {
+    return line;
+  }
+  return ellipsize(line, maxWidth);
 }
 
 function useMessageLog() {
@@ -92,6 +106,8 @@ export default function WorkflowView({onBack}) {
   const {backend, bootstrap, argv} = useContext(AppContext);
   const {stdout} = useStdout();
   const stdoutRows = stdout && stdout.rows ? Number(stdout.rows) : undefined;
+  const stdoutCols = stdout && stdout.columns ? Number(stdout.columns) : undefined;
+  const lineWidth = stdoutCols ? Math.max(40, stdoutCols - 2) : undefined;
 
   const [stage, setStage] = useState('prepare');
   const [stats, setStats] = useState(normaliseStats());
@@ -142,7 +158,7 @@ export default function WorkflowView({onBack}) {
         stageRef.current = nextStage;
         setStats(nextStats);
         setStage(nextStage);
-        const line = buildProgressLine(nextStage, nextStats);
+        const line = buildProgressLine(nextStage, nextStats, lineWidth);
         setCurrentProgressLine(line);
         setProgressSnapshots(prev => ({...prev, [nextStage]: line}));
       }
@@ -185,7 +201,7 @@ export default function WorkflowView({onBack}) {
           setMetricsSummary(String(data.metrics_summary));
         }
         const doneStats = normaliseStats(data?.stats || statsRef.current);
-        const doneLine = buildProgressLine('done', doneStats);
+        const doneLine = buildProgressLine('done', doneStats, lineWidth);
         setProgressSnapshots(prev => ({...prev, done: doneLine}));
         setCurrentProgressLine('');
         stageRef.current = 'done';
@@ -247,9 +263,9 @@ export default function WorkflowView({onBack}) {
   }, [status]);
 
   const provider = bootstrap?.config?.provider || 'openai';
-  const repo = bootstrap?.repoRoot || '';
+  const repo = ellipsize(bootstrap?.repoRoot || '', lineWidth ? lineWidth - 15 : undefined);
   const model = bootstrap?.config?.model || '';
-  const endpoint = bootstrap?.config?.llm_endpoint || '';
+  const endpoint = ellipsize(bootstrap?.config?.llm_endpoint || '', lineWidth ? lineWidth - 12 : undefined);
   const maxRetries = argv['max-retries'] || bootstrap?.config?.max_retries || 3;
 
   const headerElements = [
