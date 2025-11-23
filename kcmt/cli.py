@@ -51,20 +51,21 @@ class CLI:
         if not sys.stdout.isatty():
             return False
         arg_list = args or []
-        if any(
-            token
-            in {
-                "status",
-                "--raw",
-                "--list-models",
-                "--benchmark-json",
-                "--benchmark-csv",
-                "--oneshot",
-                "--file",
-                "--configure-all",
-            }
-            for token in arg_list
-        ):
+        # Flags that should always use the legacy CLI (non-TUI).
+        legacy_tokens = {
+            "status",
+            "--raw",
+            "--list-models",
+            "--benchmark-json",
+            "--benchmark-csv",
+            "--oneshot",
+            "--file",
+            "--configure-all",
+        }
+        if any(token in legacy_tokens for token in arg_list):
+            return False
+        # Fast path: use legacy when no interactive config/configure requested.
+        if "--configure" not in arg_list and "--config" not in arg_list:
             return False
         if not INK_APP_PATH.exists():
             return False
