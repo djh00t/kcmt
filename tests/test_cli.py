@@ -1,5 +1,7 @@
 import json
 
+from kcmt.config import config_file_path, state_dir
+
 import kcmt.cli as cli_module
 
 
@@ -152,7 +154,7 @@ def test_cli_configure_writes_file(monkeypatch, tmp_path):
     args = ["--configure", "--repo-path", str(tmp_path)]
     assert cli.run(args) == 0
 
-    config_path = tmp_path / ".kcmt" / "config.json"
+    config_path = config_file_path(tmp_path)
     assert config_path.exists()
     data = json.loads(config_path.read_text())
     assert data["provider"] == "anthropic"
@@ -222,7 +224,7 @@ def test_cli_compact_mode_snapshot(monkeypatch, tmp_path, capsys):
     assert "Commit status" in output
     assert "Latest commit" in output
 
-    snapshot_path = tmp_path / ".kcmt" / "last_run.json"
+    snapshot_path = state_dir(tmp_path) / "last_run.json"
     assert snapshot_path.exists()
     snapshot = json.loads(snapshot_path.read_text())
     assert snapshot["counts"]["commit_success"] == 1
