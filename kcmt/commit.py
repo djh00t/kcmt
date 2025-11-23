@@ -3,9 +3,11 @@
 import inspect
 import os
 import re
-from typing import Any
+import sys
+import threading
+import time
+from typing import Any, Callable, Optional
 from typing import Callable as _Callable
-from typing import Optional
 
 from .config import DEFAULT_MODELS, Config, get_active_config
 from .exceptions import LLMError, ValidationError
@@ -19,6 +21,71 @@ def _supports_request_timeout(callable_obj: _Callable[..., Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return "request_timeout" in signature.parameters
+
+
+def _supports_param(callable_obj: _Callable[..., Any], name: str) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    return name in signature.parameters
+
+
+def _should_use_spinner() -> bool:
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return False
+    if os.environ.get("KCMT_USE_INK") or os.environ.get("KCMT_BACKEND_MODULE"):
+        return False
+    flag = os.environ.get("KCMT_NO_SPINNER", "").lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return False
+    return sys.stderr.isatty()
+
+
+class _Spinner:
+    """Lightweight stdout spinner to signal batch progress."""
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self._enabled = _should_use_spinner()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._frames = ["|", "/", "-", "\\"]
+        self._frame_index = 0
+
+    def start(self) -> None:
+        if not self._enabled or self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def update(self, text: str) -> None:
+        if not self._enabled:
+            return
+        text = text.strip()
+        if len(text) > 80:
+            text = text[:77] + "..."
+        self.label = text or self.label
+
+    def stop(self) -> None:
+        if not self._enabled:
+            return
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.2)
+            self._thread = None
+        # Clear line
+        sys.stderr.write("\r" + " " * (len(self.label) + 2) + "\r")
+        sys.stderr.flush()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            frame = self._frames[self._frame_index % len(self._frames)]
+            self._frame_index += 1
+            sys.stderr.write(f"\r{frame} {self.label}")
+            sys.stderr.flush()
+            time.sleep(0.1)
 
 
 class CommitGenerator:
@@ -89,68 +156,88 @@ class CommitGenerator:
         context: str,
         style: str,
         request_timeout: float | None,
+        progress_callback: Callable[[str], None] | None,
     ) -> str:
         last_error: Exception | None = None
         max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
-            if self.debug:
-                truncated_ctx = context[:120] + "…" if len(context) > 120 else context
-                print(
-                    "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
-                        attempt, len(diff), truncated_ctx
+        spinner: _Spinner | None = None
+        progress_cb = progress_callback
+        if getattr(client, "uses_batch", False):
+            spinner = _Spinner("Submitting OpenAI batch…")
+            spinner.start()
+            if progress_callback:
+                def _combo(msg: str) -> None:
+                    label = "Sending…" if msg == "request-sent" else "Waiting…" if msg == "response-received" else msg
+                    spinner.update(label)
+                    progress_callback(msg)
+
+                progress_cb = _combo
+            else:
+                progress_cb = spinner.update
+        try:
+            for attempt in range(1, max_attempts + 1):
+                if self.debug:
+                    truncated_ctx = (
+                        context[:120] + "…" if len(context) > 120 else context
                     )
-                )
-            try:
-                generate_fn = client.generate_commit_message
-                if request_timeout is not None and _supports_request_timeout(
-                    generate_fn
-                ):
-                    msg = generate_fn(
-                        diff,
-                        context,
-                        style,
-                        request_timeout=request_timeout,
+                    print(
+                        "DEBUG: commit.attempt {} diff_len={} context='{}'".format(
+                            attempt, len(diff), truncated_ctx
+                        )
                     )
-                else:
-                    msg = generate_fn(diff, context, style)
-                if request_timeout is not None and "request_timeout" not in getattr(
-                    getattr(generate_fn, "__code__", {}), "co_varnames", ()
-                ):
-                    pass
-                if not msg or not msg.strip():
-                    raise LLMError("LLM returned empty response")
-                if not self.validate_conventional_commit(msg):
+                try:
+                    generate_fn = client.generate_commit_message
+                    call_kwargs: dict[str, object] = {}
+                    if request_timeout is not None and _supports_request_timeout(
+                        generate_fn
+                    ):
+                        call_kwargs["request_timeout"] = request_timeout
+                    if progress_cb is not None and _supports_param(
+                        generate_fn, "progress_callback"
+                    ):
+                        call_kwargs["progress_callback"] = progress_cb
+                    if progress_cb is not None:
+                        progress_cb("request-sent")
+                    msg = generate_fn(diff, context, style, **call_kwargs)
+                    if not msg or not msg.strip():
+                        raise LLMError("LLM returned empty response")
+                    if progress_cb is not None:
+                        progress_cb("response-received")
+                    if not self.validate_conventional_commit(msg):
+                        if self.debug:
+                            invalid_header = msg.splitlines()[0][:120]
+                            print(
+                                (
+                                    "DEBUG: commit.invalid_format attempt={} msg='{}'"
+                                ).format(attempt, invalid_header)
+                            )
+                        if attempt < max_attempts:
+                            continue
+                        raise LLMError(
+                            (
+                                "LLM produced invalid commit message after {} attempts"
+                            ).format(max_attempts)
+                        )
                     if self.debug:
-                        invalid_header = msg.splitlines()[0][:120]
                         print(
-                            ("DEBUG: commit.invalid_format attempt={} msg='{}'").format(
-                                attempt, invalid_header
+                            "DEBUG: commit.valid attempt={} header='{}'".format(
+                                attempt, msg.splitlines()[0]
+                            )
+                        )
+                    return msg
+                except LLMError as e:
+                    last_error = e
+                    if self.debug:
+                        print(
+                            "DEBUG: commit.error attempt={} error='{}'".format(
+                                attempt, str(e)[:200]
                             )
                         )
                     if attempt < max_attempts:
                         continue
-                    raise LLMError(
-                        (
-                            "LLM produced invalid commit message after {} attempts"
-                        ).format(max_attempts)
-                    )
-                if self.debug:
-                    print(
-                        "DEBUG: commit.valid attempt={} header='{}'".format(
-                            attempt, msg.splitlines()[0]
-                        )
-                    )
-                return msg
-            except LLMError as e:
-                last_error = e
-                if self.debug:
-                    print(
-                        "DEBUG: commit.error attempt={} error='{}'".format(
-                            attempt, str(e)[:200]
-                        )
-                    )
-                if attempt < max_attempts:
-                    continue
+        finally:
+            if spinner:
+                spinner.stop()
         raise LLMError(
             (
                 "LLM unavailable or invalid output after {} attempts; commit aborted"
@@ -221,6 +308,7 @@ class CommitGenerator:
         context: str = "",
         style: str = "conventional",
         request_timeout: float | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate a commit message from a provided diff.
 
@@ -298,7 +386,7 @@ class CommitGenerator:
                 )
             try:
                 result = self._attempt_with_client(
-                    client, diff, context, style, request_timeout
+                    client, diff, context, style, request_timeout, progress_callback
                 )
                 if current_key and result:
                     self._memo[current_key] = result
