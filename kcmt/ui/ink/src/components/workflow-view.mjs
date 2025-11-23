@@ -78,7 +78,7 @@ function buildProgressLine(stage, stats, maxWidth) {
     `${color(stageLabel)} │ ` +
     `${chalk.dim(`Δ ${diffStr}`)}/${totalStr} │ ` +
     `${chalk.cyan(`req ${reqStr}`)}/${chalk.cyan(`${resStr} res`)} │ ` +
-    `${chalk.green(preparedStr)}/${totalStr} ready │ ` +
+    `${chalk.green(`${preparedStr}/${totalStr} ready`)} │ ` +
     `${chalk.green(`✓ ${successStr}`)} │ ` +
     `${chalk.red(`✗ ${failureStr}`)} │ ` +
     `${chalk.dim(`${rateStr} commits/s`)}`
@@ -299,12 +299,14 @@ export default function WorkflowView({onBack}) {
   }
 
   const footerElements = [];
-  const legendLine = chalk.dim('Legend: Δ diffs/total | req/resp | ready/total | ✓ successes | ✗ failures | commits/s');
+  const legendLine = chalk.dim('Legend: stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s');
   if (status === 'running') {
+    footerElements.push(
+      h(Text, {key: 'progress-headings', dimColor: true}, chalk.dim('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')),
+    );
     if (currentProgressLine) {
       footerElements.push(h(Text, {key: 'progress-live'}, currentProgressLine));
     }
-    footerElements.push(h(Text, {key: 'progress-legend'}, legendLine));
     footerElements.push(h(Text, {key: 'footer-running', dimColor: true}, h(Spinner, {type: 'runner'}), ' Press ESC to abort.'));
   }
 
@@ -348,7 +350,7 @@ export default function WorkflowView({onBack}) {
     });
     if (stageBlock.length) {
       footerElements.unshift(h(Text, {key: 'progress-gap-top'}, ''));
-      footerElements.unshift(h(Text, {key: 'progress-legend'}, legendLine));
+      footerElements.unshift(h(Text, {key: 'progress-headings'}, chalk.dim('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')));
       footerElements.unshift(...stageBlock);
     }
     const exitText = status === 'error'
