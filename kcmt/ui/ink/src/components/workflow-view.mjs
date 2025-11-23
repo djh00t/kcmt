@@ -156,6 +156,12 @@ export default function WorkflowView({onBack}) {
           '',
         ]);
       }
+      if (event === 'status') {
+        const msg = String(data?.message || '').trim();
+        if (msg) {
+          appendMessages([chalk.dim(msg)]);
+        }
+      }
       if (event === 'log') {
         return;
       }
@@ -209,8 +215,12 @@ export default function WorkflowView({onBack}) {
   }, [appendMessages, backend, bootstrap, overrides, argv]);
 
   useInput((input, key) => {
-    if (key.escape || (key.ctrl && input === 'c') || input === 'q') {
-      emitterRef.current?.cancel?.();
+    const char = (input || '').toLowerCase();
+    if (key.escape || (key.ctrl && char === 'c') || char === 'q') {
+      if (emitterRef.current && typeof emitterRef.current.cancel === 'function') {
+        emitterRef.current.cancel();
+      }
+      emitterRef.current = null;
       onBack();
     }
   });
