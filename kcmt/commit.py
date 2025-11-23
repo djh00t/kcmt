@@ -429,6 +429,7 @@ class CommitGenerator:
         context: str = "",
         style: str = "conventional",
         request_timeout: float | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> str:
         if not diff or not diff.strip():
             raise ValidationError("Diff content cannot be empty.")
@@ -449,17 +450,16 @@ class CommitGenerator:
                     )
                 try:
                     generate_fn = client.generate_commit_message_async
+                    call_kwargs: dict[str, object] = {}
                     if request_timeout is not None and _supports_request_timeout(
                         generate_fn
                     ):
-                        msg = await generate_fn(
-                            diff,
-                            context,
-                            style,
-                            request_timeout=request_timeout,
-                        )
-                    else:
-                        msg = await generate_fn(diff, context, style)
+                        call_kwargs["request_timeout"] = request_timeout
+                    if progress_callback and _supports_param(
+                        generate_fn, "progress_callback"
+                    ):
+                        call_kwargs["progress_callback"] = progress_callback
+                    msg = await generate_fn(diff, context, style, **call_kwargs)
                     if not msg or not msg.strip():
                         raise LLMError("LLM returned empty response")
                     if not self.validate_conventional_commit(msg):
