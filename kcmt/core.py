@@ -192,6 +192,7 @@ class KlingonCMTWorkflow:
         self._prepare_failure_limit_message = ""
         self._metrics = WorkflowMetrics()
         self._progress_history: list[str] = []
+        self._progress_header_shown = False
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -998,6 +999,15 @@ class KlingonCMTWorkflow:
         if not getattr(self, "_show_progress", False):
             return
 
+        if not getattr(self, "_progress_header_shown", False):
+            header = (
+                f"{DIM}stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s{RESET}"
+            )
+            separator = f"{DIM}{'─' * len('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')}{RESET}"
+            print(header)
+            print(separator)
+            self._progress_header_shown = True
+
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
         self._last_progress_stage = stage
@@ -1021,6 +1031,9 @@ class KlingonCMTWorkflow:
             print("\n".join(block_lines))
         else:
             print()
+
+        # Reset header flag for next run
+        self._progress_header_shown = False
 
         if self._commit_subjects:
             print()
