@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
+import tempfile
+import time
 from typing import Any, Callable
 
 import httpx
@@ -122,27 +125,42 @@ class OpenAIDriver(BaseDriver):
                 "Authorization": f"Bearer {api_key}",
             },
         )
+        self._batch_ineligible: set[str] = set()
+
+    def _supports_batch(self) -> bool:
+        client = getattr(self, "_client", None)
+        if client is None:
+            return False
+        return hasattr(client, "batches") and hasattr(client, "files")
+
+    RESPONSES_ONLY_PREFIXES: tuple[str, ...] = ("gpt-5.1-codex",)
+
+    def _requires_responses(self, model: str) -> bool:
+        lower = model.lower()
+        return any(lower.startswith(prefix) for prefix in self.RESPONSES_ONLY_PREFIXES)
+
+    @staticmethod
+    def _is_batch_model_error(message: str) -> bool:
+        lowered = message.lower()
+        return (
+            "not supported by the batch api" in lowered
+            or "model_not_found" in lowered
+            or "model not found" in lowered
+        )
 
     # The message-building stays orchestrated; we accept already-built messages
-    def _invoke(
+    def _compose_chat_kwargs(
         self,
         messages: list[dict[str, Any]],
-        minimal_ok: bool,
         request_timeout: float | None = None,
-    ) -> str:
+        model_override: str | None = None,
+    ) -> tuple[dict[str, Any], bool, str, int, float]:
         max_tokens = getattr(self, "_max_completion_tokens", 512)
-        model = self.config.model
+        model = model_override or self.config.model
         is_gpt5 = model.startswith("gpt-5")
         token_param = "max_completion_tokens" if is_gpt5 else "max_tokens"
         timeout_value = request_timeout or self._request_timeout
 
-        if self.debug:
-            print("DEBUG(Driver:OpenAI): invoke")
-            print(f"  model={model} token_param={token_param} value={max_tokens}")
-            print(f"  minimal_prompt={self._minimal_prompt}")
-            print(f"  timeout={timeout_value:.2f}s")
-
-        # Prepare kwargs; for gpt-5 try once WITHOUT token limit first
         base_kwargs: dict[str, Any] = {
             "messages": messages,
             "model": model,
@@ -151,6 +169,35 @@ class OpenAIDriver(BaseDriver):
             base_kwargs["temperature"] = 1
         else:
             base_kwargs[token_param] = max_tokens
+        return base_kwargs, is_gpt5, token_param, max_tokens, timeout_value
+
+    def _invoke(
+        self,
+        messages: list[dict[str, Any]],
+        minimal_ok: bool,
+        request_timeout: float | None = None,
+        model_override: str | None = None,
+    ) -> str:
+        model_candidate = model_override or self.config.model
+        if self._requires_responses(model_candidate):
+            return self._invoke_responses(
+                messages, request_timeout=request_timeout, model_override=model_candidate
+            )
+        (
+            base_kwargs,
+            is_gpt5,
+            token_param,
+            max_tokens,
+            timeout_value,
+        ) = self._compose_chat_kwargs(messages, request_timeout, model_override)
+        if self.debug:
+            print("DEBUG(Driver:OpenAI): invoke")
+            print(
+                f"  model={base_kwargs.get('model')} token_param={token_param} value={max_tokens}"
+            )
+            print(f"  minimal_prompt={self._minimal_prompt}")
+            print(f"  timeout={timeout_value:.2f}s")
+        model = str(base_kwargs.get("model", self.config.model))
 
         def _call_with_kwargs(k: dict[str, Any]) -> Any:
             call_kwargs = dict(k)
@@ -162,6 +209,12 @@ class OpenAIDriver(BaseDriver):
             resp = _call_with_kwargs(base_kwargs)
         except Exception as e:  # noqa: BLE001 - broadened to support stubs
             msg = str(e)
+            if "v1/responses" in msg or "only supported in v1/responses" in msg:
+                return self._invoke_responses(
+                    messages,
+                    request_timeout=request_timeout,
+                    model_override=base_kwargs.get("model"),
+                )
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 if self.debug:
                     print("DEBUG(Driver:OpenAI): fallback to max_completion_tokens")
@@ -271,11 +324,224 @@ class OpenAIDriver(BaseDriver):
             raise LLMError("Empty OpenAI response")
         return str(content)
 
+    def _invoke_batch(
+        self,
+        messages: list[dict[str, Any]],
+        minimal_ok: bool,
+        request_timeout: float | None = None,
+        *,
+        model_override: str | None = None,
+        batch_timeout: float | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+        force_responses_api: bool = False,
+    ) -> str:
+        (
+            base_kwargs,
+            is_gpt5,
+            token_param,
+            max_tokens,
+            _timeout_value,
+        ) = self._compose_chat_kwargs(messages, request_timeout, model_override)
+        model = str(base_kwargs.get("model", self.config.model))
+        use_responses_api = force_responses_api or self._requires_responses(model)
+        batch_wait = (
+            batch_timeout
+            or getattr(self.config, "batch_timeout_seconds", None)
+            or 300
+        )
+        network_timeout = request_timeout or self._request_timeout
+        if not hasattr(self._client, "batches"):
+            raise LLMError("OpenAI client does not support batch API")
+
+        def _submit(payload: dict[str, Any]) -> dict[str, Any]:
+            custom_id = f"kcmt-{int(time.time() * 1000)}"
+            tmp_path = None
+            created_file_id = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".jsonl", delete=False
+                ) as handle:
+                    body_payload = (
+                        {
+                            "model": model,
+                            "input": self._responses_payload_input(messages),
+                        }
+                        if use_responses_api
+                        else payload
+                    )
+                    url = "/v1/responses" if use_responses_api else "/v1/chat/completions"
+                    handle.write(
+                        json.dumps(
+                            {
+                                "custom_id": custom_id,
+                                "method": "POST",
+                                "url": url,
+                                "body": body_payload,
+                            },
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    )
+                    tmp_path = handle.name
+                with open(tmp_path, "rb") as upload:
+                    file_obj = self._client.files.create(
+                        file=upload,
+                        purpose="batch",
+                        timeout=network_timeout,
+                    )
+                created_file_id = getattr(file_obj, "id", None)
+                batch = self._client.batches.create(
+                    input_file_id=file_obj.id,
+                    endpoint="/v1/responses" if use_responses_api else "/v1/chat/completions",
+                    completion_window="24h",
+                    timeout=network_timeout,
+                )
+                batch_id = getattr(batch, "id", None)
+                if not batch_id:
+                    raise LLMError("Batch id missing from OpenAI response")
+                status = getattr(batch, "status", "") or "queued"
+                if progress_callback:
+                    progress_callback(f"batch status: {status}")
+                active_statuses = {
+                    "validating",
+                    "queued",
+                    "running",
+                    "in_progress",
+                    "finalizing",
+                }
+                terminal_failures = {
+                    "failed",
+                    "cancelling",
+                    "cancelled",
+                    "expired",
+                }
+                terminal_success = {"completed"}
+                deadline = time.time() + batch_wait
+                while status in active_statuses:
+                    if time.time() >= deadline:
+                        raise LLMError("Batch did not complete before timeout")
+                    time.sleep(5.0)
+                    batch = self._client.batches.retrieve(
+                        str(batch_id),
+                        timeout=network_timeout,
+                    )
+                    status = getattr(batch, "status", status)
+                    if progress_callback:
+                        progress_callback(f"batch status: {status}")
+                    if status in terminal_success:
+                        break
+                    if status in terminal_failures:
+                        break
+                if status not in terminal_success:
+                    detail = getattr(batch, "error", None) or getattr(batch, "errors", None)
+                    raise LLMError(
+                        f"Batch exited with status {status or '<unknown>'} ({detail})"
+                    )
+                if progress_callback:
+                    progress_callback("batch status: completed")
+                output_file_id = getattr(batch, "output_file_id", None)
+                if not output_file_id:
+                    raise LLMError("Batch completed without output file id")
+                if progress_callback:
+                    progress_callback("batch status: downloading")
+                output_resp = self._client.files.content(
+                    output_file_id, timeout=network_timeout
+                )
+                raw_text = ""
+                if hasattr(output_resp, "text"):
+                    raw_text = getattr(output_resp, "text") or ""
+                elif hasattr(output_resp, "read"):
+                    content_bytes = output_resp.read()
+                    raw_text = (
+                        content_bytes.decode("utf-8", "ignore")
+                        if isinstance(content_bytes, (bytes, bytearray))
+                        else str(content_bytes)
+                    )
+                else:
+                    raw_text = str(output_resp)
+                return self._extract_batch_body(raw_text, custom_id)
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                if created_file_id:
+                    try:
+                        self._client.files.delete(created_file_id)
+                    except Exception:
+                        pass
+
+        if self.debug:
+            print(
+                "DEBUG(Driver:OpenAI): invoke_batch model={} token_param={} value={}".format(
+                    model, token_param, max_tokens
+                )
+            )
+        try:
+            response_body = _submit(dict(base_kwargs))
+        except LLMError as exc:
+            msg = str(exc)
+            if (not is_gpt5) and "max_tokens" in msg:
+                if self.debug:
+                    print("DEBUG(Driver:OpenAI): batch retry swapping token param")
+                adjusted = dict(base_kwargs)
+                adjusted.pop("max_tokens", None)
+                adjusted["max_completion_tokens"] = max_tokens
+                response_body = _submit(adjusted)
+            else:
+                raise
+
+        choice0 = self._first_choice(response_body)
+        content, finish_reason = self._extract_choice_content(choice0)
+
+        if self.debug:
+            print(
+                "DEBUG(Driver:OpenAI): batch finish_reason={} len={}".format(
+                    finish_reason, len(content)
+                )
+            )
+            if not content:
+                self._debug_dump_choice(choice0)
+
+        if not content and is_gpt5:
+            retry_kwargs = dict(base_kwargs)
+            retry_kwargs["max_completion_tokens"] = max_tokens
+            try:
+                response_body_retry = _submit(retry_kwargs)
+                choice_r = self._first_choice(response_body_retry)
+                candidate, _finish_retry = self._extract_choice_content(choice_r)
+                if candidate:
+                    content = candidate
+            except LLMError as err:
+                if self.debug:
+                    print("DEBUG(Driver:OpenAI): batch token-limited retry error " + str(err))
+
+        if not content and finish_reason == "length":
+            if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
+                if self.debug:
+                    print(
+                        "DEBUG(Driver:OpenAI): batch enabling minimal prompt + halving tokens"
+                    )
+                self._minimal_prompt = True
+                self._max_completion_tokens = max(64, max_tokens // 2)
+                raise LLMError("RETRY_MINIMAL_PROMPT")
+            if is_gpt5:
+                raise LLMError("RETRY_SIMPLE_PROMPT")
+        if not content:
+            raise LLMError("Empty OpenAI response")
+        return str(content)
+
     def _first_choice(self, resp: Any) -> Any:
         try:
             return resp.choices[0]
-        except (AttributeError, IndexError):  # pragma: no cover - defensive
-            raise LLMError("Missing choices in OpenAI response") from None
+        except (AttributeError, IndexError):
+            pass
+        if isinstance(resp, dict):
+            choices = resp.get("choices") if isinstance(resp, dict) else None
+            if isinstance(choices, list) and choices:
+                return choices[0]
+        raise LLMError("Missing choices in OpenAI response") from None
 
     def _combine_messages(self, messages: list[dict[str, Any]]) -> str:
         system_parts: list[str] = []
@@ -355,6 +621,80 @@ class OpenAIDriver(BaseDriver):
                 return "".join(fragments).strip()
         return ""
 
+    def _responses_payload_input(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+        formatted: list[dict[str, str]] = []
+        for message in messages:
+            role = str(message.get("role") or "user")
+            content = message.get("content", "")
+            if isinstance(content, list):
+                chunks: list[str] = []
+                for part in content:
+                    if isinstance(part, dict):
+                        txt = part.get("text") or part.get("content") or part.get("value") or ""
+                    else:
+                        txt = str(part)
+                    if txt:
+                        chunks.append(str(txt))
+                text = "\n".join(chunks)
+            else:
+                text = str(content)
+            formatted.append({"role": role, "content": text})
+        return formatted
+
+    def _invoke_responses(
+        self,
+        messages: list[dict[str, Any]],
+        request_timeout: float | None = None,
+        model_override: str | None = None,
+    ) -> str:
+        model = model_override or self.config.model
+        timeout_value = request_timeout or self._request_timeout
+        if self.debug:
+            print(
+                "DEBUG(Driver:OpenAI): responses invoke model={} timeout={}".format(
+                    model, timeout_value
+                )
+            )
+        client = self._client
+        if not hasattr(client, "responses"):
+            raise LLMError("Responses API not available on client")
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=self._responses_payload_input(messages),
+                timeout=timeout_value,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"OpenAI responses error: {exc}") from exc
+        content = self._extract_responses_content(resp)
+        if content:
+            return content
+        raise LLMError("Empty OpenAI responses output")
+
+    def _extract_batch_body(self, raw_text: str, custom_id: str) -> dict[str, Any]:
+        for line in raw_text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("custom_id") != custom_id:
+                continue
+            if payload.get("error"):
+                raise LLMError(f"Batch response error: {payload.get('error')}")
+            response_block = payload.get("response") or {}
+            status_code = response_block.get("status_code")
+            if status_code and status_code >= 400:
+                detail = response_block.get("body") or response_block.get("error")
+                raise LLMError(
+                    f"Batch response error (status {status_code}): {detail}"
+                )
+            body = response_block.get("body")
+            if isinstance(body, dict):
+                return body
+        raise LLMError("Batch output missing expected response")
+
     def _debug_dump_choice(self, choice: Any) -> None:
         if not self.debug:
             return
@@ -373,6 +713,7 @@ class OpenAIDriver(BaseDriver):
         messages: list[dict[str, Any]],
         minimal_ok: bool,
         request_timeout: float | None = None,
+        model_override: str | None = None,
     ) -> str:
         if self._client_async is None:
             return await asyncio.to_thread(
@@ -380,28 +721,24 @@ class OpenAIDriver(BaseDriver):
                 messages,
                 minimal_ok,
                 request_timeout=request_timeout,
+                model_override=model_override,
             )
 
-        max_tokens = getattr(self, "_max_completion_tokens", 512)
-        model = self.config.model
-        is_gpt5 = model.startswith("gpt-5")
-        token_param = "max_completion_tokens" if is_gpt5 else "max_tokens"
-        timeout_value = request_timeout or self._request_timeout
-
+        (
+            base_kwargs,
+            is_gpt5,
+            token_param,
+            max_tokens,
+            timeout_value,
+        ) = self._compose_chat_kwargs(messages, request_timeout, model_override)
         if self.debug:
             print("DEBUG(Driver:OpenAI): invoke_async")
-            print(f"  model={model} token_param={token_param} value={max_tokens}")
+            print(
+                f"  model={base_kwargs.get('model')} token_param={token_param} value={max_tokens}"
+            )
             print(f"  minimal_prompt={self._minimal_prompt}")
             print(f"  timeout={timeout_value:.2f}s")
-
-        base_kwargs: dict[str, Any] = {
-            "messages": messages,
-            "model": model,
-        }
-        if is_gpt5:
-            base_kwargs["temperature"] = 1
-        else:
-            base_kwargs[token_param] = max_tokens
+        model = str(base_kwargs.get("model", self.config.model))
 
         async def _call_with_kwargs_async(k: dict[str, Any]) -> Any:
             call_kwargs = dict(k)
@@ -416,6 +753,13 @@ class OpenAIDriver(BaseDriver):
             resp = await _call_with_kwargs_async(base_kwargs)
         except Exception as e:  # noqa: BLE001 - stubs
             msg = str(e)
+            if "v1/responses" in msg or "only supported in v1/responses" in msg:
+                return await asyncio.to_thread(
+                    self._invoke_responses,
+                    messages,
+                    request_timeout,
+                    model,
+                )
             if (not is_gpt5) and "Unsupported parameter" in msg and "max_tokens" in msg:
                 if self.debug:
                     print(
@@ -536,8 +880,72 @@ class OpenAIDriver(BaseDriver):
         *,
         minimal_ok: bool,
         request_timeout: float | None = None,
+        use_batch: bool = False,
+        batch_model: str | None = None,
+        batch_timeout: float | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> str:
-        return self._invoke(messages, minimal_ok, request_timeout=request_timeout)
+        model_eff = batch_model or self.config.model
+        requires_responses = self._requires_responses(model_eff)
+        if model_eff in self._batch_ineligible:
+            use_batch = False
+            if progress_callback:
+                progress_callback("batch disabled for model (previous failure)")
+        if use_batch and not self._supports_batch():
+            use_batch = False
+            if progress_callback:
+                progress_callback("batch unsupported; using direct call")
+        if requires_responses and use_batch:
+            # Use batch against /v1/responses
+            try:
+                return self._invoke_batch(
+                    messages,
+                    minimal_ok,
+                    request_timeout=request_timeout,
+                    model_override=model_eff,
+                    batch_timeout=batch_timeout,
+                    progress_callback=progress_callback,
+                    force_responses_api=True,
+                )
+            except LLMError as exc:
+                if self._is_batch_model_error(str(exc)):
+                    self._batch_ineligible.add(model_eff)
+                    use_batch = False
+                    if progress_callback:
+                        progress_callback("batch not supported; using responses API")
+                else:
+                    raise
+        if requires_responses:
+            if progress_callback:
+                progress_callback("using responses API")
+            return self._invoke_responses(
+                messages,
+                request_timeout=request_timeout,
+                model_override=model_eff,
+            )
+        if use_batch:
+            try:
+                return self._invoke_batch(
+                    messages,
+                    minimal_ok,
+                    request_timeout=request_timeout,
+                    model_override=model_eff,
+                    batch_timeout=batch_timeout,
+                    progress_callback=progress_callback,
+                )
+            except LLMError as exc:
+                if self._is_batch_model_error(str(exc)):
+                    self._batch_ineligible.add(model_eff)
+                    if progress_callback:
+                        progress_callback("batch not supported; retrying direct")
+                else:
+                    raise
+        return self._invoke(
+            messages,
+            minimal_ok,
+            request_timeout=request_timeout,
+            model_override=model_eff,
+        )
 
     async def invoke_messages_async(
         self,
@@ -545,11 +953,64 @@ class OpenAIDriver(BaseDriver):
         *,
         minimal_ok: bool,
         request_timeout: float | None = None,
+        use_batch: bool = False,
+        batch_model: str | None = None,
+        batch_timeout: float | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> str:
+        model_eff = batch_model or self.config.model
+        requires_responses = self._requires_responses(model_eff)
+        if model_eff in self._batch_ineligible:
+            use_batch = False
+            if progress_callback:
+                progress_callback("batch disabled for model (previous failure)")
+        if requires_responses and use_batch:
+            if not self._supports_batch():
+                use_batch = False
+                if progress_callback:
+                    progress_callback("batch unsupported; using responses API")
+                return await asyncio.to_thread(
+                    self._invoke_responses,
+                    messages,
+                    request_timeout,
+                    model_eff,
+                )
+        if use_batch and not self._supports_batch():
+            use_batch = False
+            if progress_callback:
+                progress_callback("batch unsupported; using direct call")
+        if use_batch:
+            try:
+                return await asyncio.to_thread(
+                    self._invoke_batch,
+                    messages,
+                    minimal_ok,
+                    request_timeout,
+                    model_override=model_eff,
+                    batch_timeout=batch_timeout,
+                    progress_callback=progress_callback,
+                )
+            except LLMError as exc:
+                if self._is_batch_model_error(str(exc)):
+                    self._batch_ineligible.add(model_eff)
+                    if progress_callback:
+                        progress_callback("batch not supported; retrying direct")
+                else:
+                    raise
+        if requires_responses:
+            if progress_callback:
+                progress_callback("using responses API")
+            return await asyncio.to_thread(
+                self._invoke_responses,
+                messages,
+                request_timeout,
+                model_eff,
+            )
         return await self._invoke_async(
             messages,
             minimal_ok,
             request_timeout=request_timeout,
+            model_override=model_eff,
         )
 
     def generate(self, diff: str, context: str, style: str) -> str:  # noqa: D401,E501
