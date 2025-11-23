@@ -221,9 +221,30 @@ export default function WorkflowView({onBack}) {
         emitterRef.current.cancel();
       }
       emitterRef.current = null;
+      if (status !== 'running') {
+        const exitCode = status === 'error' ? 1 : 0;
+        process.exit(exitCode);
+        return;
+      }
       onBack();
     }
   });
+
+  useEffect(() => {
+    if (status === 'running') {
+      return undefined;
+    }
+    const exitCode = status === 'error' ? 1 : 0;
+    const timer = setTimeout(() => {
+      if (emitterRef.current && typeof emitterRef.current.cancel === 'function') {
+        emitterRef.current.cancel();
+      }
+      emitterRef.current = null;
+      process.exit(exitCode);
+    }, 750);
+
+    return () => clearTimeout(timer);
+  }, [status]);
 
   const provider = bootstrap?.config?.provider || 'openai';
   const repo = bootstrap?.repoRoot || '';
@@ -298,7 +319,10 @@ export default function WorkflowView({onBack}) {
       footerElements.unshift(h(Text, {key: 'progress-gap-top'}, ''));
       footerElements.unshift(...stageBlock);
     }
-    footerElements.push(h(Text, {key: 'footer-complete', dimColor: true}, 'Press q to return to the main menu.'));
+    const exitText = status === 'error'
+      ? 'Workflow finished with issues. Returning to your shell...'
+      : 'Workflow complete. Returning to your shell...';
+    footerElements.push(h(Text, {key: 'footer-complete', dimColor: true}, exitText));
   }
 
   const rootProps = {flexDirection: 'column', paddingX: 0, paddingY: 0};
