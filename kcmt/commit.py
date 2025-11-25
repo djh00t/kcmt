@@ -159,7 +159,7 @@ class CommitGenerator:
         progress_callback: Callable[[str], None] | None,
     ) -> str:
         last_error: Exception | None = None
-        max_attempts = 3
+        max_attempts = 1
         spinner: _Spinner | None = None
         progress_cb = progress_callback
         if getattr(client, "uses_batch", False):
@@ -437,7 +437,7 @@ class CommitGenerator:
         # Primary attempt (async)
         async def _attempt_async(client: LLMClient) -> str:
             last_error: Exception | None = None
-            max_attempts = 3
+            max_attempts = 1
             for attempt in range(1, max_attempts + 1):
                 if self.debug:
                     truncated_ctx = (
