@@ -132,6 +132,10 @@ class WorkflowStats:
         with self._lock:
             self.responded += 1
 
+    def set_diffs(self, count: int) -> None:
+        with self._lock:
+            self.diffs_built = max(0, count)
+
     def mark_result(self, success: bool) -> None:
         with self._lock:
             self.processed += 1
@@ -195,6 +199,12 @@ class KlingonCMTWorkflow:
         self._progress_history: list[str] = []
         self._progress_header_shown = False
         self._progress_block_height = 0
+        self._progress_line_width = 0
+        self._file_status: dict[str, dict[str, str]] = {}
+        self._status_line_width = 0
+        self._status_table_height = 0
+        self._status_rows_count = 0
+        self._file_status: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Progress rendering helpers
@@ -523,6 +533,7 @@ class KlingonCMTWorkflow:
         if not file_changes:
             return results
 
+        self._stats.set_diffs(len(file_changes))
         self._stats.set_total(len(file_changes))
 
         prepared_commits = self._prepare_commit_messages(file_changes)
@@ -609,7 +620,7 @@ class KlingonCMTWorkflow:
             else:
                 per_file_timeout = max(per_file_timeout, BATCH_TIMEOUT_MIN_SECONDS)
 
-        timeout_retry_limit = 3
+        timeout_retry_limit = 0
         timeout_attempt_limit = timeout_retry_limit + 1
         timeout_state = {"value": per_file_timeout}
 
@@ -857,7 +868,6 @@ class KlingonCMTWorkflow:
             )
 
         self._progress_event("diff-ready", file=change.file_path)
-        self._stats.mark_diff()
 
         def _llm_progress(status: str) -> None:
             key = status.strip().lower()
@@ -1050,9 +1060,41 @@ class KlingonCMTWorkflow:
             colorize=True,
         )
 
-    def _render_progress_block(self) -> None:
-        """Legacy no-op: previously managed a pinned block."""
-        return
+    def _render_status_table(self) -> None:
+        """Render a compact per-file status table in-place."""
+
+        if not getattr(self, "_show_progress", False):
+            return
+
+        header = "file                           │ diff │ req │ res │ batch          │ commit"
+        sep = "─" * len(header)
+        rows: list[str] = []
+        for path, state in sorted(self._file_status.items()):
+            file_cell = path[-29:].ljust(29)
+            diff_cell = state.get("diff", "-")[:4].ljust(4)
+            req_cell = state.get("req", "-")[:3].ljust(3)
+            res_cell = state.get("res", "-")[:3].ljust(3)
+            batch_cell = state.get("batch", "-")[:12].ljust(12)
+            commit_cell = state.get("commit", "-")
+            rows.append(
+                f"{file_cell} │ {diff_cell} │ {req_cell} │ {res_cell} │ {batch_cell} │ {commit_cell}"
+            )
+
+        lines = [header, sep, *rows]
+        min_height = 4
+        while len(lines) < min_height:
+            lines.append("")
+
+        desired_height = max(len(lines), self._status_table_height)
+        if self._status_table_height:
+            sys.stdout.write(f"\x1b[{self._status_table_height}F")
+        for idx in range(desired_height):
+            line = lines[idx] if idx < len(lines) else ""
+            sys.stdout.write("\r\033[K")
+            sys.stdout.write(line)
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._status_table_height = desired_height
 
     def _print_progress(self, stage: str) -> None:
         if not getattr(self, "_show_progress", False):
@@ -1061,23 +1103,22 @@ class KlingonCMTWorkflow:
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
         self._last_progress_stage = stage
-        if not self._progress_header_shown:
-            header = "stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s"
-            separator = "─" * len(header)
-            print(header)
-            print(separator)
-            self._progress_header_shown = True
-        print(status_line)
+        self._render_status_table()
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
 
         self._progress_snapshots["done"] = self._build_progress_line("done")
-        # Leave a newline after the block and reset state for the next run.
-        print()
+        self._render_status_table()
+
+        # Leave a newline after the line and reset state for the next run.
+        sys.stdout.write("\r\033[K\n")
         self._progress_header_shown = False
         self._progress_block_height = 0
+        self._progress_line_width = 0
+        self._status_rows_count = 0
+        self._file_status.clear()
 
         if self._commit_subjects:
             print()
@@ -1171,10 +1212,32 @@ class KlingonCMTWorkflow:
         message = self._format_progress_message(kind, info)
         if not message:
             return
+        file_path = str(info.get("file") or "")
         if getattr(self, "_show_progress", False):
-            self._clear_progress_line()
+            if file_path:
+                status_entry = self._file_status.setdefault(
+                    file_path,
+                    {"diff": "-", "req": "-", "res": "-", "batch": "-", "commit": "-"},
+                )
+                if kind == "diff-ready":
+                    status_entry["diff"] = "yes"
+                if kind == "request-sent":
+                    status_entry["req"] = "sent"
+                    status_entry["batch"] = "running"
+                if kind == "response":
+                    status_entry["res"] = "ok"
+                    status_entry["batch"] = "done"
+                if kind == "llm" and info.get("detail"):
+                    status_entry["batch"] = str(info.get("detail"))[:12]
+                if kind == "commit-start":
+                    status_entry["commit"] = "running"
+                if kind == "commit-done":
+                    status_entry["commit"] = "ok"
+                if kind == "commit-error":
+                    status_entry["commit"] = "err"
+            self._render_status_table()
+        else:
             print(message)
-            self._refresh_progress_line()
         self._progress_history.append(message)
 
     def _parse_git_diff(self, diff: str) -> List[FileChange]:
