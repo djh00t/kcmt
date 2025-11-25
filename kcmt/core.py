@@ -1056,28 +1056,33 @@ class KlingonCMTWorkflow:
         if not getattr(self, "_show_progress", False):
             return
 
-        header = self._format_progress_row(
-            icon=" ",
-            stage_label="stage",
-            diffs="dif",
-            requests="req",
-            responses="res",
-            prepared="rdy",
-            total="tot",
-            success="ok",
-            failures="err",
-            rate="rate",
-            colorize=False,
-        )
+        header = "  stage   │   Δ │ req │ res │ ready │ ✓ │ ✗ │ rate"
         separator = f"{DIM}{'─' * len(header)}{RESET}"
         ordered_stages = ["prepare", "commit", "done"]
-        block_lines = [
-            self._progress_snapshots.get(stage) or self._build_progress_line(stage)
-            for stage in ordered_stages
-        ]
+        block_lines = []
+        ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+        for stage in ordered_stages:
+            raw = self._progress_snapshots.get(stage) or self._build_progress_line(stage)
+            plain = ansi_re.sub("", raw)
+            tokens = plain.split("│")
+            if len(tokens) >= 7:
+                stage_part = tokens[0].strip()
+                delta_part = tokens[1].replace("Δ", "").strip()
+                req_part = tokens[2].replace("req", "").replace("res", "").strip()
+                res_part = tokens[3].replace("res", "").strip()
+                ready_part = tokens[4].replace("ready", "").strip()
+                ok_part = tokens[5].replace("✓", "").strip()
+                err_part = tokens[6].replace("✗", "").strip()
+                rate_part = tokens[7].replace("commits/s", "").strip() if len(tokens) > 7 else ""
+                formatted = (
+                    f"  {stage_part:<7}│{delta_part:>4} │{req_part:>4} │{res_part:>4} │{ready_part:>7} │{ok_part:>2} │{err_part:>2} │ {rate_part:>6}"
+                )
+                block_lines.append(formatted)
+            else:
+                block_lines.append(plain)
         lines = [header, separator, *block_lines]
         while len(lines) < 6:
-            lines.append("")
+            lines.append("".ljust(len(header)))
 
         desired_height = len(lines) + 1  # spacer line below the block
         if self._progress_block_height:
