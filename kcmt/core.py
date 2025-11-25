@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .commit import CommitGenerator
-from .config import Config, get_active_config
+from .config import BATCH_TIMEOUT_MIN_SECONDS, Config, get_active_config
 from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
 from .git import GitRepo
 from .providers.base import resolve_default_request_timeout
@@ -195,6 +195,58 @@ class KlingonCMTWorkflow:
         self._progress_history: list[str] = []
         self._progress_header_shown = False
         self._progress_block_height = 0
+
+    # ------------------------------------------------------------------
+    # Progress rendering helpers
+    # ------------------------------------------------------------------
+    def _format_progress_row(
+        self,
+        *,
+        icon: str,
+        stage_label: str,
+        diffs: object,
+        requests: object,
+        responses: object,
+        prepared: object,
+        total: object,
+        success: object,
+        failures: object,
+        rate: object,
+        colorize: bool = True,
+    ) -> str:
+        """Return a single progress row with aligned columns."""
+
+        num_width = 3
+        rate_width = 6
+
+        def _num(val: object, width: int = num_width) -> str:
+            try:
+                return f"{int(val):>{width}d}"
+            except Exception:
+                return f"{str(val):>{width}}"
+
+        if isinstance(rate, str):
+            rate_part = f"{rate:>{rate_width}}"
+        else:
+            try:
+                rate_part = f"{float(rate):>{rate_width}.2f}"
+            except Exception:
+                rate_part = f"{str(rate):>{rate_width}}"
+
+        stage_color = CYAN if colorize else ""
+        reset = RESET if colorize else ""
+
+        return (
+            f"{icon} kcmt "
+            f"{stage_color}{stage_label:<7}{reset} │ "
+            f"Δ {_num(diffs)} │ "
+            f"req {_num(requests)} │ "
+            f"res {_num(responses)} │ "
+            f"ready {_num(prepared)}/{_num(total)} │ "
+            f"✓ {_num(success)} │ "
+            f"✗ {_num(failures)} │ "
+            f"{DIM if colorize else ''}{rate_part} c/s{reset}"
+        )
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -552,8 +604,10 @@ class KlingonCMTWorkflow:
                 batch_timeout_val = float(batch_timeout_cfg) if batch_timeout_cfg else None
             except (TypeError, ValueError):
                 batch_timeout_val = None
-            if batch_timeout_val and batch_timeout_val > per_file_timeout:
-                per_file_timeout = min(batch_timeout_val, 600.0)
+            if batch_timeout_val:
+                per_file_timeout = max(per_file_timeout, batch_timeout_val, BATCH_TIMEOUT_MIN_SECONDS)
+            else:
+                per_file_timeout = max(per_file_timeout, BATCH_TIMEOUT_MIN_SECONDS)
 
         timeout_retry_limit = 3
         timeout_attempt_limit = timeout_retry_limit + 1
@@ -986,15 +1040,18 @@ class KlingonCMTWorkflow:
         icon, color = stage_styles.get(stage, ("🔄", CYAN))
         stage_label = stage.upper()
 
-        return (
-            f"{BOLD}{icon} kcmt{RESET} "
-            f"{color}{stage_label:<7}{RESET} │ "
-            f"{DIM}Δ {diffs:>3}{RESET}/{total:>3} │ "
-            f"{CYAN}req {requests:>3}{RESET}/{responses:>3} res │ "
-            f"{GREEN}{prepared:>3}{RESET}/{total:>3} ready │ "
-            f"{GREEN}✓ {success:>3}{RESET} │ "
-            f"{RED}✗ {failures:>3}{RESET} │ "
-            f"{DIM}{rate:5.2f} commits/s{RESET}"
+        return self._format_progress_row(
+            icon=f"{BOLD}{icon}{RESET}",
+            stage_label=stage_label,
+            diffs=diffs,
+            requests=requests,
+            responses=responses,
+            prepared=prepared,
+            total=total,
+            success=success,
+            failures=failures,
+            rate=rate,
+            colorize=True,
         )
 
     def _render_progress_block(self) -> None:
@@ -1003,8 +1060,20 @@ class KlingonCMTWorkflow:
         if not getattr(self, "_show_progress", False):
             return
 
-        header = f"{DIM}stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s{RESET}"
-        separator = f"{DIM}{'─' * len('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')}{RESET}"
+        header = self._format_progress_row(
+            icon=" ",
+            stage_label="stage",
+            diffs="dif",
+            requests="req",
+            responses="res",
+            prepared="rdy",
+            total="tot",
+            success="ok",
+            failures="err",
+            rate="rate",
+            colorize=False,
+        )
+        separator = f"{DIM}{'─' * len(header)}{RESET}"
         ordered_stages = ["prepare", "commit", "done"]
         block_lines = [
             self._progress_snapshots[stage]
