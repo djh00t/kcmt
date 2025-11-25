@@ -1070,7 +1070,7 @@ class KlingonCMTWorkflow:
         sep = "─" * len(header)
         rows: list[str] = []
         for path, state in sorted(self._file_status.items()):
-            file_cell = path[-29:].ljust(29)
+            file_cell = path[:29].ljust(29)
             diff_cell = state.get("diff", "-")[:4].ljust(4)
             req_cell = state.get("req", "-")[:3].ljust(3)
             res_cell = state.get("res", "-")[:3].ljust(3)
@@ -1117,8 +1117,8 @@ class KlingonCMTWorkflow:
         self._progress_header_shown = False
         self._progress_block_height = 0
         self._progress_line_width = 0
-        self._status_rows_count = 0
         self._file_status.clear()
+        self._status_table_height = 0
 
         if self._commit_subjects:
             print()
@@ -1228,7 +1228,11 @@ class KlingonCMTWorkflow:
                     status_entry["res"] = "ok"
                     status_entry["batch"] = "done"
                 if kind == "llm" and info.get("detail"):
-                    status_entry["batch"] = str(info.get("detail"))[:12]
+                    detail = str(info.get("detail"))
+                    if detail.startswith("batch status"):
+                        status_entry["batch"] = detail.replace("batch status:", "").strip()[:12]
+                    else:
+                        status_entry["batch"] = detail[:12]
                 if kind == "commit-start":
                     status_entry["commit"] = "running"
                 if kind == "commit-done":
