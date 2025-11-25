@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .benchmark import BenchExclusion, BenchResult, run_benchmark
 from .config import (
+    BATCH_TIMEOUT_MIN_SECONDS,
     DEFAULT_MODELS,
     PROVIDER_DISPLAY_NAMES,
     Config,
@@ -429,6 +430,7 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
             base.batch_timeout_seconds = int(float(timeout_raw))
         except (TypeError, ValueError):
             pass
+        base.batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, base.batch_timeout_seconds)
     else:
         base.batch_model = None
 
