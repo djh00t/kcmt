@@ -16,7 +16,8 @@ PREFERENCES_FILE_NAME = "preferences.json"
 
 # Default batch timeout (seconds). The Batch API is asynchronous and may take
 # longer than typical completion calls; we cap waits at five minutes by default.
-DEFAULT_BATCH_TIMEOUT_SECONDS = 300
+DEFAULT_BATCH_TIMEOUT_SECONDS = 900
+BATCH_TIMEOUT_MIN_SECONDS = 900
 
 DEFAULT_MODELS = {
     "openai": {
@@ -484,6 +485,7 @@ def load_config(
         batch_timeout_seconds = int(float(batch_timeout_raw))
     except (TypeError, ValueError):
         batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
+    batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, batch_timeout_seconds)
 
     config = Config(
         provider=provider,
