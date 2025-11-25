@@ -18,7 +18,12 @@ from types import TracebackType
 from typing import Any, Callable, Optional, cast
 
 from ._optional import OpenAIModule, import_openai
-from .config import DEFAULT_BATCH_TIMEOUT_SECONDS, Config, get_active_config
+from .config import (
+    BATCH_TIMEOUT_MIN_SECONDS,
+    DEFAULT_BATCH_TIMEOUT_SECONDS,
+    Config,
+    get_active_config,
+)
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
 from .providers.base import BaseDriver, resolve_default_request_timeout
@@ -95,6 +100,7 @@ class LLMClient:
             )
         except (TypeError, ValueError):
             self._batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
+        self._batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, self._batch_timeout_seconds)
         if self.uses_batch and self._batch_model:
             self.model = str(self._batch_model)
             self.config.model = self.model
