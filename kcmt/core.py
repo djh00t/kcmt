@@ -1014,11 +1014,7 @@ class KlingonCMTWorkflow:
     def _refresh_progress_line(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
-        if not self._last_progress_stage:
-            return
-        snapshot = self._progress_snapshots.get(self._last_progress_stage)
-        if snapshot:
-            print(f"\r{snapshot}", end="", flush=True)
+        self._render_progress_block()
 
     def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
@@ -1076,13 +1072,12 @@ class KlingonCMTWorkflow:
         separator = f"{DIM}{'─' * len(header)}{RESET}"
         ordered_stages = ["prepare", "commit", "done"]
         block_lines = [
-            self._progress_snapshots[stage]
+            self._progress_snapshots.get(stage) or self._build_progress_line(stage)
             for stage in ordered_stages
-            if stage in self._progress_snapshots
         ]
-        if not block_lines:
-            return
         lines = [header, separator, *block_lines]
+        while len(lines) < 6:
+            lines.append("")
 
         if self._progress_block_height:
             sys.stdout.write(f"\x1b[{self._progress_block_height}F")
@@ -1151,7 +1146,7 @@ class KlingonCMTWorkflow:
                 print("\n".join(body))
             print("-" * 50)
 
-        self._refresh_progress_line()
+        self._render_progress_block()
 
     def _print_prepare_error(self, file_path: str, error: str) -> None:
         RED = "\033[91m"
@@ -1166,7 +1161,7 @@ class KlingonCMTWorkflow:
             lines = error.splitlines()
             display = lines[0] if lines else error
         print(f"{RED}{display}{RESET}")
-        self._refresh_progress_line()
+        self._render_progress_block()
 
     def _log_prepared_result(self, prepared: PreparedCommit) -> None:
         if prepared.message:
