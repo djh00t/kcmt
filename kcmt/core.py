@@ -1014,7 +1014,7 @@ class KlingonCMTWorkflow:
     def _refresh_progress_line(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
-        self._render_progress_block()
+        return
 
     def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
@@ -1051,49 +1051,8 @@ class KlingonCMTWorkflow:
         )
 
     def _render_progress_block(self) -> None:
-        """Render the progress table pinned to the bottom of the output."""
-
-        if not getattr(self, "_show_progress", False):
-            return
-
-        header = "  stage   │   Δ │ req │ res │ ready │ ✓ │ ✗ │ rate"
-        separator = f"{DIM}{'─' * len(header)}{RESET}"
-        ordered_stages = ["prepare", "commit", "done"]
-        block_lines = []
-        ansi_re = re.compile(r"\x1b\[[0-9;]*m")
-        for stage in ordered_stages:
-            raw = self._progress_snapshots.get(stage) or self._build_progress_line(stage)
-            plain = ansi_re.sub("", raw)
-            tokens = plain.split("│")
-            if len(tokens) >= 7:
-                stage_part = tokens[0].strip()
-                delta_part = tokens[1].replace("Δ", "").strip()
-                req_part = tokens[2].replace("req", "").replace("res", "").strip()
-                res_part = tokens[3].replace("res", "").strip()
-                ready_part = tokens[4].replace("ready", "").strip()
-                ok_part = tokens[5].replace("✓", "").strip()
-                err_part = tokens[6].replace("✗", "").strip()
-                rate_part = tokens[7].replace("commits/s", "").strip() if len(tokens) > 7 else ""
-                formatted = (
-                    f"  {stage_part:<7}│{delta_part:>4} │{req_part:>4} │{res_part:>4} │{ready_part:>7} │{ok_part:>2} │{err_part:>2} │ {rate_part:>6}"
-                )
-                block_lines.append(formatted)
-            else:
-                block_lines.append(plain)
-        lines = [header, separator, *block_lines]
-        while len(lines) < 6:
-            lines.append("".ljust(len(header)))
-
-        desired_height = len(lines) + 1  # spacer line below the block
-        if self._progress_block_height:
-            sys.stdout.write(f"\x1b[{self._progress_block_height}F")
-        for line in lines:
-            sys.stdout.write("\r\033[K")
-            sys.stdout.write(line + "\n")
-        # spacer line to keep block isolated
-        sys.stdout.write("\r\033[K")
-        sys.stdout.flush()
-        self._progress_block_height = desired_height
+        """Legacy no-op: previously managed a pinned block."""
+        return
 
     def _print_progress(self, stage: str) -> None:
         if not getattr(self, "_show_progress", False):
@@ -1102,15 +1061,19 @@ class KlingonCMTWorkflow:
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
         self._last_progress_stage = stage
-        self._render_progress_block()
+        if not self._progress_header_shown:
+            header = "stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s"
+            separator = "─" * len(header)
+            print(header)
+            print(separator)
+            self._progress_header_shown = True
+        print(status_line)
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
 
         self._progress_snapshots["done"] = self._build_progress_line("done")
-        self._render_progress_block()
-
         # Leave a newline after the block and reset state for the next run.
         print()
         self._progress_header_shown = False
