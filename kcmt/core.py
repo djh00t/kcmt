@@ -1079,16 +1079,16 @@ class KlingonCMTWorkflow:
         while len(lines) < 6:
             lines.append("")
 
+        desired_height = len(lines) + 1  # spacer line below the block
         if self._progress_block_height:
             sys.stdout.write(f"\x1b[{self._progress_block_height}F")
-        for idx, line in enumerate(lines):
-            # Clear line then write content; add newline except last line.
+        for line in lines:
             sys.stdout.write("\r\033[K")
-            sys.stdout.write(line)
-            if idx < len(lines) - 1:
-                sys.stdout.write("\n")
+            sys.stdout.write(line + "\n")
+        # spacer line to keep block isolated
+        sys.stdout.write("\r\033[K")
         sys.stdout.flush()
-        self._progress_block_height = len(lines)
+        self._progress_block_height = desired_height
 
     def _print_progress(self, stage: str) -> None:
         if not getattr(self, "_show_progress", False):
