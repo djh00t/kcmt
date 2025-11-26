@@ -11,7 +11,11 @@ from typing import Any, Callable
 import httpx
 
 from kcmt._optional import OpenAIModule, import_openai
-from kcmt.config import Config
+from kcmt.config import (
+    BATCH_TIMEOUT_MIN_SECONDS,
+    DEFAULT_BATCH_TIMEOUT_SECONDS,
+    Config,
+)
 from kcmt.exceptions import LLMError
 from kcmt.providers.base import BaseDriver, resolve_default_request_timeout
 
@@ -347,8 +351,9 @@ class OpenAIDriver(BaseDriver):
         batch_wait = (
             batch_timeout
             or getattr(self.config, "batch_timeout_seconds", None)
-            or 300
+            or DEFAULT_BATCH_TIMEOUT_SECONDS
         )
+        batch_wait = max(batch_wait, BATCH_TIMEOUT_MIN_SECONDS)
         network_timeout = request_timeout or self._request_timeout
         if not hasattr(self._client, "batches"):
             raise LLMError("OpenAI client does not support batch API")
@@ -396,6 +401,8 @@ class OpenAIDriver(BaseDriver):
                     completion_window="24h",
                     timeout=network_timeout,
                 )
+                if progress_callback:
+                    progress_callback("batch status: validating")
                 batch_id = getattr(batch, "id", None)
                 if not batch_id:
                     raise LLMError("Batch id missing from OpenAI response")
@@ -447,6 +454,8 @@ class OpenAIDriver(BaseDriver):
                 output_resp = self._client.files.content(
                     output_file_id, timeout=network_timeout
                 )
+                if progress_callback:
+                    progress_callback("response-received")
                 raw_text = ""
                 if hasattr(output_resp, "text"):
                     raw_text = getattr(output_resp, "text") or ""
