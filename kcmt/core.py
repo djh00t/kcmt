@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import os
 import re
+import shutil
 import threading
 import time
 import sys
@@ -203,6 +204,7 @@ class KlingonCMTWorkflow:
         self._file_status: dict[str, dict[str, str]] = {}
         self._status_line_width = 0
         self._status_table_height = 0
+        self._footer_width = 0
         self._status_rows_count = 0
         self._file_status: dict[str, dict[str, str]] = {}
 
@@ -1060,41 +1062,45 @@ class KlingonCMTWorkflow:
             colorize=True,
         )
 
-    def _render_status_table(self) -> None:
-        """Render a compact per-file status table in-place."""
+    def _render_footer(self) -> None:
+        """Render a single-line footer pinned to the bottom of the screen."""
 
         if not getattr(self, "_show_progress", False):
             return
 
-        header = "file                           │ diff │ req │ res │ batch          │ commit"
-        sep = "─" * len(header)
-        rows: list[str] = []
-        for path, state in sorted(self._file_status.items()):
-            file_cell = path[:29].ljust(29)
-            diff_cell = state.get("diff", "-")[:4].ljust(4)
-            req_cell = state.get("req", "-")[:3].ljust(3)
-            res_cell = state.get("res", "-")[:3].ljust(3)
-            batch_cell = state.get("batch", "-")[:12].ljust(12)
-            commit_cell = state.get("commit", "-")
-            rows.append(
-                f"{file_cell} │ {diff_cell} │ {req_cell} │ {res_cell} │ {batch_cell} │ {commit_cell}"
-            )
+        total = max(self._stats.total_files, len(self._file_status))
+        diff_count = sum(1 for state in self._file_status.values() if state.get("diff") == "yes")
+        committed_count = sum(1 for state in self._file_status.values() if state.get("commit") == "ok")
 
-        lines = [header, sep, *rows]
-        min_height = 4
-        while len(lines) < min_height:
-            lines.append("")
+        def _count(states: set[str]) -> int:
+            return sum(1 for state in self._file_status.values() if state.get("batch") in states)
 
-        desired_height = max(len(lines), self._status_table_height)
-        if self._status_table_height:
-            sys.stdout.write(f"\x1b[{self._status_table_height}F")
-        for idx in range(desired_height):
-            line = lines[idx] if idx < len(lines) else ""
-            sys.stdout.write("\r\033[K")
-            sys.stdout.write(line)
-            sys.stdout.write("\n")
+        validating = _count({"validating", "queued"})
+        in_progress = _count({"running", "in_progress"})
+        finalizing = _count({"finalizing"})
+        completed = _count({"completed", "done"})
+
+        footer = (
+            f"Δ {diff_count}/{total} | "
+            f"batch:validating {validating}/{total} | "
+            f"batch:in-progress {in_progress}/{total} | "
+            f"batch:finalizing {finalizing}/{total} | "
+            f"batch:completed {completed}/{total} | "
+            f"committed {committed_count}/{total}"
+        )
+
+        width = shutil.get_terminal_size(fallback=(120, 30)).columns or 120
+        if len(footer) > width:
+            footer = footer[: max(0, width - 3)] + "..."
+
+        # Save cursor, move to last line, clear it, write footer, restore.
+        sys.stdout.write("\x1b7")  # save cursor
+        sys.stdout.write(f"\x1b[{max(1, shutil.get_terminal_size(fallback=(120, 30)).lines)};1H")
+        sys.stdout.write("\r\033[K")
+        sys.stdout.write(footer)
+        sys.stdout.write("\x1b8")  # restore cursor
         sys.stdout.flush()
-        self._status_table_height = desired_height
+        self._footer_width = max(self._footer_width, len(footer))
 
     def _print_progress(self, stage: str) -> None:
         if not getattr(self, "_show_progress", False):
@@ -1110,7 +1116,7 @@ class KlingonCMTWorkflow:
             return
 
         self._progress_snapshots["done"] = self._build_progress_line("done")
-        self._render_status_table()
+        self._render_footer()
 
         # Leave a newline after the line and reset state for the next run.
         sys.stdout.write("\r\033[K\n")
@@ -1119,6 +1125,7 @@ class KlingonCMTWorkflow:
         self._progress_line_width = 0
         self._file_status.clear()
         self._status_table_height = 0
+        self._footer_width = 0
 
         if self._commit_subjects:
             print()
@@ -1223,14 +1230,25 @@ class KlingonCMTWorkflow:
                     status_entry["diff"] = "yes"
                 if kind == "request-sent":
                     status_entry["req"] = "sent"
-                    status_entry["batch"] = "running"
+                    status_entry["batch"] = "validating"
                 if kind == "response":
                     status_entry["res"] = "ok"
-                    status_entry["batch"] = "done"
+                    status_entry["batch"] = "completed"
                 if kind == "llm" and info.get("detail"):
                     detail = str(info.get("detail"))
                     if detail.startswith("batch status"):
-                        status_entry["batch"] = detail.replace("batch status:", "").strip()[:12]
+                        label = detail.replace("batch status:", "").strip().split()[0]
+                        label = label.lower()
+                        if label in {"validating", "queued"}:
+                            status_entry["batch"] = "validating"
+                        elif label in {"running", "in_progress", "in-progress"}:
+                            status_entry["batch"] = "in_progress"
+                        elif label == "finalizing":
+                            status_entry["batch"] = "finalizing"
+                        elif label == "completed":
+                            status_entry["batch"] = "completed"
+                        else:
+                            status_entry["batch"] = label[:12]
                     else:
                         status_entry["batch"] = detail[:12]
                 if kind == "commit-start":
@@ -1239,7 +1257,7 @@ class KlingonCMTWorkflow:
                     status_entry["commit"] = "ok"
                 if kind == "commit-error":
                     status_entry["commit"] = "err"
-            self._render_status_table()
+            self._render_footer()
         else:
             print(message)
         self._progress_history.append(message)
