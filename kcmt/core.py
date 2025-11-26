@@ -1083,10 +1083,10 @@ class KlingonCMTWorkflow:
 
         footer = (
             f"Δ {diff_count}/{total} | "
-            f"batch:validating {validating}/{total} | "
-            f"batch:in-progress {in_progress}/{total} | "
-            f"batch:finalizing {finalizing}/{total} | "
-            f"batch:completed {completed}/{total} | "
+            f"batch: {validating}/{total} validating, "
+            f"{in_progress}/{total} in-progress, "
+            f"{finalizing}/{total} finalizing, "
+            f"{completed}/{total} completed | "
             f"committed {committed_count}/{total} | "
             f"{elapsed:5.1f}s"
         )
@@ -1111,7 +1111,7 @@ class KlingonCMTWorkflow:
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
         self._last_progress_stage = stage
-        self._render_status_table()
+        self._render_footer()
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
@@ -1164,7 +1164,7 @@ class KlingonCMTWorkflow:
                 print("\n".join(body))
             print("-" * 50)
 
-        self._render_progress_block()
+        self._render_footer()
 
     def _print_prepare_error(self, file_path: str, error: str) -> None:
         RED = "\033[91m"
@@ -1179,7 +1179,7 @@ class KlingonCMTWorkflow:
             lines = error.splitlines()
             display = lines[0] if lines else error
         print(f"{RED}{display}{RESET}")
-        self._render_progress_block()
+        self._render_footer()
 
     def _log_prepared_result(self, prepared: PreparedCommit) -> None:
         if prepared.message:
