@@ -1079,6 +1079,7 @@ class KlingonCMTWorkflow:
         in_progress = _count({"running", "in_progress"})
         finalizing = _count({"finalizing"})
         completed = _count({"completed", "done"})
+        elapsed = max(time.time() - self._stats._start, 0.0)
 
         footer = (
             f"Δ {diff_count}/{total} | "
@@ -1086,7 +1087,8 @@ class KlingonCMTWorkflow:
             f"batch:in-progress {in_progress}/{total} | "
             f"batch:finalizing {finalizing}/{total} | "
             f"batch:completed {completed}/{total} | "
-            f"committed {committed_count}/{total}"
+            f"committed {committed_count}/{total} | "
+            f"{elapsed:5.1f}s"
         )
 
         width = shutil.get_terminal_size(fallback=(120, 30)).columns or 120
