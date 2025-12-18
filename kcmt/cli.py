@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
-import shutil
 from typing import Optional
 
 from . import legacy_cli as _legacy_module
 from .commit import CommitGenerator  # noqa: F401 - re-exported for tests
 from .core import KlingonCMTWorkflow  # noqa: F401 - module level alias for tests
 from .git import GitRepo  # noqa: F401 - re-exported for tests
-
 from .legacy_cli import LegacyCLI
 
 INK_APP_PATH = Path(__file__).resolve().parent / "ui" / "ink" / "index.mjs"
+
+# Timeout in seconds for npm/pnpm/yarn package installation attempts.
+# Can be overridden via KCMT_INK_INSTALL_TIMEOUT environment variable.
+DEFAULT_INK_INSTALL_TIMEOUT_SECONDS = 120.0
 
 
 class CLI:
@@ -29,9 +32,9 @@ class CLI:
     def run(self, args: Optional[list[str]] = None) -> int:
         """Dispatch to the Ink UI when interactive, otherwise fallback."""
 
-        _legacy_module.KlingonCMTWorkflow = KlingonCMTWorkflow
-        _legacy_module.CommitGenerator = CommitGenerator
-        _legacy_module.GitRepo = GitRepo
+        _legacy_module.KlingonCMTWorkflow = KlingonCMTWorkflow  # type: ignore[attr-defined]
+        _legacy_module.CommitGenerator = CommitGenerator  # type: ignore[attr-defined]
+        _legacy_module.GitRepo = GitRepo  # type: ignore[attr-defined]
         effective_args = args if args is not None else sys.argv[1:]
         if self._should_use_ink(effective_args):
             code = self._run_with_ink(effective_args)
@@ -77,6 +80,15 @@ class CLI:
         We only enable the Ink UI when:
         - `node` is available on PATH, and
         - required packages (react, ink) are resolvable from the Ink app dir.
+
+        If Node is available but packages are missing, this method will attempt
+        a one-time automatic installation of dependencies using npm, pnpm, or yarn
+        (whichever is available). This behavior keeps `pip install kcmt` sufficient
+        for Python dependencies while lazily preparing the interactive TUI on first use.
+
+        Users can opt out of automatic installation by setting the environment variable
+        KCMT_AUTO_INSTALL_INK_DEPS=0 (or false/no/off). When disabled or when Node
+        is unavailable, the CLI gracefully falls back to the legacy text-based interface.
 
         This avoids surfacing a noisy Node stack trace when dependencies
         aren't installed, and gracefully falls back to the legacy CLI.
@@ -189,6 +201,17 @@ class CLI:
             )
 
         for cmd in installer_cmds:
+            # Allow timeout override via environment variable for slow networks
+            timeout_env = os.environ.get("KCMT_INK_INSTALL_TIMEOUT")
+            try:
+                timeout = (
+                    float(timeout_env)
+                    if timeout_env
+                    else DEFAULT_INK_INSTALL_TIMEOUT_SECONDS
+                )
+            except ValueError:
+                timeout = DEFAULT_INK_INSTALL_TIMEOUT_SECONDS
+
             try:
                 completed_install = subprocess.run(
                     cmd,
@@ -196,7 +219,7 @@ class CLI:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False,
-                    timeout=120.0,
+                    timeout=timeout,
                 )
             except Exception:
                 continue

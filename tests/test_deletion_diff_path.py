@@ -10,6 +10,10 @@ def test_deletion_diff_path(tmp_path):
     repo = tmp_path / "repo_del"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "tester"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tester@example.com"], cwd=repo, check=True
+    )
     f = repo / "deleteme.txt"
     f.write_text("hello\nworld\n")
     subprocess.run(["git", "add", "deleteme.txt"], cwd=repo, check=True)

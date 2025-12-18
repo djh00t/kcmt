@@ -7,9 +7,9 @@ import inspect
 import os
 import re
 import shutil
+import sys
 import threading
 import time
-import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -206,7 +206,6 @@ class KlingonCMTWorkflow:
         self._status_table_height = 0
         self._footer_width = 0
         self._status_rows_count = 0
-        self._file_status: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Progress rendering helpers
@@ -233,7 +232,7 @@ class KlingonCMTWorkflow:
 
         def _num(val: object, width: int = num_width) -> str:
             try:
-                return f"{int(val):>{width}d}"
+                return f"{int(val):>{width}d}"  # type: ignore[call-overload]
             except Exception:
                 return f"{str(val):>{width}}"
 
@@ -241,7 +240,7 @@ class KlingonCMTWorkflow:
             rate_part = f"{rate:>{rate_width}}"
         else:
             try:
-                rate_part = f"{float(rate):>{rate_width}.2f}"
+                rate_part = f"{float(rate):>{rate_width}.2f}"  # type: ignore[arg-type]
             except Exception:
                 rate_part = f"{str(rate):>{rate_width}}"
 
@@ -614,15 +613,19 @@ class KlingonCMTWorkflow:
         if getattr(self._config, "use_batch", False):
             batch_timeout_cfg = getattr(self._config, "batch_timeout_seconds", None)
             try:
-                batch_timeout_val = float(batch_timeout_cfg) if batch_timeout_cfg else None
+                batch_timeout_val = (
+                    float(batch_timeout_cfg) if batch_timeout_cfg else None
+                )
             except (TypeError, ValueError):
                 batch_timeout_val = None
             if batch_timeout_val:
-                per_file_timeout = max(per_file_timeout, batch_timeout_val, BATCH_TIMEOUT_MIN_SECONDS)
+                per_file_timeout = max(
+                    per_file_timeout, batch_timeout_val, BATCH_TIMEOUT_MIN_SECONDS
+                )
             else:
                 per_file_timeout = max(per_file_timeout, BATCH_TIMEOUT_MIN_SECONDS)
 
-        timeout_retry_limit = 0
+        timeout_retry_limit = self.max_retries
         timeout_attempt_limit = timeout_retry_limit + 1
         timeout_state = {"value": per_file_timeout}
 
@@ -896,11 +899,15 @@ class KlingonCMTWorkflow:
                 sig = inspect.signature(suggest_fn)
             except (TypeError, ValueError):
                 sig = None
-            if request_timeout is not None and sig and "request_timeout" in sig.parameters:
+            if (
+                request_timeout is not None
+                and sig
+                and "request_timeout" in sig.parameters
+            ):
                 call_kwargs["request_timeout"] = request_timeout
             if sig and "progress_callback" in sig.parameters:
                 call_kwargs["progress_callback"] = _llm_progress
-            commit_message = suggest_fn(change.diff_content, **call_kwargs)
+            commit_message = suggest_fn(change.diff_content, **call_kwargs)  # type: ignore[arg-type]
             validated = generator.validate_and_fix_commit_message(commit_message)
             if self.debug:
                 print(
@@ -1035,7 +1042,6 @@ class KlingonCMTWorkflow:
         requests = snapshot.get("requests", 0)
         responses = snapshot.get("responses", 0)
         prepared = snapshot["prepared"]
-        processed = snapshot["processed"]
         success = snapshot["successes"]
         failures = snapshot["failures"]
         rate = snapshot["rate"]
@@ -1069,11 +1075,19 @@ class KlingonCMTWorkflow:
             return
 
         total = max(self._stats.total_files, len(self._file_status))
-        diff_count = sum(1 for state in self._file_status.values() if state.get("diff") == "yes")
-        committed_count = sum(1 for state in self._file_status.values() if state.get("commit") == "ok")
+        diff_count = sum(
+            1 for state in self._file_status.values() if state.get("diff") == "yes"
+        )
+        committed_count = sum(
+            1 for state in self._file_status.values() if state.get("commit") == "ok"
+        )
 
         def _count(states: set[str]) -> int:
-            return sum(1 for state in self._file_status.values() if state.get("batch") in states)
+            return sum(
+                1
+                for state in self._file_status.values()
+                if state.get("batch") in states
+            )
 
         validating = _count({"validating", "queued"})
         in_progress = _count({"running", "in_progress"})
@@ -1097,7 +1111,9 @@ class KlingonCMTWorkflow:
 
         # Save cursor, move to last line, clear it, write footer, restore.
         sys.stdout.write("\x1b7")  # save cursor
-        sys.stdout.write(f"\x1b[{max(1, shutil.get_terminal_size(fallback=(120, 30)).lines)};1H")
+        sys.stdout.write(
+            f"\x1b[{max(1, shutil.get_terminal_size(fallback=(120, 30)).lines)};1H"
+        )
         sys.stdout.write("\r\033[K")
         sys.stdout.write(footer)
         sys.stdout.write("\x1b8")  # restore cursor
@@ -1187,7 +1203,9 @@ class KlingonCMTWorkflow:
         elif prepared.error:
             self._print_prepare_error(prepared.change.file_path, prepared.error)
 
-    def _format_progress_message(self, kind: str, info: dict[str, object]) -> str | None:
+    def _format_progress_message(
+        self, kind: str, info: dict[str, object]
+    ) -> str | None:
         file_path = str(info.get("file") or "")
         detail = str(info.get("detail") or "")
         provider = getattr(self._config, "provider", "")

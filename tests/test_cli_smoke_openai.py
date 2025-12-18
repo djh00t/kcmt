@@ -2,10 +2,10 @@ import subprocess
 from pathlib import Path
 
 from kcmt.config import (
-    config_file_path,
     DEFAULT_MODELS,
     Config,
     clear_active_config,
+    config_file_path,
     load_config,
     load_persisted_config,
     save_config,

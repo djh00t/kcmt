@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from kcmt.config import Config, DEFAULT_MODELS
+from kcmt.config import DEFAULT_MODELS, Config
 from kcmt.providers import openai_driver
 
 
@@ -143,7 +143,7 @@ def test_llm_batch_invocation_uses_driver_batch(monkeypatch):
         git_repo_path=".",
         use_batch=True,
         batch_model="gpt-4.1-mini",
-        batch_timeout_seconds=120,
+        batch_timeout_seconds=1000,  # Must be >= BATCH_TIMEOUT_MIN_SECONDS (900)
     )
     from kcmt import llm as llm_module  # noqa: PLC0415
 
@@ -155,5 +155,5 @@ def test_llm_batch_invocation_uses_driver_batch(monkeypatch):
     assert msg.startswith("feat(")
     assert calls["use_batch"] is True
     assert calls["batch_model"] == "gpt-4.1-mini"
-    assert calls["batch_timeout"] == 120
+    assert calls["batch_timeout"] == 1000
     assert statuses == ["batch status: running"]

@@ -185,7 +185,9 @@ class OpenAIDriver(BaseDriver):
         model_candidate = model_override or self.config.model
         if self._requires_responses(model_candidate):
             return self._invoke_responses(
-                messages, request_timeout=request_timeout, model_override=model_candidate
+                messages,
+                request_timeout=request_timeout,
+                model_override=model_candidate,
             )
         (
             base_kwargs,
@@ -374,7 +376,9 @@ class OpenAIDriver(BaseDriver):
                         if use_responses_api
                         else payload
                     )
-                    url = "/v1/responses" if use_responses_api else "/v1/chat/completions"
+                    url = (
+                        "/v1/responses" if use_responses_api else "/v1/chat/completions"
+                    )
                     handle.write(
                         json.dumps(
                             {
@@ -397,7 +401,9 @@ class OpenAIDriver(BaseDriver):
                 created_file_id = getattr(file_obj, "id", None)
                 batch = self._client.batches.create(
                     input_file_id=file_obj.id,
-                    endpoint="/v1/responses" if use_responses_api else "/v1/chat/completions",
+                    endpoint=(
+                        "/v1/responses" if use_responses_api else "/v1/chat/completions"
+                    ),
                     completion_window="24h",
                     timeout=network_timeout,
                 )
@@ -440,7 +446,9 @@ class OpenAIDriver(BaseDriver):
                     if status in terminal_failures:
                         break
                 if status not in terminal_success:
-                    detail = getattr(batch, "error", None) or getattr(batch, "errors", None)
+                    detail = getattr(batch, "error", None) or getattr(
+                        batch, "errors", None
+                    )
                     raise LLMError(
                         f"Batch exited with status {status or '<unknown>'} ({detail})"
                     )
@@ -524,7 +532,10 @@ class OpenAIDriver(BaseDriver):
                     content = candidate
             except LLMError as err:
                 if self.debug:
-                    print("DEBUG(Driver:OpenAI): batch token-limited retry error " + str(err))
+                    print(
+                        "DEBUG(Driver:OpenAI): batch token-limited retry error "
+                        + str(err)
+                    )
 
         if not content and finish_reason == "length":
             if (not is_gpt5) and minimal_ok and not self._minimal_prompt:
@@ -630,7 +641,9 @@ class OpenAIDriver(BaseDriver):
                 return "".join(fragments).strip()
         return ""
 
-    def _responses_payload_input(self, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    def _responses_payload_input(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, str]]:
         formatted: list[dict[str, str]] = []
         for message in messages:
             role = str(message.get("role") or "user")
@@ -639,7 +652,12 @@ class OpenAIDriver(BaseDriver):
                 chunks: list[str] = []
                 for part in content:
                     if isinstance(part, dict):
-                        txt = part.get("text") or part.get("content") or part.get("value") or ""
+                        txt = (
+                            part.get("text")
+                            or part.get("content")
+                            or part.get("value")
+                            or ""
+                        )
                     else:
                         txt = str(part)
                     if txt:
@@ -696,9 +714,7 @@ class OpenAIDriver(BaseDriver):
             status_code = response_block.get("status_code")
             if status_code and status_code >= 400:
                 detail = response_block.get("body") or response_block.get("error")
-                raise LLMError(
-                    f"Batch response error (status {status_code}): {detail}"
-                )
+                raise LLMError(f"Batch response error (status {status_code}): {detail}")
             body = response_block.get("body")
             if isinstance(body, dict):
                 return body
