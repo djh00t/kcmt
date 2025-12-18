@@ -342,7 +342,7 @@ def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
         preferences = load_preferences(repo_root)
     except Exception:  # pragma: no cover - prefs optional
         preferences = {}
-    catalog = _build_model_catalog(repo_root)
+    # Skip expensive model catalog build for fast startup; Configure view will lazy-load
     response = {
         "repoRoot": str(repo_root),
         "config": _serialise(config),
@@ -350,7 +350,7 @@ def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
         "defaultModels": DEFAULT_MODELS,
         "providerDetection": detection,
         "preferences": preferences,
-        "modelCatalog": catalog,
+        "modelCatalog": {},
         "argv": argv,
     }
     _emit("complete", response)
@@ -693,12 +693,32 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     return 0
 
 
+def _action_list_models(repo_path: str, payload: dict[str, Any]) -> int:
+    """Lazy-load model catalog for specific providers on demand."""
+    repo_root = _resolve_repo_root(repo_path)
+    providers = payload.get("providers")
+    if not providers:
+        providers = list(DEFAULT_MODELS.keys())
+    elif isinstance(providers, str):
+        providers = [providers]
+    
+    catalog: dict[str, list[dict[str, Any]]] = {}
+    for provider in providers:
+        if provider in DEFAULT_MODELS:
+            catalog[provider] = _list_enriched_models(provider, repo_root)
+    
+    response = {"modelCatalog": catalog}
+    _emit("complete", response)
+    return 0
+
+
 _ACTIONS = {
     "bootstrap": _action_bootstrap,
     "save-config": _action_save_config,
     "save-preferences": _action_save_preferences,
     "benchmark": _action_benchmark,
     "workflow": _action_workflow,
+    "list-models": _action_list_models,
 }
 
 
