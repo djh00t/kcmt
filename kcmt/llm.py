@@ -357,7 +357,9 @@ class LLMClient:
             changed_lines = self._count_changed_lines(cleaned_diff)
         except (ValueError, TypeError):  # pragma: no cover - defensive
             changed_lines = 0
-        disable_enrichment = os.environ.get("KCMT_DISABLE_BODY_ENRICHMENT", "").lower() in {
+        disable_enrichment = os.environ.get(
+            "KCMT_DISABLE_BODY_ENRICHMENT", ""
+        ).lower() in {
             "1",
             "true",
             "yes",
