@@ -4,10 +4,6 @@ import Spinner from 'ink-spinner';
 import minimist from 'minimist';
 import gradient from 'gradient-string';
 import {createBackendClient} from './backend-client.mjs';
-import MainMenu from './components/main-menu.mjs';
-import WorkflowView from './components/workflow-view.mjs';
-import BenchmarkView from './components/benchmark-view.mjs';
-import ConfigureView from './components/configure-view.mjs';
 
 export const AppContext = React.createContext({
   backend: null,
@@ -22,6 +18,13 @@ const initialMode = argv.benchmark
   : argv.configure || argv['configure-all']
     ? 'configure'
     : 'workflow';
+
+const VIEW_LOADERS = {
+  menu: () => import('./components/main-menu.mjs'),
+  workflow: () => import('./components/workflow-view.mjs'),
+  benchmark: () => import('./components/benchmark-view.mjs'),
+  configure: () => import('./components/configure-view.mjs'),
+};
 
 const h = React.createElement;
 const gradientBanner = gradient(['#4facfe', '#00f2fe']);
@@ -51,7 +54,10 @@ export default function App() {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
   const [view, setView] = useState(initialMode || 'workflow');
+  const [viewComponent, setViewComponent] = useState(null);
+  const [viewError, setViewError] = useState(null);
   const initialisedRef = useRef(false);
+  const viewCacheRef = useRef(new Map());
 
   const refreshBootstrap = useCallback(async () => {
     setStatus('loading');
@@ -90,12 +96,64 @@ export default function App() {
     }
   }, [status, bootstrap]);
 
+  useEffect(() => {
+    if (status !== 'ready') {
+      return;
+    }
+
+    let cancelled = false;
+    setViewError(null);
+
+    const cached = viewCacheRef.current.get(view);
+    if (cached) {
+      setViewComponent(() => cached);
+      return;
+    }
+
+    setViewComponent(null);
+
+    const loader = VIEW_LOADERS[view];
+    if (!loader) {
+      setViewError(new Error(`Unknown view: ${view}`));
+      return;
+    }
+
+    loader()
+      .then(mod => {
+        const component = mod && mod.default ? mod.default : null;
+        if (!component) {
+          throw new Error(`View module missing default export: ${view}`);
+        }
+        viewCacheRef.current.set(view, component);
+        if (!cancelled) {
+          setViewComponent(() => component);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setViewError(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status, view]);
+
   if (status === 'loading') {
     return h(LoadingScreen, null);
   }
 
   if (status === 'error' || !bootstrap) {
     return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
+  }
+
+  if (viewError) {
+    return h(ErrorScreen, {message: viewError.message || 'Failed to load kcmt UI'});
+  }
+
+  if (!viewComponent) {
+    return h(LoadingScreen, {label: 'Loading UI'});
   }
 
   const contextValue = {
@@ -110,7 +168,7 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(BenchmarkView, {onBack: () => setView('menu')}),
+      h(viewComponent, {onBack: () => setView('menu')}),
     );
   }
 
@@ -118,7 +176,7 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(ConfigureView, {onBack: () => setView('menu'), showAdvanced: Boolean(argv['configure-all'])}),
+      h(viewComponent, {onBack: () => setView('menu'), showAdvanced: Boolean(argv['configure-all'])}),
     );
   }
 
@@ -126,14 +184,14 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(WorkflowView, {onBack: () => setView('menu')}),
+      h(viewComponent, {onBack: () => setView('menu')}),
     );
   }
 
   return h(
     AppContext.Provider,
     {value: contextValue},
-    h(MainMenu, {
+    h(viewComponent, {
       onNavigate: mode => {
         if (mode === 'exit') {
           process.exit(0);
