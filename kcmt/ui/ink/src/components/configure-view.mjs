@@ -114,8 +114,9 @@ export default function ConfigureView({onBack}) {
   );
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
-
-  const providerModels = bootstrap?.modelCatalog || {};
+  const [providerModels, setProviderModels] = useState(bootstrap?.modelCatalog || {});
+  const [loadingModels, setLoadingModels] = useState(false);
+  const loadedProvidersRef = useRef(new Set());
 
   const hasApiKey = useCallback(
     provider => {
@@ -138,6 +139,27 @@ export default function ConfigureView({onBack}) {
       },
     }));
   }, []);
+
+  const ensureModelsLoaded = useCallback(async (provider) => {
+    if (loadedProvidersRef.current.has(provider)) {
+      return;
+    }
+    setLoadingModels(true);
+    try {
+      const result = await backend.listModels([provider]);
+      if (result?.modelCatalog) {
+        setProviderModels(prev => ({
+          ...prev,
+          ...result.modelCatalog,
+        }));
+        loadedProvidersRef.current.add(provider);
+      }
+    } catch (err) {
+      console.error('Failed to load models:', err);
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [backend]);
 
   const applyPrioritySelection = useCallback((slotIndex, provider, model) => {
     setPriorityState(prev => {
@@ -434,6 +456,20 @@ export default function ConfigureView({onBack}) {
   }
 
   if (step === 'provider-model' && activeProvider) {
+    // Lazy-load models for this provider if not already loaded
+    useEffect(() => {
+      ensureModelsLoaded(activeProvider);
+    }, [activeProvider, ensureModelsLoaded]);
+
+    if (loadingModels && !loadedProvidersRef.current.has(activeProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Loading models for ${PROVIDER_LABELS[activeProvider] || activeProvider}...`)),
+        h(Spinner, {type: 'dots'}),
+      );
+    }
+
     const catalogue = Array.isArray(providerModels[activeProvider]) ? providerModels[activeProvider] : [];
     const items = catalogue.map(entry => ({
       label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
@@ -563,6 +599,20 @@ export default function ConfigureView({onBack}) {
   }
 
   if (step === 'priority-model' && typeof activeSlot === 'number' && slotProvider) {
+    // Lazy-load models for this provider if not already loaded
+    useEffect(() => {
+      ensureModelsLoaded(slotProvider);
+    }, [slotProvider, ensureModelsLoaded]);
+
+    if (loadingModels && !loadedProvidersRef.current.has(slotProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Loading models for ${PROVIDER_LABELS[slotProvider] || slotProvider}...`)),
+        h(Spinner, {type: 'dots'}),
+      );
+    }
+
     const catalogue = Array.isArray(providerModels[slotProvider]) ? providerModels[slotProvider] : [];
     const items = catalogue.map(entry => ({
       label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
@@ -698,6 +748,20 @@ export default function ConfigureView({onBack}) {
         h(Text, {dimColor: true}, 'Press Back to continue.'),
       );
     }
+    // Lazy-load models for this provider if not already loaded
+    useEffect(() => {
+      ensureModelsLoaded(activeProvider);
+    }, [activeProvider, ensureModelsLoaded]);
+
+    if (loadingModels && !loadedProvidersRef.current.has(activeProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Loading models for ${PROVIDER_LABELS[activeProvider] || activeProvider}...`)),
+        h(Spinner, {type: 'dots'}),
+      );
+    }
+
     const catalogue = Array.isArray(providerModels[activeProvider]) ? providerModels[activeProvider] : [];
     const items = catalogue.map(entry => ({
       label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
