@@ -18,7 +18,7 @@ class _StubClient:
         request_timeout: float | None = None,
     ) -> str:
         # Deterministic, valid conventional header.
-        return f"test({self.model}): update" 
+        return f"test({self.model}): update"
 
 
 def test_run_benchmark_produces_results(monkeypatch):
