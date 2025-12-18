@@ -67,9 +67,7 @@ class CLI:
         }
         if any(token in legacy_tokens for token in arg_list):
             return False
-        # Fast path: use legacy when no interactive config/configure requested.
-        if "--configure" not in arg_list and "--config" not in arg_list:
-            return False
+        # Prefer Ink by default for interactive TTY sessions.
         if not INK_APP_PATH.exists():
             return False
         return self._ink_runtime_available()
