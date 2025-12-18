@@ -100,7 +100,9 @@ class LLMClient:
             )
         except (TypeError, ValueError):
             self._batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
-        self._batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, self._batch_timeout_seconds)
+        self._batch_timeout_seconds = max(
+            BATCH_TIMEOUT_MIN_SECONDS, self._batch_timeout_seconds
+        )
         if self.uses_batch and self._batch_model:
             self.model = str(self._batch_model)
             self.config.model = self.model

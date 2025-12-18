@@ -7,15 +7,15 @@ import argparse
 import contextlib
 import io
 import json
+import re
 import sys
 import threading
 import time
 from dataclasses import asdict, is_dataclass
-import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .benchmark import BenchExclusion, BenchResult, run_benchmark
+from .benchmark import BenchResult, run_benchmark
 from .config import (
     BATCH_TIMEOUT_MIN_SECONDS,
     DEFAULT_MODELS,
@@ -35,8 +35,8 @@ from .git import find_git_repo_root
 try:  # Optional imports only needed for model enrichment
     from .providers.anthropic_driver import AnthropicDriver
     from .providers.openai_driver import OpenAIDriver
-    from .providers.xai_driver import XAIDriver
     from .providers.pricing import build_enrichment_context, enrich_ids
+    from .providers.xai_driver import XAIDriver
 except Exception:  # pragma: no cover - guard optional deps for packaging
     AnthropicDriver = OpenAIDriver = XAIDriver = None  # type: ignore[assignment]
     build_enrichment_context = enrich_ids = None  # type: ignore[assignment]
@@ -134,9 +134,10 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
         identifier = str(item.get("id") or item.get("model") or "").strip()
         if not identifier:
             continue
-        if item.get("input_price_per_mtok") is None and item.get(
-            "output_price_per_mtok"
-        ) is None:
+        if (
+            item.get("input_price_per_mtok") is None
+            and item.get("output_price_per_mtok") is None
+        ):
             continue
         filtered.append({"id": identifier, **{k: item[k] for k in item if k != "id"}})
     return filtered
@@ -201,7 +202,9 @@ def _build_leaderboards(results: list[BenchResult]) -> dict[str, Any]:
         latency_score = 1.0 - _norm(item.avg_latency_ms, min_lat, max_lat)
         overall_score = 0.4 * quality_score + 0.3 * cost_score + 0.3 * latency_score
         overall_pairs.append((overall_score, item))
-    overall = [entry for _score, entry in sorted(overall_pairs, key=lambda kv: -kv[0])[:10]]
+    overall = [
+        entry for _score, entry in sorted(overall_pairs, key=lambda kv: -kv[0])[:10]
+    ]
 
     return {
         "overall": [_fmt(r) for r in overall],
@@ -214,7 +217,9 @@ def _build_leaderboards(results: list[BenchResult]) -> dict[str, Any]:
 class InkWorkflow(KlingonCMTWorkflow):
     """Workflow subclass that emits structured progress instead of printing."""
 
-    def __init__(self, emitter: Callable[[str, Dict[str, Any]], None], **kwargs: Any) -> None:
+    def __init__(
+        self, emitter: Callable[[str, Dict[str, Any]], None], **kwargs: Any
+    ) -> None:
         super().__init__(show_progress=True, **kwargs)
         self._emitter = emitter
 
@@ -315,10 +320,16 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
     base = load_config(repo_root=repo_root)
 
     def looks_like_url(value: str) -> bool:
-        return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
+        return bool(value) and (
+            "://" in value
+            or value.startswith("http://")
+            or value.startswith("https://")
+        )
 
     def looks_like_env(value: str) -> bool:
-        return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+        return (
+            bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+        )
 
     # Start from existing providers map, ensuring default structure.
     providers_map: dict[str, dict[str, Any]] = {
@@ -339,10 +350,18 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
                 continue
             default_endpoint = DEFAULT_MODELS[prov]["endpoint"]
             default_env = DEFAULT_MODELS[prov]["api_key_env"]
-            endpoint_val = str(raw_entry.get("endpoint", providers_map[prov]["endpoint"]))
-            api_env_val = str(raw_entry.get("api_key_env", providers_map[prov]["api_key_env"]))
+            endpoint_val = str(
+                raw_entry.get("endpoint", providers_map[prov]["endpoint"])
+            )
+            api_env_val = str(
+                raw_entry.get("api_key_env", providers_map[prov]["api_key_env"])
+            )
 
-            if looks_like_url(api_env_val) and looks_like_env(endpoint_val) and not looks_like_url(endpoint_val):
+            if (
+                looks_like_url(api_env_val)
+                and looks_like_env(endpoint_val)
+                and not looks_like_url(endpoint_val)
+            ):
                 api_env_val, endpoint_val = endpoint_val, api_env_val
             if not looks_like_env(api_env_val):
                 api_env_val = default_env
@@ -352,15 +371,31 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
             providers_map[prov]["endpoint"] = endpoint_val
             providers_map[prov]["api_key_env"] = api_env_val
             if raw_entry.get("preferred_model"):
-                providers_map[prov]["preferred_model"] = str(raw_entry["preferred_model"])
+                providers_map[prov]["preferred_model"] = str(
+                    raw_entry["preferred_model"]
+                )
 
     # Top-level provider/model overrides (may be omitted when using priority list)
     provider = str(config_payload.get("provider", base.provider)) or base.provider
     model = str(config_payload.get("model", base.model)) or base.model
-    endpoint_raw = str(config_payload.get("llm_endpoint", providers_map.get(provider, {}).get("endpoint", base.llm_endpoint)))
-    api_env_raw = str(config_payload.get("api_key_env", providers_map.get(provider, {}).get("api_key_env", base.api_key_env)))
+    endpoint_raw = str(
+        config_payload.get(
+            "llm_endpoint",
+            providers_map.get(provider, {}).get("endpoint", base.llm_endpoint),
+        )
+    )
+    api_env_raw = str(
+        config_payload.get(
+            "api_key_env",
+            providers_map.get(provider, {}).get("api_key_env", base.api_key_env),
+        )
+    )
 
-    if looks_like_url(api_env_raw) and looks_like_env(endpoint_raw) and not looks_like_url(endpoint_raw):
+    if (
+        looks_like_url(api_env_raw)
+        and looks_like_env(endpoint_raw)
+        and not looks_like_url(endpoint_raw)
+    ):
         api_env_raw, endpoint_raw = endpoint_raw, api_env_raw
     if provider in DEFAULT_MODELS and not looks_like_env(api_env_raw):
         api_env_raw = DEFAULT_MODELS[provider]["api_key_env"]
@@ -392,7 +427,9 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
         if len(sanitised_priority) >= 5:
             break
     if not sanitised_priority and provider in DEFAULT_MODELS:
-        sanitised_priority.append({"provider": provider, "model": DEFAULT_MODELS[provider]["model"]})
+        sanitised_priority.append(
+            {"provider": provider, "model": DEFAULT_MODELS[provider]["model"]}
+        )
 
     active_provider = sanitised_priority[0]["provider"]
     active_model = sanitised_priority[0]["model"]
@@ -420,17 +457,27 @@ def _action_save_config(repo_path: str, payload: dict[str, Any]) -> int:
     base.git_repo_path = str(repo_root)
     base.providers = providers_map
     base.model_priority = sanitised_priority
-    use_batch_val = bool(config_payload.get("use_batch")) if active_provider == "openai" else False
+    use_batch_val = (
+        bool(config_payload.get("use_batch")) if active_provider == "openai" else False
+    )
     base.use_batch = use_batch_val
     if active_provider == "openai":
-        batch_model_val = config_payload.get("batch_model") or providers_map["openai"].get("preferred_model") or base.model
+        batch_model_val = (
+            config_payload.get("batch_model")
+            or providers_map["openai"].get("preferred_model")
+            or base.model
+        )
         base.batch_model = str(batch_model_val)
-        timeout_raw = config_payload.get("batch_timeout_seconds") or base.batch_timeout_seconds
+        timeout_raw = (
+            config_payload.get("batch_timeout_seconds") or base.batch_timeout_seconds
+        )
         try:
             base.batch_timeout_seconds = int(float(timeout_raw))
         except (TypeError, ValueError):
             pass
-        base.batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, base.batch_timeout_seconds)
+        base.batch_timeout_seconds = max(
+            BATCH_TIMEOUT_MIN_SECONDS, base.batch_timeout_seconds
+        )
     else:
         base.batch_model = None
 
@@ -455,7 +502,9 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     providers = payload.get("providers")
     if not providers:
         providers = list(DEFAULT_MODELS.keys())
-    catalog = {provider: _list_enriched_models(provider, repo_root) for provider in providers}
+    catalog = {
+        provider: _list_enriched_models(provider, repo_root) for provider in providers
+    }
     limit = payload.get("limit")
     if isinstance(limit, str) and limit.isdigit():
         limit = int(limit)

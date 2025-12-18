@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from kcmt.config import Config, DEFAULT_MODELS
+from kcmt.config import DEFAULT_MODELS, Config
 from kcmt.providers import openai_driver
 
 

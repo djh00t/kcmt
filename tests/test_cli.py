@@ -1,8 +1,7 @@
 import json
 
-from kcmt.config import config_file_path, state_dir
-
 import kcmt.cli as cli_module
+from kcmt.config import config_file_path, state_dir
 
 
 def test_cli_help_returns_zero():

@@ -37,7 +37,7 @@ DEFAULT_MODELS = {
     },
     "github": {
         "model": "openai/gpt-4.1-mini",
-        "endpoint": "https://api.github.com",
+        "endpoint": "https://models.github.ai/inference",
         "api_key_env": "GITHUB_TOKEN",
     },
 }
@@ -350,10 +350,14 @@ def load_config(
             or os.environ.get("KLINGON_CMT_LLM_MODEL")
             or DEFAULT_MODELS[provider_override]["model"]
         )
-        priority_list.insert(0, {"provider": provider_override, "model": model_override})
+        priority_list.insert(
+            0, {"provider": provider_override, "model": model_override}
+        )
 
     elif overrides.get("model") or os.environ.get("KLINGON_CMT_LLM_MODEL"):
-        model_override = overrides.get("model") or os.environ.get("KLINGON_CMT_LLM_MODEL")
+        model_override = overrides.get("model") or os.environ.get(
+            "KLINGON_CMT_LLM_MODEL"
+        )
         if priority_list:
             priority_list[0] = {
                 "provider": priority_list[0]["provider"],
@@ -375,7 +379,9 @@ def load_config(
         deduped.append({"provider": prov, "model": model_name})
         if len(deduped) >= 5:
             break
-    priority_list = deduped or [{"provider": "openai", "model": DEFAULT_MODELS["openai"]["model"]}]
+    priority_list = deduped or [
+        {"provider": "openai", "model": DEFAULT_MODELS["openai"]["model"]}
+    ]
 
     provider = priority_list[0]["provider"]
     model = priority_list[0]["model"]
@@ -389,17 +395,25 @@ def load_config(
         model = defaults["model"]
         priority_list[0]["model"] = model
 
-    endpoint_override = overrides.get("endpoint") or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
+    endpoint_override = overrides.get("endpoint") or os.environ.get(
+        "KLINGON_CMT_LLM_ENDPOINT"
+    )
     provider_entry = providers_map.get(provider, {})
-    endpoint = endpoint_override or provider_entry.get("endpoint") or defaults["endpoint"]
+    endpoint = (
+        endpoint_override or provider_entry.get("endpoint") or defaults["endpoint"]
+    )
     provider_entry["endpoint"] = endpoint
 
     api_override = overrides.get("api_key_env")
     if api_override:
         provider_entry["api_key_env"] = api_override
-    api_key_env = provider_entry.get("api_key_env") or _select_env_var_for_provider(provider)
+    api_key_env = provider_entry.get("api_key_env") or _select_env_var_for_provider(
+        provider
+    )
     # Sanity: if persisted value looks like a URL, reset to default env var
-    if isinstance(api_key_env, str) and ("://" in api_key_env or api_key_env.startswith("http")):
+    if isinstance(api_key_env, str) and (
+        "://" in api_key_env or api_key_env.startswith("http")
+    ):
         api_key_env = DEFAULT_MODELS[provider]["api_key_env"]
     provider_entry["api_key_env"] = api_key_env
 
@@ -409,7 +423,11 @@ def load_config(
         prov = pref["provider"]
         first_by_provider.setdefault(prov, pref["model"])
     for prov, entry in providers_map.items():
-        entry["preferred_model"] = first_by_provider.get(prov) or entry.get("preferred_model") or DEFAULT_MODELS[prov]["model"]
+        entry["preferred_model"] = (
+            first_by_provider.get(prov)
+            or entry.get("preferred_model")
+            or DEFAULT_MODELS[prov]["model"]
+        )
 
     git_repo_path_raw = (
         overrides.get("repo_path")

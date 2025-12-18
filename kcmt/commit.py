@@ -6,8 +6,10 @@ import re
 import sys
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any
+from typing import Callable
 from typing import Callable as _Callable
+from typing import Optional
 
 from .config import DEFAULT_MODELS, Config, get_active_config
 from .exceptions import LLMError, ValidationError
@@ -166,8 +168,13 @@ class CommitGenerator:
             spinner = _Spinner("Submitting OpenAI batch…")
             spinner.start()
             if progress_callback:
+
                 def _combo(msg: str) -> None:
-                    label = "Sending…" if msg == "request-sent" else "Waiting…" if msg == "response-received" else msg
+                    label = (
+                        "Sending…"
+                        if msg == "request-sent"
+                        else "Waiting…" if msg == "response-received" else msg
+                    )
                     spinner.update(label)
                     progress_callback(msg)
 

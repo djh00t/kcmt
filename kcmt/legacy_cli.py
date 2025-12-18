@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import re
 import inspect
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
-import shutil
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
@@ -680,7 +680,9 @@ Examples:
         detected = detect_available_providers()
         config = load_config(repo_root=repo_root)
 
-        providers_map: dict[str, dict[str, Any]] = dict(getattr(config, "providers", {}) or {})
+        providers_map: dict[str, dict[str, Any]] = dict(
+            getattr(config, "providers", {}) or {}
+        )
         for prov, meta in DEFAULT_MODELS.items():
             entry = providers_map.get(prov, {}) or {}
             entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
@@ -690,10 +692,17 @@ Examples:
             providers_map[prov] = entry
 
         def looks_like_url(value: str) -> bool:
-            return bool(value) and ("://" in value or value.startswith("http://") or value.startswith("https://"))
+            return bool(value) and (
+                "://" in value
+                or value.startswith("http://")
+                or value.startswith("https://")
+            )
 
         def looks_like_env(value: str) -> bool:
-            return bool(value) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+            return (
+                bool(value)
+                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is not None
+            )
 
         if args.provider and args.provider in providers_map:
             if args.endpoint:
@@ -707,10 +716,16 @@ Examples:
                 entry["api_key_env"] = DEFAULT_MODELS[prov]["api_key_env"]
             self._print_heading(f"{PROVIDER_DISPLAY_NAMES.get(prov, prov)} endpoint")
             endpoint = self._prompt_endpoint(prov, entry["endpoint"])
-            self._print_heading(f"API key env for {PROVIDER_DISPLAY_NAMES.get(prov, prov)}")
+            self._print_heading(
+                f"API key env for {PROVIDER_DISPLAY_NAMES.get(prov, prov)}"
+            )
             env_choice = self._prompt_api_key_env(prov, detected)
 
-            if looks_like_url(env_choice) and looks_like_env(endpoint) and not looks_like_url(endpoint):
+            if (
+                looks_like_url(env_choice)
+                and looks_like_env(endpoint)
+                and not looks_like_url(endpoint)
+            ):
                 env_choice, endpoint = endpoint, env_choice
             if not looks_like_env(env_choice):
                 env_choice = DEFAULT_MODELS[prov]["api_key_env"]
@@ -724,7 +739,8 @@ Examples:
         eligible_providers = [
             prov
             for prov in PROVIDER_ORDER
-            if providers_map[prov]["api_key_env"] and os.environ.get(providers_map[prov]["api_key_env"])
+            if providers_map[prov]["api_key_env"]
+            and os.environ.get(providers_map[prov]["api_key_env"])
         ]
         if os.environ.get("PYTEST_CURRENT_TEST"):
             # Test-friendly ordering that matches test expectations (Anthropic first)
@@ -743,18 +759,30 @@ Examples:
                 slots[idx] = {"provider": pref["provider"], "model": pref["model"]}
 
         if args.provider and args.provider in DEFAULT_MODELS:
-            model_override = args.model or providers_map[args.provider].get("preferred_model") or DEFAULT_MODELS[args.provider]["model"]
+            model_override = (
+                args.model
+                or providers_map[args.provider].get("preferred_model")
+                or DEFAULT_MODELS[args.provider]["model"]
+            )
             slots[0] = {"provider": args.provider, "model": model_override}
 
-        def prompt_priority_provider(slot_index: int, current: Optional[str]) -> Optional[str]:
+        def prompt_priority_provider(
+            slot_index: int, current: Optional[str]
+        ) -> Optional[str]:
             while True:
                 self._print_heading(f"Priority {slot_index + 1} provider")
                 for idx, prov in enumerate(eligible_providers, start=1):
-                    badge = GREEN + "●" + RESET if os.environ.get(providers_map[prov]["api_key_env"]) else YELLOW + "○" + RESET
+                    badge = (
+                        GREEN + "●" + RESET
+                        if os.environ.get(providers_map[prov]["api_key_env"])
+                        else YELLOW + "○" + RESET
+                    )
                     print(f"  {idx}. {badge} {PROVIDER_DISPLAY_NAMES.get(prov, prov)}")
                 if slot_index > 0:
                     print("  0. Done (leave remaining empty)")
-                prompt = f"{MAGENTA}Choice{RESET} [{current or eligible_providers[0]}]: "
+                prompt = (
+                    f"{MAGENTA}Choice{RESET} [{current or eligible_providers[0]}]: "
+                )
                 try:
                     choice = input(prompt).strip()
                 except EOFError:
@@ -792,7 +820,10 @@ Examples:
                     slots[idx] = None
                     break
             default_model = (
-                slots[idx]["model"] if slots[idx] else providers_map[provider_choice].get("preferred_model") or DEFAULT_MODELS[provider_choice]["model"]
+                slots[idx]["model"]
+                if slots[idx]
+                else providers_map[provider_choice].get("preferred_model")
+                or DEFAULT_MODELS[provider_choice]["model"]
             )
             model_choice = self._prompt_model_with_menu(provider_choice, default_model)
             slots[idx] = {"provider": provider_choice, "model": model_choice}
@@ -815,10 +846,12 @@ Examples:
                 break
         if not deduped:
             fallback_provider = eligible_providers[0]
-            deduped.append({
-                "provider": fallback_provider,
-                "model": DEFAULT_MODELS[fallback_provider]["model"],
-            })
+            deduped.append(
+                {
+                    "provider": fallback_provider,
+                    "model": DEFAULT_MODELS[fallback_provider]["model"],
+                }
+            )
 
         batch_enabled_default = bool(getattr(config, "use_batch", False))
         batch_model_default = (
@@ -826,9 +859,10 @@ Examples:
             or providers_map["openai"]["preferred_model"]
             or DEFAULT_MODELS["openai"]["model"]
         )
-        batch_timeout_default = int(
-            getattr(config, "batch_timeout_seconds", 0) or 0
-        ) or DEFAULT_BATCH_TIMEOUT_SECONDS
+        batch_timeout_default = (
+            int(getattr(config, "batch_timeout_seconds", 0) or 0)
+            or DEFAULT_BATCH_TIMEOUT_SECONDS
+        )
 
         batch_enabled = False
         batch_model_choice = batch_model_default
@@ -946,7 +980,9 @@ Examples:
 
         cfg.providers = providers_map
         if cfg.provider in providers_map:
-            cfg.api_key_env = providers_map[cfg.provider].get("api_key_env", cfg.api_key_env)
+            cfg.api_key_env = providers_map[cfg.provider].get(
+                "api_key_env", cfg.api_key_env
+            )
         save_config(cfg, repo_root)
         self._print_success(
             "Saved API key env var mapping for: {}".format(", ".join(selected))
