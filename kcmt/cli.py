@@ -95,6 +95,14 @@ class CLI:
         if shutil.which("node") is None:
             return False
 
+        # Fast path: if node_modules already contains our required deps,
+        # skip the subprocess probe which adds noticeable latency.
+        ink_dir = INK_APP_PATH.parent
+        node_modules = ink_dir / "node_modules"
+        if node_modules.exists():
+            if (node_modules / "react").exists() and (node_modules / "ink").exists():
+                return True
+
         # Quick dependency resolution check using ESM import semantics.
         # Run from the Ink app directory so local node_modules (if present)
         # and its package.json resolution rules are used.
