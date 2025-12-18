@@ -2,7 +2,7 @@ import React, {useContext, useMemo} from 'react';
 import {Box, Text} from 'ink';
 import SelectInput from 'ink-select-input';
 import gradient from 'gradient-string';
-import {AppContext} from '../app.mjs';
+import {AppContext} from '../app-context.mjs';
 const h = React.createElement;
 
 function ellipsize(text, maxLength) {
@@ -47,7 +47,7 @@ const MenuItem = ({isSelected, label, hint}) =>
     hint ? h(Text, {dimColor: true}, hint) : null,
   );
 
-export default function MainMenu({onNavigate}) {
+export default function MainMenu({onNavigate} = {}) {
   const {bootstrap} = useContext(AppContext);
   const columns = process.stdout && process.stdout.columns ? Number(process.stdout.columns) : undefined;
   const widthHint = columns ? Math.max(40, columns - 4) : undefined;
