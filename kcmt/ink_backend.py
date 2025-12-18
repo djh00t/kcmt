@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import sys
 import threading
@@ -27,6 +28,7 @@ from .config import (
     load_preferences,
     save_config,
     save_preferences,
+    state_dir,
 )
 from .core import KlingonCMTWorkflow
 from .exceptions import GitError, KlingonCMTError, LLMError
@@ -94,6 +96,31 @@ def _driver_for_provider(provider: str, cfg: Config) -> Any:
 
 
 def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]]:
+    # Cache provider model catalogs on disk to avoid repeated network calls.
+    try:
+        ttl_seconds = int(os.environ.get("KCMT_MODEL_CACHE_TTL_SECONDS", "86400"))
+    except Exception:
+        ttl_seconds = 86400
+
+    cache_root = state_dir(repo_root) / "model_catalog"
+    cache_path = cache_root / f"{provider}.json"
+    now = time.time()
+    if ttl_seconds > 0:
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached, dict):
+                ts = float(cached.get("ts", 0.0))
+                models = cached.get("models")
+                if (
+                    ts
+                    and (now - ts) < ttl_seconds
+                    and isinstance(models, list)
+                    and all(isinstance(item, dict) for item in models)
+                ):
+                    return [dict(item) for item in models]
+        except Exception:
+            pass
+
     cfg = _load_provider_config(provider, repo_root)
     models: list[dict[str, Any]] = []
     try:
@@ -140,6 +167,16 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
         ):
             continue
         filtered.append({"id": identifier, **{k: item[k] for k in item if k != "id"}})
+
+    if ttl_seconds > 0:
+        try:
+            cache_root.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"ts": now, "models": filtered}, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
     return filtered
 
 
@@ -701,12 +738,12 @@ def _action_list_models(repo_path: str, payload: dict[str, Any]) -> int:
         providers = list(DEFAULT_MODELS.keys())
     elif isinstance(providers, str):
         providers = [providers]
-    
+
     catalog: dict[str, list[dict[str, Any]]] = {}
     for provider in providers:
         if provider in DEFAULT_MODELS:
             catalog[provider] = _list_enriched_models(provider, repo_root)
-    
+
     response = {"modelCatalog": catalog}
     _emit("complete", response)
     return 0
