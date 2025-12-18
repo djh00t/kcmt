@@ -2,6 +2,7 @@ import React, {useCallback, useContext, useEffect, useRef, useState} from 'react
 import {Box, Text, useInput} from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
+import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import {AppContext} from '../app-context.mjs';
 
@@ -77,6 +78,53 @@ function buildInitialPriority(bootstrap) {
   return slots;
 }
 
+function buildInitialBenchmark(bootstrap) {
+  const prefs = bootstrap?.preferences && typeof bootstrap.preferences === 'object'
+    ? bootstrap.preferences
+    : {};
+  const bench = prefs?.benchmark && typeof prefs.benchmark === 'object' ? prefs.benchmark : {};
+  const providersCfg = bench?.providers && typeof bench.providers === 'object' ? bench.providers : {};
+
+  const result = {};
+  for (const prov of PROVIDER_ORDER) {
+    const entry = providersCfg?.[prov];
+    let enabled = true;
+    let models = [];
+
+    if (Array.isArray(entry)) {
+      models = entry.map(v => String(v || '').trim()).filter(Boolean);
+    } else if (entry && typeof entry === 'object') {
+      if (entry.enabled === false) {
+        enabled = false;
+      }
+      if (Array.isArray(entry.models)) {
+        models = entry.models.map(v => String(v || '').trim()).filter(Boolean);
+      }
+    }
+
+    result[prov] = {enabled, models};
+  }
+  return result;
+}
+
+function buildBenchmarkProvidersPayload(benchmarkState) {
+  const providers = {};
+  for (const prov of PROVIDER_ORDER) {
+    const entry = benchmarkState?.[prov] || {};
+    const enabled = entry.enabled !== false;
+    const models = Array.isArray(entry.models)
+      ? entry.models.map(v => String(v || '').trim()).filter(Boolean)
+      : [];
+
+    if (!enabled || models.length) {
+      providers[prov] = {};
+      if (!enabled) providers[prov].enabled = false;
+      if (models.length) providers[prov].models = models;
+    }
+  }
+  return providers;
+}
+
 function Prompt({label, value = '', placeholder = '', onSubmit, onCancel}) {
   const [draft, setDraft] = useState(value);
   useInput((input, key) => {
@@ -118,6 +166,31 @@ export default function ConfigureView({onBack} = {}) {
   const [providerModels, setProviderModels] = useState(bootstrap?.modelCatalog || {});
   const [loadingModels, setLoadingModels] = useState(false);
   const loadedProvidersRef = useRef(new Set());
+  const [benchmarkState, setBenchmarkState] = useState(() => buildInitialBenchmark(bootstrap));
+  const [benchmarkProvider, setBenchmarkProvider] = useState(null);
+  const [benchMultiCursor, setBenchMultiCursor] = useState(0);
+  const [benchMultiSelected, setBenchMultiSelected] = useState([]);
+
+  const ensureModelsLoaded = useCallback(async (provider) => {
+    if (loadedProvidersRef.current.has(provider)) {
+      return;
+    }
+    setLoadingModels(true);
+    try {
+      const result = await backend.listModels([provider]);
+      if (result?.modelCatalog) {
+        setProviderModels(prev => ({
+          ...prev,
+          ...result.modelCatalog,
+        }));
+        loadedProvidersRef.current.add(provider);
+      }
+    } catch (err) {
+      console.error('Failed to load models:', err);
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [backend]);
 
   useEffect(() => {
     if (!bootstrap || hydratedRef.current) {
@@ -133,7 +206,31 @@ export default function ConfigureView({onBack} = {}) {
         '',
     );
     setProviderModels(bootstrap?.modelCatalog || {});
+    setBenchmarkState(buildInitialBenchmark(bootstrap));
   }, [bootstrap]);
+
+  useEffect(() => {
+    if (step !== 'benchmark-provider-multi' || !benchmarkProvider) {
+      return;
+    }
+    const models = Array.isArray(benchmarkState?.[benchmarkProvider]?.models)
+      ? benchmarkState[benchmarkProvider].models
+      : [];
+    setBenchMultiSelected(models);
+    setBenchMultiCursor(0);
+  }, [benchmarkProvider, benchmarkState, step]);
+
+  useEffect(() => {
+    const provider = step === 'provider-model'
+      ? activeProvider
+      : (step === 'benchmark-provider-add' || step === 'benchmark-provider-multi')
+        ? benchmarkProvider
+        : null;
+    if (!provider) {
+      return;
+    }
+    ensureModelsLoaded(provider);
+  }, [activeProvider, benchmarkProvider, ensureModelsLoaded, step]);
 
   const hasApiKey = useCallback(
     provider => {
@@ -156,27 +253,6 @@ export default function ConfigureView({onBack} = {}) {
       },
     }));
   }, []);
-
-  const ensureModelsLoaded = useCallback(async (provider) => {
-    if (loadedProvidersRef.current.has(provider)) {
-      return;
-    }
-    setLoadingModels(true);
-    try {
-      const result = await backend.listModels([provider]);
-      if (result?.modelCatalog) {
-        setProviderModels(prev => ({
-          ...prev,
-          ...result.modelCatalog,
-        }));
-        loadedProvidersRef.current.add(provider);
-      }
-    } catch (err) {
-      console.error('Failed to load models:', err);
-    } finally {
-      setLoadingModels(false);
-    }
-  }, [backend]);
 
   const applyPrioritySelection = useCallback((slotIndex, provider, model) => {
     setPriorityState(prev => {
@@ -283,6 +359,94 @@ export default function ConfigureView({onBack} = {}) {
       });
   }, [backend, batchEnabled, batchModel, bootstrap, inferPriority, onBack, priorityState, providersState, refreshBootstrap]);
 
+  const applyBenchmarkUpdate = useCallback((provider, updates) => {
+    setBenchmarkState(prev => ({
+      ...prev,
+      [provider]: {
+        ...prev[provider],
+        ...updates,
+      },
+    }));
+  }, []);
+
+  const addBenchmarkModel = useCallback((provider, modelId) => {
+    const cleaned = String(modelId || '').trim();
+    if (!cleaned) return;
+    setBenchmarkState(prev => {
+      const current = prev?.[provider]?.models || [];
+      if (current.includes(cleaned)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [provider]: {
+          ...(prev[provider] || {enabled: true, models: []}),
+          models: [...current, cleaned],
+        },
+      };
+    });
+  }, []);
+
+  const removeBenchmarkModel = useCallback((provider, modelId) => {
+    const cleaned = String(modelId || '').trim();
+    if (!cleaned) return;
+    setBenchmarkState(prev => {
+      const current = Array.isArray(prev?.[provider]?.models) ? prev[provider].models : [];
+      const nextModels = current.filter(entry => entry !== cleaned);
+      return {
+        ...prev,
+        [provider]: {
+          ...(prev[provider] || {enabled: true, models: []}),
+          models: nextModels,
+        },
+      };
+    });
+  }, []);
+
+  const clearBenchmarkModels = useCallback((provider) => {
+    applyBenchmarkUpdate(provider, {models: []});
+  }, [applyBenchmarkUpdate]);
+
+  const handleSaveBenchmark = useCallback(() => {
+    if (savingRef.current) {
+      return;
+    }
+    const basePrefs = bootstrap?.preferences && typeof bootstrap.preferences === 'object'
+      ? bootstrap.preferences
+      : {};
+    const providersPayload = buildBenchmarkProvidersPayload(benchmarkState);
+
+    const nextPrefs = {...basePrefs};
+    if (Object.keys(providersPayload).length) {
+      const bench = nextPrefs.benchmark && typeof nextPrefs.benchmark === 'object' ? nextPrefs.benchmark : {};
+      nextPrefs.benchmark = {...bench, providers: providersPayload};
+    } else if (nextPrefs.benchmark && typeof nextPrefs.benchmark === 'object') {
+      const bench = {...nextPrefs.benchmark};
+      delete bench.providers;
+      if (Object.keys(bench).length) {
+        nextPrefs.benchmark = bench;
+      } else {
+        delete nextPrefs.benchmark;
+      }
+    }
+
+    savingRef.current = true;
+    setSaving(true);
+    Promise.resolve(backend.savePreferences(nextPrefs))
+      .then(() => refreshBootstrap())
+      .then(() => {
+        savingRef.current = false;
+        setSaving(false);
+        setBenchmarkProvider(null);
+        setStep('providers');
+      })
+      .catch(error => {
+        console.error(error);
+        savingRef.current = false;
+        setSaving(false);
+      });
+  }, [backend, benchmarkState, bootstrap, refreshBootstrap]);
+
   useInput((input, key) => {
     if (savingRef.current) {
       return;
@@ -299,6 +463,25 @@ export default function ConfigureView({onBack} = {}) {
       if (step === 'provider-menu') {
         setActiveProvider(null);
         setStep('providers');
+        return;
+      }
+      if (step === 'benchmark') {
+        setBenchmarkProvider(null);
+        setStep('providers');
+        return;
+      }
+      if (step === 'benchmark-provider') {
+        setBenchmarkProvider(null);
+        setStep('benchmark');
+        return;
+      }
+      if (
+        step === 'benchmark-provider-add' ||
+        step === 'benchmark-provider-add-manual' ||
+        step === 'benchmark-provider-remove' ||
+        step === 'benchmark-provider-multi'
+      ) {
+        setStep('benchmark-provider');
         return;
       }
       if (
@@ -327,6 +510,51 @@ export default function ConfigureView({onBack} = {}) {
     if (step === 'summary' && key.return) {
       handleSave();
     }
+
+    if (step === 'benchmark-provider-multi') {
+      const catalogue = Array.isArray(providerModels?.[benchmarkProvider])
+        ? providerModels[benchmarkProvider]
+        : [];
+
+      const ids = catalogue
+        .map(entry => String(entry?.id || '').trim())
+        .filter(Boolean);
+
+      const cursorMax = Math.max(0, ids.length - 1);
+      if (key.upArrow || String(input || '').toLowerCase() === 'k') {
+        setBenchMultiCursor(prev => Math.max(0, prev - 1));
+      }
+      if (key.downArrow || String(input || '').toLowerCase() === 'j') {
+        setBenchMultiCursor(prev => Math.min(cursorMax, prev + 1));
+      }
+
+      if (key.return) {
+        const selected = new Set(
+          Array.isArray(benchMultiSelected) ? benchMultiSelected : [],
+        );
+        const ordered = [];
+        for (const modelId of ids) {
+          if (selected.has(modelId)) ordered.push(modelId);
+        }
+        for (const modelId of selected) {
+          if (!ordered.includes(modelId)) ordered.push(modelId);
+        }
+        applyBenchmarkUpdate(benchmarkProvider, {models: ordered});
+        setStep('benchmark-provider');
+      }
+
+      if (input === ' ') {
+        const currentId = ids[benchMultiCursor];
+        if (!currentId) return;
+        setBenchMultiSelected(prev => {
+          const current = Array.isArray(prev) ? prev : [];
+          if (current.includes(currentId)) {
+            return current.filter(item => item !== currentId);
+          }
+          return [...current, currentId];
+        });
+      }
+    }
   });
 
   if (saving) {
@@ -346,6 +574,7 @@ export default function ConfigureView({onBack} = {}) {
           value: prov,
         };
       }),
+      {label: '🧪 Benchmark settings', value: '__benchmark__'},
       {label: '📊 Set model priority', value: '__priority__'},
       {label: '✅ Review & Save', value: '__summary__'},
       {label: '↩️  Cancel', value: '__cancel__'},
@@ -358,6 +587,10 @@ export default function ConfigureView({onBack} = {}) {
       h(SelectInput, {
         items,
         onSelect: item => {
+          if (item.value === '__benchmark__') {
+            setStep('benchmark');
+            return;
+          }
           if (item.value === '__priority__') {
             setStep('priority');
             return;
@@ -372,6 +605,247 @@ export default function ConfigureView({onBack} = {}) {
           }
           setActiveProvider(item.value);
           setStep('provider-menu');
+        },
+      }),
+    );
+  }
+
+  if (step === 'benchmark') {
+    const items = [
+      ...PROVIDER_ORDER.map(prov => {
+        const entry = benchmarkState?.[prov] || {enabled: true, models: []};
+        const enabled = entry.enabled !== false;
+        const models = Array.isArray(entry.models) ? entry.models : [];
+        const modelLabel = models.length ? `${models.length} selected` : 'all models';
+        return {
+          label: `${enabled ? '🟢' : '🚫'} ${PROVIDER_LABELS[prov] || prov} • ${modelLabel}`,
+          value: prov,
+        };
+      }),
+      {label: '✅ Save benchmark settings', value: '__save__'},
+      {label: '↩️  Back', value: '__back__'},
+    ];
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold('Benchmark settings')),
+      h(Text, {dimColor: true}, 'Enable/disable providers and optionally select models to benchmark.'),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__save__') {
+            handleSaveBenchmark();
+            return;
+          }
+          if (item.value === '__back__') {
+            setBenchmarkProvider(null);
+            setStep('providers');
+            return;
+          }
+          setBenchmarkProvider(item.value);
+          setStep('benchmark-provider');
+        },
+      }),
+    );
+  }
+
+  if (step === 'benchmark-provider' && benchmarkProvider) {
+    const entry = benchmarkState?.[benchmarkProvider] || {enabled: true, models: []};
+    const enabled = entry.enabled !== false;
+    const models = Array.isArray(entry.models) ? entry.models : [];
+
+    const items = [
+      {label: `${enabled ? '✅ Enabled' : '🚫 Disabled'} (toggle)`, value: 'toggle-enabled'},
+      {label: '🧠 Select models (multi)…', value: 'multi'},
+      {label: '➕ Add model from list…', value: 'add'},
+      {label: '✏️  Manual model entry…', value: 'add-manual'},
+    ];
+
+    if (models.length) {
+      items.push({label: `➖ Remove model (${models.length} selected)…`, value: 'remove'});
+      items.push({label: '🧹 Use all models (clear selection)', value: 'clear'});
+    }
+
+    items.push({label: '✅ Save benchmark settings', value: '__save__'});
+    items.push({label: '↩️  Back', value: '__back__'});
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Benchmark: ${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider}`)),
+      h(Text, {dimColor: true}, models.length ? `Selected models: ${models.join(', ')}` : 'Selected models: all'),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setBenchmarkProvider(null);
+            setStep('benchmark');
+            return;
+          }
+          if (item.value === '__save__') {
+            handleSaveBenchmark();
+            return;
+          }
+          if (item.value === 'toggle-enabled') {
+            applyBenchmarkUpdate(benchmarkProvider, {enabled: !enabled});
+            return;
+          }
+          if (item.value === 'multi') {
+            setStep('benchmark-provider-multi');
+            return;
+          }
+          if (item.value === 'add') {
+            setStep('benchmark-provider-add');
+            return;
+          }
+          if (item.value === 'add-manual') {
+            setStep('benchmark-provider-add-manual');
+            return;
+          }
+          if (item.value === 'remove') {
+            setStep('benchmark-provider-remove');
+            return;
+          }
+          if (item.value === 'clear') {
+            clearBenchmarkModels(benchmarkProvider);
+          }
+        },
+      }),
+    );
+  }
+
+  if (step === 'benchmark-provider-multi' && benchmarkProvider) {
+    if (loadingModels && !loadedProvidersRef.current.has(benchmarkProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Loading models for ${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider}...`)),
+        h(Spinner, {type: 'dots'}),
+      );
+    }
+
+    const catalogue = Array.isArray(providerModels?.[benchmarkProvider])
+      ? providerModels[benchmarkProvider]
+      : [];
+
+    const rows = catalogue.map(entry => ({
+      id: String(entry?.id || '').trim(),
+      quality: entry?.quality ? String(entry.quality) : '',
+    })).filter(item => item.id);
+
+    if (!rows.length) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Select models (${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider})`)),
+        h(Text, {dimColor: true}, 'No models available for selection.'),
+        h(Text, {dimColor: true}, 'Press Esc to go back.'),
+      );
+    }
+
+    const cursor = Math.max(0, Math.min(benchMultiCursor, rows.length - 1));
+    const selected = new Set(Array.isArray(benchMultiSelected) ? benchMultiSelected : []);
+
+    const WINDOW = 14;
+    const start = Math.max(0, Math.min(cursor - Math.floor(WINDOW / 2), Math.max(0, rows.length - WINDOW)));
+    const end = Math.min(rows.length, start + WINDOW);
+    const visible = rows.slice(start, end);
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Select models (${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider})`)),
+      h(Text, {dimColor: true}, 'Use j/k or arrows • Space toggles • Enter confirms • Esc backs out.'),
+      h(
+        Box,
+        {flexDirection: 'column'},
+        ...visible.map((item, idx) => {
+          const absoluteIdx = start + idx;
+          const isCursor = absoluteIdx === cursor;
+          const checked = selected.has(item.id);
+          const prefix = isCursor ? chalk.cyan('❯') : ' ';
+          const box = checked ? chalk.green('[x]') : '[ ]';
+          const quality = item.quality ? chalk.dim(` (${item.quality})`) : '';
+          return h(
+            Text,
+            {key: `bench-multi-${absoluteIdx}`, wrap: 'truncate'},
+            `${prefix} ${box} ${item.id}${quality}`,
+          );
+        }),
+      ),
+      h(Text, {dimColor: true, wrap: 'truncate'}, `Selected: ${selected.size ? Array.from(selected).join(', ') : 'all models (none explicitly selected)'}`),
+    );
+  }
+
+  if (step === 'benchmark-provider-add' && benchmarkProvider) {
+    if (loadingModels && !loadedProvidersRef.current.has(benchmarkProvider)) {
+      return h(
+        Box,
+        {flexDirection: 'column', gap: 1},
+        h(Text, null, chalk.bold(`Loading models for ${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider}...`)),
+        h(Spinner, {type: 'dots'}),
+      );
+    }
+
+    const catalogue = Array.isArray(providerModels[benchmarkProvider]) ? providerModels[benchmarkProvider] : [];
+    const items = catalogue.map(entry => ({
+      label: `${entry.id} ${entry.quality ? `(${entry.quality})` : ''}`.trim(),
+      value: entry.id,
+    }));
+    items.push({label: '↩️  Back', value: '__back__'});
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Add benchmark model (${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider})`)),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setStep('benchmark-provider');
+            return;
+          }
+          addBenchmarkModel(benchmarkProvider, item.value);
+          setStep('benchmark-provider');
+        },
+      }),
+    );
+  }
+
+  if (step === 'benchmark-provider-add-manual' && benchmarkProvider) {
+    return h(Prompt, {
+      label: `Manual benchmark model entry (${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider})`,
+      onSubmit: value => {
+        addBenchmarkModel(benchmarkProvider, value);
+        setStep('benchmark-provider');
+      },
+      onCancel: () => {
+        setStep('benchmark-provider');
+      },
+    });
+  }
+
+  if (step === 'benchmark-provider-remove' && benchmarkProvider) {
+    const models = Array.isArray(benchmarkState?.[benchmarkProvider]?.models)
+      ? benchmarkState[benchmarkProvider].models
+      : [];
+    const items = models.map(model => ({label: model, value: model}));
+    items.push({label: '↩️  Back', value: '__back__'});
+
+    return h(
+      Box,
+      {flexDirection: 'column', gap: 1},
+      h(Text, null, chalk.bold(`Remove benchmark model (${PROVIDER_LABELS[benchmarkProvider] || benchmarkProvider})`)),
+      h(SelectInput, {
+        items,
+        onSelect: item => {
+          if (item.value === '__back__') {
+            setStep('benchmark-provider');
+            return;
+          }
+          removeBenchmarkModel(benchmarkProvider, item.value);
+          setStep('benchmark-provider');
         },
       }),
     );
@@ -473,11 +947,6 @@ export default function ConfigureView({onBack} = {}) {
   }
 
   if (step === 'provider-model' && activeProvider) {
-    // Lazy-load models for this provider if not already loaded
-    useEffect(() => {
-      ensureModelsLoaded(activeProvider);
-    }, [activeProvider, ensureModelsLoaded]);
-
     if (loadingModels && !loadedProvidersRef.current.has(activeProvider)) {
       return h(
         Box,
