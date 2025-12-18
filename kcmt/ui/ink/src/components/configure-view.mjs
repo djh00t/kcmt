@@ -1,9 +1,9 @@
-import React, {useCallback, useContext, useRef, useState} from 'react';
+import React, {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {Box, Text, useInput} from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import chalk from 'chalk';
-import {AppContext} from '../app.mjs';
+import {AppContext} from '../app-context.mjs';
 
 const h = React.createElement;
 
@@ -97,8 +97,9 @@ function Prompt({label, value = '', placeholder = '', onSubmit, onCancel}) {
   );
 }
 
-export default function ConfigureView({onBack}) {
+export default function ConfigureView({onBack} = {}) {
   const {bootstrap, backend, refreshBootstrap} = useContext(AppContext);
+  const hydratedRef = useRef(Boolean(bootstrap));
   const [providersState, setProvidersState] = useState(() => buildInitialProviders(bootstrap));
   const [priorityState, setPriorityState] = useState(() => buildInitialPriority(bootstrap));
   const [step, setStep] = useState('providers');
@@ -117,6 +118,22 @@ export default function ConfigureView({onBack}) {
   const [providerModels, setProviderModels] = useState(bootstrap?.modelCatalog || {});
   const [loadingModels, setLoadingModels] = useState(false);
   const loadedProvidersRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!bootstrap || hydratedRef.current) {
+      return;
+    }
+    hydratedRef.current = true;
+    setProvidersState(buildInitialProviders(bootstrap));
+    setPriorityState(buildInitialPriority(bootstrap));
+    setBatchEnabled(Boolean(bootstrap?.config?.use_batch));
+    setBatchModel(
+      bootstrap?.config?.batch_model ||
+        buildInitialProviders(bootstrap).openai?.preferred_model ||
+        '',
+    );
+    setProviderModels(bootstrap?.modelCatalog || {});
+  }, [bootstrap]);
 
   const hasApiKey = useCallback(
     provider => {
