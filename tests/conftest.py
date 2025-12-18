@@ -10,6 +10,7 @@ def reset_config(monkeypatch, tmp_path):
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setenv("KCMT_CONFIG_HOME", str(tmp_path / ".kcmt"))
 
     # Ensure no persisted config interferes
     sys.modules.pop("kcmt.config", None)

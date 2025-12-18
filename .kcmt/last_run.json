@@ -1,72 +1,69 @@
 {
   "schema_version": 1,
-  "timestamp": "2025-10-14T10:25:35Z",
+  "timestamp": "2025-10-26T01:18:55Z",
   "repo_path": "/Users/djh/work/src/github.com_local/djh00t/kcmt",
-  "provider": "openai",
-  "model": "gpt-5-mini-2025-08-07",
-  "endpoint": "https://api.openai.com/v1",
+  "provider": "xai",
+  "model": "grok-code-fast-1",
+  "endpoint": "https://api.x.ai/v1",
   "max_retries": 3,
   "file_limit": null,
   "compact": false,
-  "duration_seconds": 12.453936,
-  "rate_commits_per_sec": 0.328886,
+  "duration_seconds": 7.628113,
+  "rate_commits_per_sec": 0.406448,
   "counts": {
-    "files_total": 4,
-    "prepared_total": 4,
-    "processed_total": 4,
+    "files_total": 3,
+    "prepared_total": 3,
+    "processed_total": 3,
     "prepared_failures": 0,
-    "commit_success": 0,
-    "commit_failure": 4,
+    "commit_success": 3,
+    "commit_failure": 0,
     "deletions_total": 0,
     "deletions_success": 0,
     "deletions_failure": 0,
-    "overall_success": 0,
-    "overall_failure": 4,
+    "overall_success": 3,
+    "overall_failure": 0,
     "errors": 0
   },
-  "pushed": null,
-  "summary": "No commits were made. Committed 0 file change(s)",
+  "pushed": true,
+  "summary": "Successfully completed 3 commits. Committed 3 file change(s)",
   "errors": [],
   "commits": [
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/config.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "9526331",
+      "message": "chore(kcmt): update execution stats in last run log\n\nUpdated timestamp, duration_seconds, rate_commits_per_sec, commit_hash,\nmessage, elapsed, and rate in the JSON log to reflect the latest kcmt\nexecution. This ensures accurate performance tracking and metadata for\ndebugging purposes.",
+      "error": null,
+      "file_path": ".kcmt/last_run.json"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .kcmt/last_run.json: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "6424f3e",
+      "message": "feat(cli): Add auto-installation of Ink UI dependencies\n\nModify the dependency check method to attempt one-time auto-installation\nof Node.js modules for Ink UI when Node is present but dependencies are\nmissing. This simplifies setup by making `pip install` sufficient for\nPython dependencies while lazily preparing the TUI. Respects opt-out via\nKCMT_AUTO_INSTALL_INK_DEPS=0/false and skips installation during tests.\nSupports npm, pnpm, and yarn with fallback commands for peer dependency\nissues. Re-probes after successful installation to confirm readiness.",
+      "error": null,
+      "file_path": "kcmt/cli.py"
     },
     {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for kcmt/core.py: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
-    },
-    {
-      "success": false,
-      "commit_hash": null,
-      "message": null,
-      "error": "Failed to generate valid commit message for .github/copilot-instructions.md: LLM unavailable or invalid output after 3 attempts; commit aborted",
-      "file_path": null
+      "success": true,
+      "commit_hash": "7ee0de4",
+      "message": "chore(deps): downgrade ink-select-input to v5.0.0",
+      "error": null,
+      "file_path": "kcmt/ui/ink/package.json"
     }
   ],
   "deletions": [],
-  "subjects": [],
+  "subjects": [
+    "chore(kcmt): update execution stats in last run log",
+    "feat(cli): Add auto-installation of Ink UI dependencies",
+    "chore(deps): downgrade ink-select-input to v5.0.0"
+  ],
   "stats": {
-    "total_files": 4,
-    "prepared": 4,
-    "processed": 4,
-    "successes": 0,
-    "failures": 4,
-    "elapsed": 12.162265,
-    "rate": 0.328886
+    "total_files": 3,
+    "prepared": 3,
+    "processed": 3,
+    "successes": 3,
+    "failures": 0,
+    "elapsed": 7.381012,
+    "rate": 0.406448
   },
-  "auto_push_state": ""
+  "auto_push_state": "pushed"
 }

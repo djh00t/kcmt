@@ -55,18 +55,18 @@ Run `kcmt --configure` inside a repository to launch a colourful wizard that:
 
 - Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
 - Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
-- Persists the selection to `.kcmt/config.json` (commit it if you want teammates to share defaults).
+- Persists the selection to `~/.config/kcmt/config.json` (global, per-user).
 
 Per-provider settings
 
-kcmt maintains a per-provider settings map in `.kcmt/config.json`. Each supported provider has:
+kcmt maintains a per-provider settings map in `~/.config/kcmt/config.json`. Each supported provider has:
 
 - `name`: friendly display name
 - `endpoint`: base URL for API calls
 - `api_key_env`: environment variable that holds your API key/token (kcmt stores the variable name, not the secret)
 - `preferred_model`: your saved default model for that provider
 
-Example (`.kcmt/config.json` excerpt):
+Example (`~/.config/kcmt/config.json` excerpt):
 
 ```json
 {
@@ -114,6 +114,12 @@ Configure API keys for multiple providers
 - `kcmt --configure-all` lets you pick which providers to configure and select which environment variable holds each API key. This updates both the legacy `provider_env_overrides` and the new `providers[prov].api_key_env` entries.
 - `kcmt --verify-keys` prints a concise table of providers, the env var in use, whether it’s set, and any detected alternatives in your environment.
 
+OpenAI batch mode
+
+- Enable with `--batch` (or via the configure menu) to route commit message generation through the OpenAI Batch API.
+- Pick the batch model interactively; defaults to your OpenAI preferred model. Override on the CLI with `--batch-model`.
+- kcmt shows a spinner while the batch job runs and polls for up to 5 minutes by default (tunable via `--batch-timeout` or `KCMT_BATCH_TIMEOUT`).
+
 ### Provider defaults
 
 | Provider  | Default model             | Default endpoint                         |
@@ -136,7 +142,7 @@ Additional environment tweaks remain available:
 - `KLINGON_CMT_LLM_ENDPOINT`
 - `KLINGON_CMT_GIT_REPO_PATH`
 - `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
-- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `.kcmt/config.json`
+- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `~/.config/kcmt/config.json`
   (useful when CI supplies secrets that differ from the persisted repo defaults)
 Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
 fallback subject after repeated LLM failures. This path has been removed;
@@ -185,12 +191,12 @@ Options:
 - `--benchmark-json` – also emit machine-readable JSON
 - `--benchmark-csv` – also emit CSV rows
 
-Snapshots are saved under `.kcmt/benchmarks/benchmark-<timestamp>.json` for later comparison.
+Snapshots are saved under `~/.config/kcmt/repos/<repo-id>/benchmarks/benchmark-<timestamp>.json` for later comparison.
 
 ## Quick start (CLI)
 
 ```shell
-kcmt --configure              # guided setup -> .kcmt/config.json
+kcmt --configure              # guided setup -> ~/.config/kcmt/config.json
 kcmt                          # per-file atomic commits with live stats
 kcmt --workers 8              # explicitly set parallel LLM preparations
 kcmt --oneshot --verbose      # single best-effort commit
@@ -296,7 +302,7 @@ Configuration
 - kcmt.config.Config
   - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push, providers (per-provider map), provider_env_overrides (legacy mapping)
 - kcmt.config.load_config(overrides=None)
-  - Merge repo `.kcmt/config.json`, environment, and optional overrides.
+  - Merge global `~/.config/kcmt/config.json`, environment, and optional overrides.
 - kcmt.config.save_config(config, repo_root=None)
 - kcmt.config.get_active_config() / set_active_config()
 

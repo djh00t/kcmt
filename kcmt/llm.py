@@ -15,10 +15,15 @@ from __future__ import annotations
 import os
 import re
 from types import TracebackType
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 from ._optional import OpenAIModule, import_openai
-from .config import Config, get_active_config
+from .config import (
+    BATCH_TIMEOUT_MIN_SECONDS,
+    DEFAULT_BATCH_TIMEOUT_SECONDS,
+    Config,
+    get_active_config,
+)
 from .exceptions import LLMError
 from .providers.anthropic_driver import AnthropicDriver
 from .providers.base import BaseDriver, resolve_default_request_timeout
@@ -39,9 +44,17 @@ class OpenAI:  # noqa: D401
             client = _openai.OpenAI(*args, **kwargs)
             self._client = client
             self.chat = client.chat
+            # Expose additional namespaces used by newer APIs
+            self.responses = getattr(client, "responses", None)
+            self.batches = getattr(client, "batches", None)
+            self.files = getattr(client, "files", None)
         else:
             # Minimal placeholder; tests will monkeypatch this symbol
-            self.chat = type("_Chat", (), {"completions": object()})()
+            dummy_chat = type("_Chat", (), {"completions": object()})()
+            self.chat = dummy_chat
+            self.responses = None
+            self.batches = None
+            self.files = None
 
 
 class AsyncOpenAI:  # noqa: D401
@@ -55,6 +68,8 @@ class AsyncOpenAI:  # noqa: D401
             self._client = client_factory(*args, **kwargs)
             self.chat = self._client.chat
             self.responses = getattr(self._client, "responses", None)
+            self.batches = getattr(self._client, "batches", None)
+            self.files = getattr(self._client, "files", None)
         else:
             raise RuntimeError("openai package not available")
 
@@ -72,6 +87,25 @@ class LLMClient:
         self.config = config or get_active_config()
         self.provider = self.config.provider
         self.model = self.config.model
+        self.uses_batch = bool(
+            self.provider == "openai" and getattr(self.config, "use_batch", False)
+        )
+        self._batch_model = getattr(self.config, "batch_model", None)
+        timeout_candidate = getattr(self.config, "batch_timeout_seconds", None)
+        try:
+            self._batch_timeout_seconds = (
+                int(float(timeout_candidate))
+                if timeout_candidate is not None
+                else DEFAULT_BATCH_TIMEOUT_SECONDS
+            )
+        except (TypeError, ValueError):
+            self._batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
+        self._batch_timeout_seconds = max(
+            BATCH_TIMEOUT_MIN_SECONDS, self._batch_timeout_seconds
+        )
+        if self.uses_batch and self._batch_model:
+            self.model = str(self._batch_model)
+            self.config.model = self.model
         self.api_key = self.config.resolve_api_key()
 
         if not self.api_key:
@@ -137,9 +171,14 @@ class LLMClient:
         context: str = "",
         style: str = "conventional",
         request_timeout: float | None = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
-        raw_message = self._call_provider(prompt, request_timeout=request_timeout)
+        raw_message = self._call_provider(
+            prompt,
+            request_timeout=request_timeout,
+            progress_callback=progress_callback,
+        )
         try:
             return self._postprocess_message(raw_message, cleaned_diff, context)
         except LLMError as e:
@@ -202,10 +241,13 @@ class LLMClient:
         context: str = "",
         style: str = "conventional",
         request_timeout: float | None = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         cleaned_diff, prompt = self._prepare_prompt(diff, context, style)
         raw_message = await self._call_provider_async(
-            prompt, request_timeout=request_timeout
+            prompt,
+            request_timeout=request_timeout,
+            progress_callback=progress_callback,
         )
         try:
             return self._postprocess_message(raw_message, cleaned_diff, context)
@@ -315,7 +357,11 @@ class LLMClient:
             changed_lines = self._count_changed_lines(cleaned_diff)
         except (ValueError, TypeError):  # pragma: no cover - defensive
             changed_lines = 0
-        if changed_lines >= 10 and "\n" not in sanitized.strip():
+        if (
+            changed_lines >= 10
+            and "\n" not in sanitized.strip()
+            and not self.uses_batch
+        ):
             if self.debug:
                 print(
                     "DEBUG: enrichment.trigger changed_lines={}".format(changed_lines)
@@ -396,24 +442,43 @@ class LLMClient:
         except Exception:
             pass
 
-    def _call_provider(self, prompt: str, request_timeout: float | None = None) -> str:
+    def _call_provider(
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> str:
         if self._mode == "openai":
-            if request_timeout is None:
+            call_kwargs: dict[str, object] = {}
+            if request_timeout is not None:
+                call_kwargs["request_timeout"] = request_timeout
+            if progress_callback is not None:
+                call_kwargs["progress_callback"] = progress_callback
+            try:
+                return self._call_openai(prompt, **call_kwargs)  # type: ignore[arg-type]
+            except TypeError:
+                # Backward compatibility for test stubs without new kwargs
                 return self._call_openai(prompt)
-            return self._call_openai(prompt, request_timeout=request_timeout)
         if request_timeout is None:
             return self._call_anthropic(prompt)
         return self._call_anthropic(prompt, request_timeout=request_timeout)
 
     async def _call_provider_async(
-        self, prompt: str, request_timeout: float | None = None
+        self,
+        prompt: str,
+        request_timeout: float | None = None,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         if self._mode == "openai":
-            if request_timeout is None:
+            call_kwargs: dict[str, object] = {}
+            if request_timeout is not None:
+                call_kwargs["request_timeout"] = request_timeout
+            if progress_callback is not None:
+                call_kwargs["progress_callback"] = progress_callback
+            try:
+                return await self._call_openai_async(prompt, **call_kwargs)  # type: ignore[arg-type]
+            except TypeError:
                 return await self._call_openai_async(prompt)
-            return await self._call_openai_async(
-                prompt, request_timeout=request_timeout
-            )
         if request_timeout is None:
             return await self._call_anthropic_async(prompt)
         return await self._call_anthropic_async(prompt, request_timeout=request_timeout)
@@ -427,6 +492,7 @@ class LLMClient:
         request_timeout: float | None = None,
         *,
         force_simple: bool = False,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         """Delegate OpenAI-like provider call to the driver.
 
@@ -452,6 +518,10 @@ class LLMClient:
                 messages=messages,
                 minimal_ok=minimal_allowed,
                 request_timeout=request_timeout,
+                use_batch=self.uses_batch,
+                batch_model=self.model if self.uses_batch else None,
+                batch_timeout=self._batch_timeout_seconds,
+                progress_callback=progress_callback,
             )
         except LLMError as e:
             msg = str(e)
@@ -469,6 +539,10 @@ class LLMClient:
                     messages=messages,
                     minimal_ok=False,
                     request_timeout=request_timeout,
+                    use_batch=self.uses_batch,
+                    batch_model=self.model if self.uses_batch else None,
+                    batch_timeout=self._batch_timeout_seconds,
+                    progress_callback=progress_callback,
                 )
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
@@ -481,6 +555,10 @@ class LLMClient:
                     messages=simple_messages,
                     minimal_ok=False,
                     request_timeout=request_timeout,
+                    use_batch=self.uses_batch,
+                    batch_model=self.model if self.uses_batch else None,
+                    batch_timeout=self._batch_timeout_seconds,
+                    progress_callback=progress_callback,
                 )
             else:
                 raise
@@ -499,6 +577,7 @@ class LLMClient:
         request_timeout: float | None = None,
         *,
         force_simple: bool = False,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> str:
         if os.environ.get("KCMT_TEST_DISABLE_OPENAI"):
             return "feat(test): stubbed commit message"
@@ -516,6 +595,10 @@ class LLMClient:
                 messages=messages,
                 minimal_ok=minimal_allowed,
                 request_timeout=request_timeout,
+                use_batch=self.uses_batch,
+                batch_model=self.model if self.uses_batch else None,
+                batch_timeout=self._batch_timeout_seconds,
+                progress_callback=progress_callback,
             )
         except LLMError as e:
             msg = str(e)
@@ -532,6 +615,10 @@ class LLMClient:
                     messages=messages,
                     minimal_ok=False,
                     request_timeout=request_timeout,
+                    use_batch=self.uses_batch,
+                    batch_model=self.model if self.uses_batch else None,
+                    batch_timeout=self._batch_timeout_seconds,
+                    progress_callback=progress_callback,
                 )
             elif "RETRY_SIMPLE_PROMPT" in msg and self.model.startswith("gpt-5"):
                 if self.debug:
@@ -544,6 +631,10 @@ class LLMClient:
                     messages=simple_messages,
                     minimal_ok=False,
                     request_timeout=request_timeout,
+                    use_batch=self.uses_batch,
+                    batch_model=self.model if self.uses_batch else None,
+                    batch_timeout=self._batch_timeout_seconds,
+                    progress_callback=progress_callback,
                 )
             else:
                 raise

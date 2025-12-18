@@ -52,7 +52,7 @@ Run `kcmt --configure` inside a repository to launch a colourful wizard that:
 
 - Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
 - Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
-- Persists the selection to `.kcmt/config.json` (commit it if you want teammates to share defaults).
+- Persists the selection to `~/.config/kcmt/config.json` (global, per-user).
 
 ### Provider defaults
 
@@ -76,7 +76,7 @@ Additional environment tweaks remain available:
 - `KLINGON_CMT_LLM_ENDPOINT`
 - `KLINGON_CMT_GIT_REPO_PATH`
 - `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
-- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `.kcmt/config.json`
+- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `~/.config/kcmt/config.json`
   (useful when CI supplies secrets that differ from the persisted repo defaults)
 Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
 fallback subject after repeated LLM failures. This path has been removed;
@@ -95,7 +95,7 @@ Additional LLM behaviour environment variables:
 ## Quick start (CLI)
 
 ```
-kcmt --configure              # guided setup -> .kcmt/config.json
+kcmt --configure              # guided setup -> ~/.config/kcmt/config.json
 kcmt                          # per-file atomic commits with live stats
 kcmt --oneshot --verbose      # single best-effort commit
 kcmt --file README.md         # commit a specific file
@@ -192,7 +192,7 @@ Configuration
 - kcmt.config.Config
   - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push
 - kcmt.config.load_config(overrides=None)
-  - Merge repo `.kcmt/config.json`, environment, and optional overrides.
+  - Merge global `~/.config/kcmt/config.json`, environment, and optional overrides.
 - kcmt.config.save_config(config, repo_root=None)
 - kcmt.config.get_active_config() / set_active_config()
 

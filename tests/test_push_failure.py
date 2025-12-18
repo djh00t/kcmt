@@ -8,6 +8,8 @@ from kcmt.core import KlingonCMTWorkflow
 def test_push_failure_recorded(tmp_path, monkeypatch):
     os.chdir(tmp_path)
     os.system("git init -q")
+    os.system("git config user.name tester")
+    os.system("git config user.email tester@example.com")
     (tmp_path / "file.txt").write_text("hello")
     os.system("git add file.txt")
     os.system('git commit -m "chore(core): init" -q')

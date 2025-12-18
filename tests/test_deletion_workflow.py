@@ -7,6 +7,8 @@ from kcmt.core import KlingonCMTWorkflow
 def test_deletion_only_commit(tmp_path, monkeypatch):
     os.chdir(tmp_path)
     os.system("git init -q")
+    os.system("git config user.name tester")
+    os.system("git config user.email tester@example.com")
     (tmp_path / "delete_me.txt").write_text("bye")
     os.system("git add delete_me.txt")
     os.system('git commit -m "chore(core): init" -q')

@@ -4,6 +4,9 @@ import types
 
 import pytest
 
+from kcmt.config import DEFAULT_MODELS, Config
+from kcmt.providers import openai_driver
+
 
 class _FakeCompletionMsg:
     def __init__(self, content):
@@ -106,3 +109,51 @@ def test_generate_commit_message_backend_error_raises(monkeypatch):
     long_diff = "added line one\nremoved line two\nchanged line three"
     with pytest.raises(llm_module.LLMError):
         client.generate_commit_message(long_diff)
+
+
+def test_llm_batch_invocation_uses_driver_batch(monkeypatch):
+    calls: dict[str, object] = {}
+
+    def fake_invoke(
+        self,
+        messages,
+        *,
+        minimal_ok,
+        request_timeout=None,
+        use_batch=False,
+        batch_model=None,
+        batch_timeout=None,
+        progress_callback=None,
+    ):
+        _ = (messages, minimal_ok, request_timeout)
+        calls["use_batch"] = use_batch
+        calls["batch_model"] = batch_model
+        calls["batch_timeout"] = batch_timeout
+        if progress_callback:
+            progress_callback("batch status: running")
+        return "feat(core): batched commit"
+
+    monkeypatch.setattr(openai_driver.OpenAIDriver, "invoke_messages", fake_invoke)
+
+    config = Config(
+        provider="openai",
+        model="gpt-4.1-mini",
+        llm_endpoint=DEFAULT_MODELS["openai"]["endpoint"],
+        api_key_env=DEFAULT_MODELS["openai"]["api_key_env"],
+        git_repo_path=".",
+        use_batch=True,
+        batch_model="gpt-4.1-mini",
+        batch_timeout_seconds=1000,  # Must be >= BATCH_TIMEOUT_MIN_SECONDS (900)
+    )
+    from kcmt import llm as llm_module  # noqa: PLC0415
+
+    client = llm_module.LLMClient(config=config)
+    statuses: list[str] = []
+    msg = client.generate_commit_message(
+        "diff --git a b\n@@\n+code", "ctx", progress_callback=statuses.append
+    )
+    assert msg.startswith("feat(")
+    assert calls["use_batch"] is True
+    assert calls["batch_model"] == "gpt-4.1-mini"
+    assert calls["batch_timeout"] == 1000
+    assert statuses == ["batch status: running"]

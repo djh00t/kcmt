@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass, field
+import re
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-CONFIG_DIR_NAME = ".kcmt"
+CONFIG_DIR_NAME = "kcmt"
 CONFIG_FILE_NAME = "config.json"
 PREFERENCES_FILE_NAME = "preferences.json"
+
+# Default batch timeout (seconds). The Batch API is asynchronous and may take
+# longer than typical completion calls; we cap waits at five minutes by default.
+DEFAULT_BATCH_TIMEOUT_SECONDS = 900
+BATCH_TIMEOUT_MIN_SECONDS = 900
 
 DEFAULT_MODELS = {
     "openai": {
@@ -20,7 +27,7 @@ DEFAULT_MODELS = {
     },
     "anthropic": {
         "model": "claude-3-5-haiku-latest",
-        "endpoint": "https://api.anthropic.com",
+        "endpoint": "https://api.anthropic.com/v1",
         "api_key_env": "ANTHROPIC_API_KEY",
     },
     "xai": {
@@ -59,20 +66,9 @@ class Config:
     model: str
     llm_endpoint: str
     api_key_env: str
-    # Optional secondary provider to allow future fallback/experimentation.
-    # Not currently used by the workflow, but persisted for future use and
-    # exposed via the configuration wizard.
-    secondary_provider: str | None = None
-    secondary_model: str | None = None
-    secondary_llm_endpoint: str | None = None
-    secondary_api_key_env: str | None = None
     git_repo_path: str = "."
     max_commit_length: int = 72
     auto_push: bool = True
-    # Optional per-provider API key env var mapping to aid tooling like
-    # benchmarking and future multi-provider flows. Keys are provider ids
-    # (e.g. "openai", "anthropic", "xai").
-    provider_env_overrides: dict[str, str] = field(default_factory=dict)
     # Per-provider settings persisted in the config file.
     # Example shape:
     #   {
@@ -80,6 +76,12 @@ class Config:
     #     "anthropic": {...},
     #   }
     providers: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Ordered list (priority ascending) of preferred provider/model pairs.
+    model_priority: list[dict[str, str]] = field(default_factory=list)
+    # Optional OpenAI batch settings
+    use_batch: bool = False
+    batch_model: Optional[str] = None
+    batch_timeout_seconds: int = DEFAULT_BATCH_TIMEOUT_SECONDS
 
     def resolve_api_key(self) -> Optional[str]:
         """Return the API key from the configured environment variable."""
@@ -93,14 +95,59 @@ class Config:
 _CONFIG_STATE: Dict[str, Optional[Config]] = {"active": None}
 
 
+def _safe_load_json(path: Path) -> Optional[Any]:
+    """Load JSON from ``path`` tolerating encoding issues.
+
+    Falls back to replacement decoding when utf-8 decoding fails so a single
+    bad byte does not crash the CLI.
+    """
+
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        pass
+    except json.JSONDecodeError:
+        return None
+
+    try:
+        return json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return None
+
+
 def _ensure_path(path_like: Optional[Path]) -> Path:
     if path_like is None:
         return Path.cwd().resolve(strict=False)
     return Path(path_like).expanduser().resolve(strict=False)
 
 
-def _config_dir(repo_root: Optional[Path] = None) -> Path:
-    return _ensure_path(repo_root) / CONFIG_DIR_NAME
+def _config_home() -> Path:
+    """Return the base config directory independent of repo root."""
+    env_home = os.environ.get("KCMT_CONFIG_HOME")
+    if env_home:
+        return Path(env_home).expanduser().resolve(strict=False)
+    xdg_home = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".config"
+    return (base / CONFIG_DIR_NAME).resolve(strict=False)
+
+
+def _repo_namespace(repo_root: Optional[Path]) -> str:
+    """Stable namespace for per-repo cached artifacts (benchmarks/snapshots)."""
+    root = _ensure_path(repo_root)
+    digest = hashlib.sha256(str(root).encode("utf-8", "ignore")).hexdigest()[:8]
+    tail = root.name or "repo"
+    safe_tail = re.sub(r"[^a-zA-Z0-9_.-]", "-", tail) or "repo"
+    return f"{safe_tail}-{digest}"
+
+
+def _config_dir(_repo_root: Optional[Path] = None) -> Path:
+    # Config is global; repo_root is ignored for location but retained in API.
+    return _config_home()
 
 
 def _config_file(repo_root: Optional[Path] = None) -> Path:
@@ -111,8 +158,29 @@ def _preferences_file(repo_root: Optional[Path] = None) -> Path:
     return _config_dir(repo_root) / PREFERENCES_FILE_NAME
 
 
+def config_dir(repo_root: Optional[Path] = None) -> Path:
+    """Expose the config directory path (global)."""
+    return _config_dir(repo_root)
+
+
+def config_file_path(repo_root: Optional[Path] = None) -> Path:
+    """Expose the config.json path (global)."""
+    return _config_file(repo_root)
+
+
+def preferences_file_path(repo_root: Optional[Path] = None) -> Path:
+    """Expose the preferences.json path (global)."""
+    return _preferences_file(repo_root)
+
+
+def state_dir(repo_root: Optional[Path] = None) -> Path:
+    """Directory for repo-scoped cached artifacts (benchmarks, snapshots)."""
+    base = _config_home() / "repos" / _repo_namespace(repo_root)
+    return base.resolve(strict=False)
+
+
 def save_config(config: Config, repo_root: Optional[Path] = None) -> None:
-    """Persist configuration JSON within the repository."""
+    """Persist configuration JSON to the global config directory."""
     cfg_path = _config_file(repo_root)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     data = config.to_dict()
@@ -137,15 +205,32 @@ def load_persisted_config(
     cfg_path = _config_file(repo_root)
     if not cfg_path.exists():
         return None
-    data = json.loads(cfg_path.read_text())
+    data = _safe_load_json(cfg_path)
+    if not isinstance(data, dict):
+        return None
     data.pop("allow_fallback", None)
     if "auto_push" not in data:  # backward compat; now default is True
         data["auto_push"] = True
+    legacy_overrides = data.pop("provider_env_overrides", {}) or {}
+    if legacy_overrides:
+        providers_block = data.setdefault("providers", {})
+        if isinstance(providers_block, dict):
+            for prov, env_name in legacy_overrides.items():
+                entry = providers_block.setdefault(prov, {})
+                entry.setdefault("api_key_env", env_name)
     # Backward compat: ensure providers map exists in persisted data
     if "providers" not in data or not isinstance(data.get("providers"), dict):
         data["providers"] = {}
-    resolved_root = _ensure_path(repo_root) if repo_root else cfg_path.parent.parent
-    resolved_root = _ensure_path(resolved_root)
+    for legacy_key in [
+        "secondary_provider",
+        "secondary_model",
+        "secondary_llm_endpoint",
+        "secondary_api_key_env",
+    ]:
+        data.pop(legacy_key, None)
+    if "model_priority" in data and not isinstance(data["model_priority"], list):
+        data.pop("model_priority", None)
+    resolved_root = _ensure_path(repo_root) if repo_root else Path.cwd()
     git_path = data.get("git_repo_path")
     if git_path:
         candidate = Path(git_path).expanduser()
@@ -156,7 +241,9 @@ def load_persisted_config(
         data["git_repo_path"] = str(candidate)
     else:
         data["git_repo_path"] = str(resolved_root)
-    return Config(**data)
+    allowed_keys = {f.name for f in fields(Config)}
+    filtered = {key: value for key, value in data.items() if key in allowed_keys}
+    return Config(**filtered)
 
 
 def load_preferences(repo_root: Optional[Path] = None) -> Dict[str, Any]:
@@ -165,10 +252,7 @@ def load_preferences(repo_root: Optional[Path] = None) -> Dict[str, Any]:
     pref_path = _preferences_file(repo_root)
     if not pref_path.exists():
         return {}
-    try:
-        data = json.loads(pref_path.read_text())
-    except json.JSONDecodeError:
-        return {}
+    data = _safe_load_json(pref_path)
     if isinstance(data, dict):
         return data
     return {}
@@ -218,125 +302,132 @@ def load_config(
     persisted = load_persisted_config(repo_root)
     detected = detect_available_providers()
 
-    # Allow lightweight environment overrides without touching the persisted config.
-    provider_from_env = os.environ.get("KCMT_PROVIDER")
-    provider_override = overrides.get("provider") or provider_from_env
-    if persisted and not provider_override:
-        provider = persisted.provider
-    else:
-        provider = provider_override or _auto_select_provider(detected)
-    if provider not in DEFAULT_MODELS:
-        provider = "openai"
-
-    defaults = DEFAULT_MODELS[provider]
-
     # Build or upgrade the per-provider settings map. Persisted configs
     # might not have this yet, so we synthesise sensible defaults.
     providers_map: dict[str, dict[str, Any]] = {}
     if persisted and isinstance(getattr(persisted, "providers", {}), dict):
-        # Shallow copy to avoid mutating the persisted object
-        providers_map = dict(getattr(persisted, "providers", {}) or {})
-    # Ensure all known providers are present with defaults
+        providers_map = {
+            prov: dict(entry or {}) for prov, entry in persisted.providers.items()
+        }
     for prov, meta in DEFAULT_MODELS.items():
         entry = providers_map.get(prov, {}) or {}
-        if not entry.get("name"):
-            entry["name"] = PROVIDER_DISPLAY_NAMES.get(prov, prov)
-        if not entry.get("endpoint"):
-            # If the previously persisted (legacy) top-level endpoint was for
-            # this provider, carry it over; otherwise use provider default.
-            if (
-                persisted
-                and getattr(persisted, "provider", None) == prov
-                and getattr(persisted, "llm_endpoint", None)
-            ):
-                entry["endpoint"] = persisted.llm_endpoint
-            else:
-                entry["endpoint"] = meta["endpoint"]
-        # Prefer any existing override for env var, fall back to defaults
-        # or provider_env_overrides mapping (legacy field)
-        if not entry.get("api_key_env"):
-            legacy_map = (
-                getattr(persisted, "provider_env_overrides", {}) if persisted else {}
-            ) or {}
-            # If the previously persisted (legacy) top-level api_key_env was for
-            # this provider, carry it over; otherwise use overrides/defaults.
-            if (
-                persisted
-                and getattr(persisted, "provider", None) == prov
-                and getattr(persisted, "api_key_env", None)
-            ):
-                entry["api_key_env"] = getattr(persisted, "api_key_env")
-            else:
-                entry["api_key_env"] = legacy_map.get(prov) or meta["api_key_env"]
-        # Carry over any previously selected model for this provider via
-        # (1) explicit provider entry, (2) legacy top-level model when the
-        # active provider matches, or (3) leave unset to indicate "first use".
-        if "preferred_model" not in entry or entry["preferred_model"] is None:
-            if persisted and getattr(persisted, "provider", None) == prov:
-                # Use previous top-level model as the preferred one for this provider
-                entry["preferred_model"] = getattr(persisted, "model", None)
+        entry.setdefault("name", PROVIDER_DISPLAY_NAMES.get(prov, prov))
+        entry.setdefault("endpoint", meta["endpoint"])
+        entry.setdefault("api_key_env", meta["api_key_env"])
+        if "preferred_model" not in entry:
+            entry["preferred_model"] = None
         providers_map[prov] = entry
 
-    # Only reuse persisted model if it's for the same provider; otherwise
-    # fall back to defaults for the newly selected provider.
-    # Prefer any persisted per-provider preferred model first
-    provider_pref_model = None
-    if providers_map.get(provider):
-        provider_pref_model = providers_map[provider].get("preferred_model")
-    persisted_model = (
-        persisted.model if (persisted and persisted.provider == provider) else None
-    )
-    model = (
-        overrides.get("model")
-        or provider_pref_model
-        or persisted_model
-        or os.environ.get("KLINGON_CMT_LLM_MODEL")
-        or defaults["model"]
-    )
+    # Build priority list from persisted data (if any), falling back
+    # to legacy top-level provider/model and finally defaults.
+    priority_list: list[dict[str, str]] = []
+    if persisted and isinstance(getattr(persisted, "model_priority", None), list):
+        for item in persisted.model_priority:
+            if not isinstance(item, dict):
+                continue
+            prov = str(item.get("provider", "")).strip()
+            model_name = str(item.get("model", "")).strip()
+            if prov in DEFAULT_MODELS and model_name:
+                priority_list.append({"provider": prov, "model": model_name})
 
-    # Backward compatibility / migration: transparently upgrade the old
-    # short OpenAI model alias to the new dated default if user has not
-    # explicitly overridden it this run (so persisted configs keep working).
+    if not priority_list and persisted and getattr(persisted, "provider", None):
+        prov = str(persisted.provider)
+        model_name = str(getattr(persisted, "model", ""))
+        if prov in DEFAULT_MODELS and model_name:
+            priority_list.append({"provider": prov, "model": model_name})
+
+    if not priority_list:
+        auto_provider = _auto_select_provider(detected)
+        default_model = DEFAULT_MODELS[auto_provider]["model"]
+        priority_list.append({"provider": auto_provider, "model": default_model})
+
+    # Apply provider/model overrides (CLI/env).
+    provider_from_env = os.environ.get("KCMT_PROVIDER")
+    provider_override = overrides.get("provider") or provider_from_env
+    if provider_override and provider_override in DEFAULT_MODELS:
+        model_override = (
+            overrides.get("model")
+            or os.environ.get("KLINGON_CMT_LLM_MODEL")
+            or DEFAULT_MODELS[provider_override]["model"]
+        )
+        priority_list.insert(
+            0, {"provider": provider_override, "model": model_override}
+        )
+
+    elif overrides.get("model") or os.environ.get("KLINGON_CMT_LLM_MODEL"):
+        model_override = overrides.get("model") or os.environ.get(
+            "KLINGON_CMT_LLM_MODEL"
+        )  # type: ignore[assignment]
+        if priority_list:
+            priority_list[0] = {
+                "provider": priority_list[0]["provider"],
+                "model": str(model_override),
+            }
+
+    # Deduplicate while preserving order and cap to five entries.
+    seen_pairs: set[tuple[str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for pref in priority_list:
+        prov = pref.get("provider")  # type: ignore[assignment]
+        model_name = pref.get("model")  # type: ignore[assignment]
+        if prov not in DEFAULT_MODELS or not model_name:
+            continue
+        pair = (prov, model_name)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        deduped.append({"provider": prov, "model": model_name})
+        if len(deduped) >= 5:
+            break
+    priority_list = deduped or [
+        {"provider": "openai", "model": DEFAULT_MODELS["openai"]["model"]}
+    ]
+
+    provider = priority_list[0]["provider"]
+    model = priority_list[0]["model"]
+    if provider not in DEFAULT_MODELS:
+        provider = "openai"
+        model = DEFAULT_MODELS[provider]["model"]
+        priority_list[0] = {"provider": provider, "model": model}
+
+    defaults = DEFAULT_MODELS[provider]
     if provider == "openai" and model == "gpt-5-mini":
         model = defaults["model"]
+        priority_list[0]["model"] = model
 
-    # Only reuse persisted endpoint if it's for the same provider; otherwise
-    # select from environment or provider defaults.
-    persisted_endpoint = (
-        persisted.llm_endpoint
-        if (persisted and persisted.provider == provider)
-        else None
+    endpoint_override = overrides.get("endpoint") or os.environ.get(
+        "KLINGON_CMT_LLM_ENDPOINT"
     )
-    provider_endpoint = (
-        providers_map.get(provider, {}).get("endpoint") if providers_map else None
-    )
-    # Endpoint precedence: overrides > env > per-provider map > persisted > default
+    provider_entry = providers_map.get(provider, {})
     endpoint = (
-        overrides.get("endpoint")
-        or os.environ.get("KLINGON_CMT_LLM_ENDPOINT")
-        or provider_endpoint
-        or persisted_endpoint
-        or defaults["endpoint"]
+        endpoint_override or provider_entry.get("endpoint") or defaults["endpoint"]
     )
+    provider_entry["endpoint"] = endpoint
 
-    # If provider changed, do not reuse previous provider's api_key_env.
-    persisted_api_key_env = None
-    if persisted and persisted.provider == provider:
-        persisted_api_key_env = persisted.api_key_env
-
-    # If user previously configured explicit env var for this provider, prefer it
-    mapped_api_key_env = None
-    if providers_map.get(provider):
-        mapped_api_key_env = providers_map[provider].get("api_key_env")
-    elif persisted and getattr(persisted, "provider_env_overrides", None):
-        mapped_api_key_env = persisted.provider_env_overrides.get(provider)
-
-    api_key_env = (
-        overrides.get("api_key_env")
-        or persisted_api_key_env
-        or mapped_api_key_env
-        or _select_env_var_for_provider(provider)
+    api_override = overrides.get("api_key_env")
+    if api_override:
+        provider_entry["api_key_env"] = api_override
+    api_key_env = provider_entry.get("api_key_env") or _select_env_var_for_provider(
+        provider
     )
+    # Sanity: if persisted value looks like a URL, reset to default env var
+    if isinstance(api_key_env, str) and (
+        "://" in api_key_env or api_key_env.startswith("http")
+    ):
+        api_key_env = DEFAULT_MODELS[provider]["api_key_env"]
+    provider_entry["api_key_env"] = api_key_env
+
+    # Sync preferred models per provider based on priority list
+    first_by_provider: dict[str, str] = {}
+    for pref in priority_list:
+        prov = pref["provider"]
+        first_by_provider.setdefault(prov, pref["model"])
+    for prov, entry in providers_map.items():
+        entry["preferred_model"] = (
+            first_by_provider.get(prov)
+            or entry.get("preferred_model")
+            or DEFAULT_MODELS[prov]["model"]
+        )
 
     git_repo_path_raw = (
         overrides.get("repo_path")
@@ -372,11 +463,47 @@ def load_config(
     else:
         auto_push = True
 
-    # Keep provider_env_overrides in sync (legacy field) for compatibility
-    provider_env_overrides: dict[str, str] = {}
-    for prov, entry in providers_map.items():
-        env_name = str(entry.get("api_key_env") or DEFAULT_MODELS[prov]["api_key_env"])
-        provider_env_overrides[prov] = env_name
+    batch_env = os.environ.get("KCMT_USE_BATCH")
+    batch_override = overrides.get("use_batch")
+    if batch_override is not None:
+        use_batch = str(batch_override).lower() in {"1", "true", "yes", "on"}
+    elif persisted is not None and hasattr(persisted, "use_batch"):
+        use_batch = bool(getattr(persisted, "use_batch"))
+    elif batch_env:
+        use_batch = batch_env.lower() in {"1", "true", "yes", "on"}
+    else:
+        use_batch = False
+    if provider != "openai":
+        use_batch = False
+
+    default_batch_model = (
+        providers_map.get("openai", {}).get("preferred_model")
+        or DEFAULT_MODELS["openai"]["model"]
+    )
+    batch_model_override = overrides.get("batch_model") or os.environ.get(
+        "KCMT_BATCH_MODEL"
+    )
+    batch_model = (
+        batch_model_override
+        or (getattr(persisted, "batch_model", None) if persisted else None)
+        or default_batch_model
+    )
+    batch_timeout_raw = (
+        overrides.get("batch_timeout_seconds")
+        or overrides.get("batch_timeout")
+        or os.environ.get("KCMT_BATCH_TIMEOUT")
+        or (
+            getattr(persisted, "batch_timeout_seconds", None)
+            if persisted
+            else DEFAULT_BATCH_TIMEOUT_SECONDS
+        )
+        or DEFAULT_BATCH_TIMEOUT_SECONDS
+    )
+    try:
+        batch_timeout_seconds = int(float(batch_timeout_raw))
+    except (TypeError, ValueError):
+        batch_timeout_seconds = DEFAULT_BATCH_TIMEOUT_SECONDS
+    batch_timeout_seconds = max(BATCH_TIMEOUT_MIN_SECONDS, batch_timeout_seconds)
 
     config = Config(
         provider=provider,
@@ -387,7 +514,10 @@ def load_config(
         max_commit_length=max_commit_length,
         auto_push=bool(auto_push),
         providers=providers_map,
-        provider_env_overrides=provider_env_overrides,
+        model_priority=priority_list,
+        use_batch=use_batch,
+        batch_model=str(batch_model) if batch_model is not None else None,
+        batch_timeout_seconds=batch_timeout_seconds,
     )
 
     set_active_config(config)

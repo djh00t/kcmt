@@ -6,13 +6,15 @@ import asyncio
 import inspect
 import os
 import re
+import shutil
+import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .commit import CommitGenerator
-from .config import Config, get_active_config
+from .config import BATCH_TIMEOUT_MIN_SECONDS, Config, get_active_config
 from .exceptions import GitError, KlingonCMTError, LLMError, ValidationError
 from .git import GitRepo
 from .providers.base import resolve_default_request_timeout
@@ -101,6 +103,9 @@ class WorkflowStats:
 
     def __init__(self) -> None:
         self.total_files = 0
+        self.diffs_built = 0
+        self.requested = 0
+        self.responded = 0
         self.prepared = 0
         self.processed = 0
         self.successes = 0
@@ -112,9 +117,25 @@ class WorkflowStats:
         with self._lock:
             self.total_files = total
 
+    def mark_diff(self) -> None:
+        with self._lock:
+            self.diffs_built += 1
+
     def mark_prepared(self) -> None:
         with self._lock:
             self.prepared += 1
+
+    def mark_request(self) -> None:
+        with self._lock:
+            self.requested += 1
+
+    def mark_response(self) -> None:
+        with self._lock:
+            self.responded += 1
+
+    def set_diffs(self, count: int) -> None:
+        with self._lock:
+            self.diffs_built = max(0, count)
 
     def mark_result(self, success: bool) -> None:
         with self._lock:
@@ -129,6 +150,9 @@ class WorkflowStats:
             elapsed = max(time.time() - self._start, 1e-6)
             return {
                 "total_files": self.total_files,
+                "diffs_built": self.diffs_built,
+                "requests": self.requested,
+                "responses": self.responded,
                 "prepared": self.prepared,
                 "processed": self.processed,
                 "successes": self.successes,
@@ -173,6 +197,67 @@ class KlingonCMTWorkflow:
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
         self._metrics = WorkflowMetrics()
+        self._progress_history: list[str] = []
+        self._progress_header_shown = False
+        self._progress_block_height = 0
+        self._progress_line_width = 0
+        self._file_status: dict[str, dict[str, str]] = {}
+        self._status_line_width = 0
+        self._status_table_height = 0
+        self._footer_width = 0
+        self._status_rows_count = 0
+
+    # ------------------------------------------------------------------
+    # Progress rendering helpers
+    # ------------------------------------------------------------------
+    def _format_progress_row(
+        self,
+        *,
+        icon: str,
+        stage_label: str,
+        diffs: object,
+        requests: object,
+        responses: object,
+        prepared: object,
+        total: object,
+        success: object,
+        failures: object,
+        rate: object,
+        colorize: bool = True,
+    ) -> str:
+        """Return a single progress row with aligned columns."""
+
+        num_width = 3
+        rate_width = 6
+
+        def _num(val: object, width: int = num_width) -> str:
+            try:
+                return f"{int(val):>{width}d}"  # type: ignore[call-overload]
+            except Exception:
+                return f"{str(val):>{width}}"
+
+        if isinstance(rate, str):
+            rate_part = f"{rate:>{rate_width}}"
+        else:
+            try:
+                rate_part = f"{float(rate):>{rate_width}.2f}"  # type: ignore[arg-type]
+            except Exception:
+                rate_part = f"{str(rate):>{rate_width}}"
+
+        stage_color = CYAN if colorize else ""
+        reset = RESET if colorize else ""
+
+        return (
+            f"{icon} kcmt "
+            f"{stage_color}{stage_label:<7}{reset} │ "
+            f"Δ {_num(diffs)} │ "
+            f"req {_num(requests)} │ "
+            f"res {_num(responses)} │ "
+            f"ready {_num(prepared)}/{_num(total)} │ "
+            f"✓ {_num(success)} │ "
+            f"✗ {_num(failures)} │ "
+            f"{DIM if colorize else ''}{rate_part} c/s{reset}"
+        )
 
     def _profile(self, label: str, elapsed_seconds: float, extra: str = "") -> None:
         if not self.profile:
@@ -234,10 +319,13 @@ class KlingonCMTWorkflow:
         )
         if any_success and getattr(self._config, "auto_push", False):
             try:
+                self._progress_event("push-start")
                 self.git_repo.push()
                 results["pushed"] = True
+                self._progress_event("push-done")
             except GitError as e:  # pragma: no cover - network dependent
                 results.setdefault("errors", []).append(f"Auto-push failed: {e}")
+                self._progress_event("push-error", detail=str(e))
 
         total_elapsed = time.perf_counter() - workflow_start
         self._profile(
@@ -446,6 +534,7 @@ class KlingonCMTWorkflow:
         if not file_changes:
             return results
 
+        self._stats.set_diffs(len(file_changes))
         self._stats.set_total(len(file_changes))
 
         prepared_commits = self._prepare_commit_messages(file_changes)
@@ -520,8 +609,23 @@ class KlingonCMTWorkflow:
             )
         except ValueError:
             per_file_timeout = provider_default_timeout
+        # Batch workflows can take longer; align per-file timeout with batch timeout
+        if getattr(self._config, "use_batch", False):
+            batch_timeout_cfg = getattr(self._config, "batch_timeout_seconds", None)
+            try:
+                batch_timeout_val = (
+                    float(batch_timeout_cfg) if batch_timeout_cfg else None
+                )
+            except (TypeError, ValueError):
+                batch_timeout_val = None
+            if batch_timeout_val:
+                per_file_timeout = max(
+                    per_file_timeout, batch_timeout_val, BATCH_TIMEOUT_MIN_SECONDS
+                )
+            else:
+                per_file_timeout = max(per_file_timeout, BATCH_TIMEOUT_MIN_SECONDS)
 
-        timeout_retry_limit = 3
+        timeout_retry_limit = self.max_retries
         timeout_attempt_limit = timeout_retry_limit + 1
         timeout_state = {"value": per_file_timeout}
 
@@ -529,6 +633,7 @@ class KlingonCMTWorkflow:
         abort_event = asyncio.Event()
 
         prepared: list[tuple[int, PreparedCommit]] = []
+        prepared_by_idx: dict[int, PreparedCommit] = {}
         log_queue: dict[int, PreparedCommit] = {}
         next_log_index = 0
         completed: set[int] = set()
@@ -569,7 +674,15 @@ class KlingonCMTWorkflow:
                 while attempts < timeout_attempt_limit:
                     start = time.perf_counter()
                     try:
-                        if supports_timeout:
+                        if getattr(self._config, "use_batch", False):
+                            prepared_commit = await asyncio.wait_for(
+                                self._prepare_single_change_async(
+                                    change,
+                                    request_timeout=timeout_value,
+                                ),
+                                timeout=timeout_value,
+                            )
+                        elif supports_timeout:
                             prepared_commit = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     prepare_fn,
@@ -649,9 +762,17 @@ class KlingonCMTWorkflow:
 
         def mark_prepared(idx: int, prepared_commit: PreparedCommit) -> None:
             nonlocal failure_count
-            if idx in completed:
+            existing = prepared_by_idx.get(idx)
+            if existing and existing.message and prepared_commit.error:
+                return
+            if existing and existing.error and prepared_commit.message:
+                prepared_by_idx[idx] = prepared_commit
+                log_queue[idx] = prepared_commit
+                return
+            if idx in completed and existing:
                 return
             prepared.append((idx, prepared_commit))
+            prepared_by_idx[idx] = prepared_commit
             self._stats.mark_prepared()
             self._print_progress(stage="prepare")
             log_queue[idx] = prepared_commit
@@ -716,7 +837,12 @@ class KlingonCMTWorkflow:
             self._refresh_progress_line()
 
         flush_log()
-        return sorted(prepared, key=lambda item: item[0])
+        ordered_prepared: list[tuple[int, PreparedCommit]] = []
+        for idx in sorted(prepared_by_idx):
+            ordered_prepared.append((idx, prepared_by_idx[idx]))
+        if not ordered_prepared:
+            ordered_prepared = sorted(prepared, key=lambda item: item[0])
+        return ordered_prepared
 
     def _get_thread_commit_generator(self) -> CommitGenerator:
         """Return a per-thread CommitGenerator instance."""
@@ -746,32 +872,42 @@ class KlingonCMTWorkflow:
                 )
             )
 
+        self._progress_event("diff-ready", file=change.file_path)
+
+        def _llm_progress(status: str) -> None:
+            key = status.strip().lower()
+            if key in {"request-sent", "request sent"}:
+                self._stats.mark_request()
+                self._progress_event("request-sent", file=change.file_path)
+            elif key in {"response-received", "response received"}:
+                self._stats.mark_response()
+                self._progress_event("response", file=change.file_path)
+            else:
+                self._progress_event(
+                    "llm",
+                    file=change.file_path,
+                    detail=status,
+                )
+
         suggest_fn = generator.suggest_commit_message
         try:
-            if request_timeout is not None:
-                try:
-                    sig = inspect.signature(suggest_fn)
-                except (TypeError, ValueError):
-                    sig = None
-                if sig and "request_timeout" in sig.parameters:
-                    commit_message = suggest_fn(
-                        change.diff_content,
-                        context=f"File: {change.file_path}",
-                        style="conventional",
-                        request_timeout=request_timeout,
-                    )
-                else:
-                    commit_message = suggest_fn(
-                        change.diff_content,
-                        context=f"File: {change.file_path}",
-                        style="conventional",
-                    )
-            else:
-                commit_message = suggest_fn(
-                    change.diff_content,
-                    context=f"File: {change.file_path}",
-                    style="conventional",
-                )
+            call_kwargs: dict[str, object] = {
+                "context": f"File: {change.file_path}",
+                "style": "conventional",
+            }
+            try:
+                sig = inspect.signature(suggest_fn)
+            except (TypeError, ValueError):
+                sig = None
+            if (
+                request_timeout is not None
+                and sig
+                and "request_timeout" in sig.parameters
+            ):
+                call_kwargs["request_timeout"] = request_timeout
+            if sig and "progress_callback" in sig.parameters:
+                call_kwargs["progress_callback"] = _llm_progress
+            commit_message = suggest_fn(change.diff_content, **call_kwargs)  # type: ignore[arg-type]
             validated = generator.validate_and_fix_commit_message(commit_message)
             if self.debug:
                 print(
@@ -817,6 +953,78 @@ class KlingonCMTWorkflow:
                 ),
             )
 
+    async def _prepare_single_change_async(
+        self, change: FileChange, request_timeout: float | None = None
+    ) -> PreparedCommit:
+        generator = self._get_thread_commit_generator()
+        if self.debug:
+            snippet = change.diff_content.splitlines()[:20]
+            preview = "\n".join(snippet)
+            print(
+                ("DEBUG: prepare.file path={} change_type={} diff_preview=\n{}").format(
+                    change.file_path,
+                    change.change_type,
+                    preview,
+                )
+            )
+
+        self._progress_event("diff-ready", file=change.file_path)
+
+        def _llm_progress(status: str) -> None:
+            key = status.strip().lower()
+            if key in {"request-sent", "request sent"}:
+                self._progress_event("request-sent", file=change.file_path)
+            elif key in {"response-received", "response received"}:
+                self._progress_event("response", file=change.file_path)
+            else:
+                self._progress_event(
+                    "llm",
+                    file=change.file_path,
+                    detail=status,
+                )
+
+        try:
+            commit_message = await generator.suggest_commit_message_async(
+                change.diff_content,
+                context=f"File: {change.file_path}",
+                style="conventional",
+                request_timeout=request_timeout,
+                progress_callback=_llm_progress,
+            )
+            validated = generator.validate_and_fix_commit_message(commit_message)
+            if self.debug:
+                print(
+                    "DEBUG: prepare.success path={} header='{}'".format(
+                        change.file_path,
+                        validated.splitlines()[0] if validated else "",
+                    )
+                )
+            return PreparedCommit(change=change, message=validated)
+        except (ValidationError, LLMError) as exc:
+            if self.debug:
+                print(
+                    "DEBUG: prepare.failure path={} error='{}'".format(
+                        change.file_path, str(exc)[:200]
+                    )
+                )
+            return PreparedCommit(
+                change=change,
+                message=None,
+                error=(
+                    "Failed to generate valid commit message for "
+                    f"{change.file_path}: {exc}"
+                ),
+            )
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            return PreparedCommit(
+                change=change,
+                message=None,
+                error=(
+                    "Unexpected non-kcmt error preparing commit for "
+                    f"{change.file_path}: {exc}"
+                ),
+            )
+
     def _clear_progress_line(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
@@ -825,17 +1033,15 @@ class KlingonCMTWorkflow:
     def _refresh_progress_line(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
-        if not self._last_progress_stage:
-            return
-        snapshot = self._progress_snapshots.get(self._last_progress_stage)
-        if snapshot:
-            print(f"\r{snapshot}", end="", flush=True)
+        return
 
     def _build_progress_line(self, stage: str) -> str:
         snapshot = self._stats.snapshot()
         total = snapshot["total_files"]
+        diffs = snapshot.get("diffs_built", 0)
+        requests = snapshot.get("requests", 0)
+        responses = snapshot.get("responses", 0)
         prepared = snapshot["prepared"]
-        processed = snapshot["processed"]
         success = snapshot["successes"]
         failures = snapshot["failures"]
         rate = snapshot["rate"]
@@ -848,15 +1054,71 @@ class KlingonCMTWorkflow:
         icon, color = stage_styles.get(stage, ("🔄", CYAN))
         stage_label = stage.upper()
 
-        return (
-            f"{BOLD}{icon} kcmt{RESET} "
-            f"{color}{stage_label:<7}{RESET} │ "
-            f"{GREEN}{processed:>3}{RESET}/{total:>3} files │ "
-            f"{CYAN}{prepared:>3}{RESET}/{total:>3} ready │ "
-            f"{GREEN}✓ {success:>3}{RESET} │ "
-            f"{RED}✗ {failures:>3}{RESET} │ "
-            f"{DIM}{rate:5.2f} commits/s{RESET}   "
+        return self._format_progress_row(
+            icon=f"{BOLD}{icon}{RESET}",
+            stage_label=stage_label,
+            diffs=diffs,
+            requests=requests,
+            responses=responses,
+            prepared=prepared,
+            total=total,
+            success=success,
+            failures=failures,
+            rate=rate,
+            colorize=True,
         )
+
+    def _render_footer(self) -> None:
+        """Render a single-line footer pinned to the bottom of the screen."""
+
+        if not getattr(self, "_show_progress", False):
+            return
+
+        total = max(self._stats.total_files, len(self._file_status))
+        diff_count = sum(
+            1 for state in self._file_status.values() if state.get("diff") == "yes"
+        )
+        committed_count = sum(
+            1 for state in self._file_status.values() if state.get("commit") == "ok"
+        )
+
+        def _count(states: set[str]) -> int:
+            return sum(
+                1
+                for state in self._file_status.values()
+                if state.get("batch") in states
+            )
+
+        validating = _count({"validating", "queued"})
+        in_progress = _count({"running", "in_progress"})
+        finalizing = _count({"finalizing"})
+        completed = _count({"completed", "done"})
+        elapsed = max(time.time() - self._stats._start, 0.0)
+
+        footer = (
+            f"Δ {diff_count}/{total} | "
+            f"batch: {validating}/{total} validating, "
+            f"{in_progress}/{total} in-progress, "
+            f"{finalizing}/{total} finalizing, "
+            f"{completed}/{total} completed | "
+            f"committed {committed_count}/{total} | "
+            f"{elapsed:5.1f}s"
+        )
+
+        width = shutil.get_terminal_size(fallback=(120, 30)).columns or 120
+        if len(footer) > width:
+            footer = footer[: max(0, width - 3)] + "..."
+
+        # Save cursor, move to last line, clear it, write footer, restore.
+        sys.stdout.write("\x1b7")  # save cursor
+        sys.stdout.write(
+            f"\x1b[{max(1, shutil.get_terminal_size(fallback=(120, 30)).lines)};1H"
+        )
+        sys.stdout.write("\r\033[K")
+        sys.stdout.write(footer)
+        sys.stdout.write("\x1b8")  # restore cursor
+        sys.stdout.flush()
+        self._footer_width = max(self._footer_width, len(footer))
 
     def _print_progress(self, stage: str) -> None:
         if not getattr(self, "_show_progress", False):
@@ -865,26 +1127,23 @@ class KlingonCMTWorkflow:
         status_line = self._build_progress_line(stage)
         self._progress_snapshots[stage] = status_line
         self._last_progress_stage = stage
-        print(f"\r{status_line}", end="", flush=True)
+        self._render_footer()
 
     def _finalize_progress(self) -> None:
         if not getattr(self, "_show_progress", False):
             return
 
         self._progress_snapshots["done"] = self._build_progress_line("done")
-        print("\r\033[K", end="")
+        self._render_footer()
 
-        ordered_stages = ["prepare", "commit", "done"]
-        block_lines = [
-            self._progress_snapshots[stage]
-            for stage in ordered_stages
-            if stage in self._progress_snapshots
-        ]
-
-        if block_lines:
-            print("\n".join(block_lines))
-        else:
-            print()
+        # Leave a newline after the line and reset state for the next run.
+        sys.stdout.write("\r\033[K\n")
+        self._progress_header_shown = False
+        self._progress_block_height = 0
+        self._progress_line_width = 0
+        self._file_status.clear()
+        self._status_table_height = 0
+        self._footer_width = 0
 
         if self._commit_subjects:
             print()
@@ -921,7 +1180,7 @@ class KlingonCMTWorkflow:
                 print("\n".join(body))
             print("-" * 50)
 
-        self._refresh_progress_line()
+        self._render_footer()
 
     def _print_prepare_error(self, file_path: str, error: str) -> None:
         RED = "\033[91m"
@@ -936,13 +1195,92 @@ class KlingonCMTWorkflow:
             lines = error.splitlines()
             display = lines[0] if lines else error
         print(f"{RED}{display}{RESET}")
-        self._refresh_progress_line()
+        self._render_footer()
 
     def _log_prepared_result(self, prepared: PreparedCommit) -> None:
         if prepared.message:
             self._print_commit_generated(prepared.change.file_path, prepared.message)
         elif prepared.error:
             self._print_prepare_error(prepared.change.file_path, prepared.error)
+
+    def _format_progress_message(
+        self, kind: str, info: dict[str, object]
+    ) -> str | None:
+        file_path = str(info.get("file") or "")
+        detail = str(info.get("detail") or "")
+        provider = getattr(self._config, "provider", "")
+        model = getattr(self._config, "model", "")
+
+        if kind == "diff-ready":
+            return f"🧠 diff ready: {file_path}"
+        if kind == "request-sent":
+            target = f"{provider}/{model}".strip("/")
+            return f"📤 sent {file_path} → {target}"
+        if kind == "response":
+            return f"📥 response received: {file_path}"
+        if kind == "commit-start":
+            return f"📝 committing {file_path}"
+        if kind == "commit-done":
+            return f"✅ committed {file_path}"
+        if kind == "commit-error":
+            return f"⚠️ commit failed for {file_path}: {detail}"
+        if kind == "push-start":
+            return "⏫ pushing to remote…"
+        if kind == "push-done":
+            return "📡 push complete"
+        if kind == "push-error":
+            return f"⚠️ push failed: {detail}"
+        if kind == "llm":
+            label = detail or "LLM status"
+            return f"🤖 {label}"
+        return None
+
+    def _progress_event(self, kind: str, **info: object) -> None:
+        message = self._format_progress_message(kind, info)
+        if not message:
+            return
+        file_path = str(info.get("file") or "")
+        if getattr(self, "_show_progress", False):
+            if file_path:
+                status_entry = self._file_status.setdefault(
+                    file_path,
+                    {"diff": "-", "req": "-", "res": "-", "batch": "-", "commit": "-"},
+                )
+                if kind == "diff-ready":
+                    status_entry["diff"] = "yes"
+                if kind == "request-sent":
+                    status_entry["req"] = "sent"
+                    status_entry["batch"] = "validating"
+                if kind == "response":
+                    status_entry["res"] = "ok"
+                    status_entry["batch"] = "completed"
+                if kind == "llm" and info.get("detail"):
+                    detail = str(info.get("detail"))
+                    if detail.startswith("batch status"):
+                        label = detail.replace("batch status:", "").strip().split()[0]
+                        label = label.lower()
+                        if label in {"validating", "queued"}:
+                            status_entry["batch"] = "validating"
+                        elif label in {"running", "in_progress", "in-progress"}:
+                            status_entry["batch"] = "in_progress"
+                        elif label == "finalizing":
+                            status_entry["batch"] = "finalizing"
+                        elif label == "completed":
+                            status_entry["batch"] = "completed"
+                        else:
+                            status_entry["batch"] = label[:12]
+                    else:
+                        status_entry["batch"] = detail[:12]
+                if kind == "commit-start":
+                    status_entry["commit"] = "running"
+                if kind == "commit-done":
+                    status_entry["commit"] = "ok"
+                if kind == "commit-error":
+                    status_entry["commit"] = "err"
+            self._render_footer()
+        else:
+            print(message)
+        self._progress_history.append(message)
 
     def _parse_git_diff(self, diff: str) -> List[FileChange]:
         """Parse git diff output to extract file changes."""
@@ -1062,12 +1400,21 @@ class KlingonCMTWorkflow:
             )
 
         commit_start = time.perf_counter()
+        self._progress_event("commit-start", file=change.file_path)
         result = self._attempt_commit(
             validated_message,
             max_retries=self.max_retries,
             file_path=change.file_path,
         )
         self._metrics.record_commit(time.perf_counter() - commit_start)
+        if result.success:
+            self._progress_event("commit-done", file=change.file_path)
+        else:
+            self._progress_event(
+                "commit-error",
+                file=change.file_path,
+                detail=str(result.error or ""),
+            )
         return result
 
     def _generate_file_commit_message(self, change: FileChange) -> str:

@@ -28,6 +28,8 @@ def find_git_repo_root(start_path: Optional[Path] = None) -> Optional[Path]:
             cwd=path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         top = result.stdout.strip()
@@ -79,6 +81,8 @@ class GitRepo:
                     cwd=self.repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=True,
                 )
             else:
@@ -87,6 +91,8 @@ class GitRepo:
                     cwd=self.repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     check=True,
                     env=env,
                 )
@@ -110,6 +116,8 @@ class GitRepo:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
         except FileNotFoundError:
@@ -335,6 +343,8 @@ class GitRepo:
             cwd=self.repo_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
 
@@ -353,6 +363,8 @@ class GitRepo:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if worktree_result.returncode not in {0, 1}:
@@ -369,6 +381,8 @@ class GitRepo:
             cwd=self.repo_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if tracked_check.returncode == 0:
@@ -388,6 +402,8 @@ class GitRepo:
             cwd=self.repo_path,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if no_index_result.returncode not in {0, 1}:
@@ -421,6 +437,8 @@ class GitRepo:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if head_result.returncode in {0, 1}:
@@ -434,6 +452,8 @@ class GitRepo:
                 cwd=self.repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if wt_result.returncode not in {0, 1}:

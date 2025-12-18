@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +21,8 @@ def _reload_with_anthropic(
         if mod in sys.modules:
             sys.modules.pop(mod)
     # Remove persisted config if present so provider auto-select runs fresh
-    cfg_path = Path.cwd() / ".kcmt" / "config.json"
+    cfg_home = Path(os.environ.get("KCMT_CONFIG_HOME", Path.cwd() / ".kcmt"))
+    cfg_path = cfg_home / "config.json"
     if cfg_path.exists():  # pragma: no cover
         try:
             cfg_path.unlink()
