@@ -14,7 +14,7 @@ import threading
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
 from .benchmark import BenchResult, run_benchmark_detailed
 from .config import (
@@ -61,7 +61,11 @@ def _emit(event: str, payload: Dict[str, Any]) -> None:
     # NOTE: use the original interpreter streams so our JSON event protocol is
     # not swallowed by redirect_stdout/redirect_stderr contexts used elsewhere
     # to suppress incidental prints from third-party code.
-    target = sys.__stderr__ if event == "tick" else sys.__stdout__
+    target: TextIO
+    if event == "tick":
+        target = sys.__stderr__ or sys.stderr
+    else:
+        target = sys.__stdout__ or sys.stdout
     target.write(json.dumps(message) + "\n")
     target.flush()
 
@@ -113,14 +117,14 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached, dict):
                 ts = float(cached.get("ts", 0.0))
-                models = cached.get("models")
+                cached_models_raw = cached.get("models")
                 if (
                     ts
                     and (now - ts) < ttl_seconds
-                    and isinstance(models, list)
-                    and all(isinstance(item, dict) for item in models)
+                    and isinstance(cached_models_raw, list)
+                    and all(isinstance(item, dict) for item in cached_models_raw)
                 ):
-                    return [dict(item) for item in models]
+                    return [dict(item) for item in cached_models_raw]
         except Exception:
             pass
 
@@ -129,7 +133,7 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
     try:
         driver = _driver_for_provider(provider, cfg)
         fetched = driver.list_models()
-        if isinstance(fetched, Iterable):
+        if isinstance(fetched, list):
             models = [dict(item) for item in fetched if isinstance(item, dict)]
     except Exception:  # pragma: no cover - providers may reject list calls
         models = []
@@ -587,9 +591,7 @@ def _action_save_preferences(repo_path: str, payload: dict[str, Any]) -> int:
 def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(repo_path)
     providers_payload = payload.get("providers")
-    providers_explicit = isinstance(providers_payload, list) and bool(
-        providers_payload
-    )
+    providers_explicit = isinstance(providers_payload, list) and bool(providers_payload)
     providers = providers_payload
     if not providers:
         providers = list(DEFAULT_MODELS.keys())
@@ -631,9 +633,7 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
                         disabled_providers.add(str(prov))
                     raw_models = entry.get("models")
                     if isinstance(raw_models, list):
-                        models = [
-                            str(m).strip() for m in raw_models if str(m).strip()
-                        ]
+                        models = [str(m).strip() for m in raw_models if str(m).strip()]
                 if models:
                     allowlist[str(prov)] = set(models)
             if not allowlist:
@@ -642,13 +642,10 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     # Apply disabled providers only when the benchmark did not explicitly
     # request providers via flags.
     if disabled_providers and not providers_explicit and not only_providers:
-        providers = [
-            prov for prov in providers if str(prov) not in disabled_providers
-        ]
+        providers = [prov for prov in providers if str(prov) not in disabled_providers]
 
     catalog = {
-        provider: _list_enriched_models(provider, repo_root)
-        for provider in providers
+        provider: _list_enriched_models(provider, repo_root) for provider in providers
     }
 
     results, exclusions, details = run_benchmark_detailed(
@@ -750,8 +747,8 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
         if snapshot != last_sent:
             files = {}
             try:
-                files = getattr(workflow, "file_states_snapshot")()  # type: ignore[assignment]
-            except Exception:
+                files = workflow.file_states_snapshot()
+            except Exception:  # pragma: no cover - best-effort UI telemetry
                 files = {}
             _emit(
                 "tick",
