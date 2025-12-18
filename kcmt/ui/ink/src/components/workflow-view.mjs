@@ -429,7 +429,7 @@ export default function WorkflowView({onBack}) {
             h(
               Text,
               {key: `file-${start + idx}-row2`},
-              chalk.green(ellipsize(meta.subject, subMax)),
+              chalk.greenBright(ellipsize(meta.subject, subMax)),
             ),
           );
         } else if (meta.error) {
@@ -462,7 +462,7 @@ export default function WorkflowView({onBack}) {
     messageElements.push(h(Text, {key: 'msg-placeholder', dimColor: true}, 'Waiting for workflow activity…'));
   }
 
-  function buildAggregateLine() {
+  function buildAggregateParts() {
     const snapshot = normaliseStats(statsRef.current || stats);
     const totalFromFiles = Object.keys(fileStates || {}).length;
     const total = Math.max(snapshot.total_files || 0, totalFromFiles);
@@ -497,8 +497,7 @@ export default function WorkflowView({onBack}) {
     const errors = commitErr + metaErr;
     const hasBatchActivity = batchValidating + batchInProgress + batchFinalizing + batchCompleted > 0;
 
-    // Simplified format: files, states, results
-    const parts = [
+    const leftParts = [
       `${chalk.bold('files')} ${String(total).padStart(3)}`,
       `${chalk.dim('Δ')} ${String(diffed).padStart(3)}`,
       `${chalk.cyan('req')} ${String(req).padStart(3)}`,
@@ -507,22 +506,24 @@ export default function WorkflowView({onBack}) {
 
     // Only show batch stats if there's actual batch activity
     if (hasBatchActivity) {
-      parts.push(
+      leftParts.push(
         `${chalk.magenta('batch')} ${String(batchValidating + batchInProgress + batchFinalizing).padStart(2)}/${String(batchCompleted).padStart(2)}`
       );
     }
 
-    parts.push(
+    const rightParts = [
       `${chalk.yellow('committing')} ${String(committing).padStart(3)}`,
       `${chalk.green('✓')} ${String(committed).padStart(3)}`,
       `${chalk.red('✗')} ${String(errors).padStart(3)}`
-    );
+    ];
 
-    const line = parts.join(' │ ');
-    return lineWidth ? ellipsize(line, lineWidth) : line;
+    return {
+      left: leftParts.join(' │ '),
+      right: rightParts.join(' │ '),
+    };
   }
 
-  function buildOverallProgressBar() {
+  function buildOverallProgressParts() {
     const snapshot = normaliseStats(statsRef.current || stats);
     const total = Math.max(snapshot.total_files || 0, Object.keys(fileStates || {}).length);
     
@@ -552,10 +553,7 @@ export default function WorkflowView({onBack}) {
     
     progressPct = Math.min(100, Math.max(0, progressPct));
     
-    const barWidth = Math.max(30, Math.min(50, (lineWidth || 80) - 25));
-    const filled = Math.round((progressPct / 100) * barWidth);
-    const empty = Math.max(0, barWidth - filled);
-    const bar = `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
+    const pctStr = String(Math.round(progressPct)).padStart(3);
     
     let statusLabel = 'In progress';
     if (pushState === 'pushing') {
@@ -565,25 +563,66 @@ export default function WorkflowView({onBack}) {
     } else if (committed > 0 && committed === total) {
       statusLabel = 'Committing complete';
     }
-    
-    return `${bar} ${String(Math.round(progressPct)).padStart(3)}% ${chalk.dim(statusLabel)}`;
+
+    const rightPlain = `${pctStr}% ${statusLabel}`;
+    const right = `${pctStr}% ${chalk.dim(statusLabel)}`;
+
+    // Fill the remaining terminal width with the bar itself.
+    const barWidth = Math.max(10, (lineWidth || 80) - rightPlain.length - 1);
+    const filled = Math.round((progressPct / 100) * barWidth);
+    const empty = Math.max(0, barWidth - filled);
+    const bar = `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
+
+    return {bar, right};
   }
 
   const footerElements = [];
   if (status === 'running') {
-    const overallProgress = buildOverallProgressBar();
-    if (overallProgress) {
-      footerElements.push(h(Text, {key: 'overall-progress'}, overallProgress));
+    const overall = buildOverallProgressParts();
+    if (overall) {
+      footerElements.push(
+        h(
+          Box,
+          {key: 'overall-progress', width: '100%'},
+          h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, overall.bar)),
+          h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, ` ${overall.right}`)),
+        ),
+      );
     }
-    footerElements.push(h(Text, {key: 'aggregate-live'}, buildAggregateLine()));
+
+    const agg = buildAggregateParts();
+    footerElements.push(
+      h(
+        Box,
+        {key: 'aggregate-live', width: '100%'},
+        h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, agg.left)),
+        h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, agg.right)),
+      ),
+    );
   }
 
   if (status !== 'running') {
-    const overallProgress = buildOverallProgressBar();
-    if (overallProgress) {
-      footerElements.push(h(Text, {key: 'overall-progress-done'}, overallProgress));
+    const overall = buildOverallProgressParts();
+    if (overall) {
+      footerElements.push(
+        h(
+          Box,
+          {key: 'overall-progress-done', width: '100%'},
+          h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, overall.bar)),
+          h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, ` ${overall.right}`)),
+        ),
+      );
     }
-    footerElements.push(h(Text, {key: 'aggregate-done'}, buildAggregateLine()));
+
+    const agg = buildAggregateParts();
+    footerElements.push(
+      h(
+        Box,
+        {key: 'aggregate-done', width: '100%'},
+        h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, agg.left)),
+        h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, agg.right)),
+      ),
+    );
   }
 
   const rootProps = {flexDirection: 'column', paddingX: 0, paddingY: 0};
@@ -612,7 +651,7 @@ export default function WorkflowView({onBack}) {
     // Footer
     h(
       Box,
-      {flexDirection: 'column', flexGrow: 0, gap: 0},
+      {flexDirection: 'column', flexGrow: 0, gap: 0, width: '100%'},
       ...footerElements,
     ),
   );
