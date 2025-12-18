@@ -222,6 +222,9 @@ class InkWorkflow(KlingonCMTWorkflow):
     ) -> None:
         super().__init__(show_progress=True, **kwargs)
         self._emitter = emitter
+        # Maintain a compact per-file state map for the Ink UI without printing
+        # to stdout. Keys mirror the legacy renderer but avoid terminal output.
+        self._file_states: dict[str, dict[str, str]] = {}
 
     def _clear_progress_line(self) -> None:  # pragma: no cover - disabled
         return
@@ -273,11 +276,55 @@ class InkWorkflow(KlingonCMTWorkflow):
         return result
 
     def _progress_event(self, kind: str, **info: object) -> None:
+        # Update our in-memory file state map without writing to stdout.
+        file_path = str(info.get("file") or "")
+        if file_path:
+            entry = self._file_states.setdefault(
+                file_path,
+                {"diff": "-", "req": "-", "res": "-", "batch": "-", "commit": "-"},
+            )
+            if kind == "diff-ready":
+                entry["diff"] = "yes"
+            elif kind == "request-sent":
+                entry["req"] = "sent"
+                entry["batch"] = "validating"
+            elif kind == "response":
+                entry["res"] = "ok"
+                # For non-batch flows, response implies ready
+                if entry.get("batch", "-") == "-":
+                    entry["batch"] = "completed"
+            elif kind == "llm" and info.get("detail"):
+                detail = str(info.get("detail") or "").strip().lower()
+                label = detail
+                if detail.startswith("batch status"):
+                    parts = detail.replace("batch status:", "").strip().split()
+                    label = (parts[0] if parts else "").strip().lower()
+                if label in {"validating", "queued"}:
+                    entry["batch"] = "validating"
+                elif label in {"running", "in_progress", "in-progress"}:
+                    entry["batch"] = "in_progress"
+                elif label == "finalizing":
+                    entry["batch"] = "finalizing"
+                elif label == "completed":
+                    entry["batch"] = "completed"
+                elif label:
+                    entry["batch"] = label[:12]
+            elif kind == "commit-start":
+                entry["commit"] = "running"
+            elif kind == "commit-done":
+                entry["commit"] = "ok"
+            elif kind == "commit-error":
+                entry["commit"] = "err"
+
         message = self._format_progress_message(kind, info)
         if not message:
             return
         payload = {"message": message, "stage": kind, **info}
         self._emitter("status", payload)
+
+    def file_states_snapshot(self) -> dict[str, dict[str, str]]:
+        # Return a shallow copy safe for JSON serialisation
+        return {k: dict(v) for k, v in self._file_states.items()}
 
 
 def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
@@ -607,7 +654,19 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     while thread.is_alive():
         snapshot = workflow.stats_snapshot()
         if snapshot != last_sent:
-            _emit("tick", {"stage": stage_tracker["value"], "stats": snapshot})
+            files = {}
+            try:
+                files = getattr(workflow, "file_states_snapshot")()  # type: ignore[assignment]
+            except Exception:
+                files = {}
+            _emit(
+                "tick",
+                {
+                    "stage": stage_tracker["value"],
+                    "stats": snapshot,
+                    "files": files,
+                },
+            )
             last_sent = snapshot
         time.sleep(0.2)
     thread.join()
