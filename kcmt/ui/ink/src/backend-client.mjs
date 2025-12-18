@@ -129,5 +129,6 @@ export function createBackendClient(argv) {
     savePreferences: preferences => Promise.resolve(run('save-preferences', {preferences})),
     runBenchmark: options => stream('benchmark', options),
     runWorkflow: options => stream('workflow', options),
+    listModels: providers => Promise.resolve(run('list-models', {providers})),
   };
 }

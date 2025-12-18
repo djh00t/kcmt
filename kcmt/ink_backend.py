@@ -7,15 +7,16 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import sys
 import threading
 import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
-from .benchmark import BenchResult, run_benchmark
+from .benchmark import BenchResult, run_benchmark_detailed
 from .config import (
     BATCH_TIMEOUT_MIN_SECONDS,
     DEFAULT_MODELS,
@@ -27,6 +28,7 @@ from .config import (
     load_preferences,
     save_config,
     save_preferences,
+    state_dir,
 )
 from .core import KlingonCMTWorkflow
 from .exceptions import GitError, KlingonCMTError, LLMError
@@ -56,7 +58,14 @@ def _serialise(value: Any) -> Any:
 
 def _emit(event: str, payload: Dict[str, Any]) -> None:
     message = {"event": event, "payload": _serialise(payload)}
-    target = sys.stderr if event == "tick" else sys.stdout
+    # NOTE: use the original interpreter streams so our JSON event protocol is
+    # not swallowed by redirect_stdout/redirect_stderr contexts used elsewhere
+    # to suppress incidental prints from third-party code.
+    target: TextIO
+    if event == "tick":
+        target = sys.__stderr__ or sys.stderr
+    else:
+        target = sys.__stdout__ or sys.stdout
     target.write(json.dumps(message) + "\n")
     target.flush()
 
@@ -94,12 +103,37 @@ def _driver_for_provider(provider: str, cfg: Config) -> Any:
 
 
 def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]]:
+    # Cache provider model catalogs on disk to avoid repeated network calls.
+    try:
+        ttl_seconds = int(os.environ.get("KCMT_MODEL_CACHE_TTL_SECONDS", "86400"))
+    except Exception:
+        ttl_seconds = 86400
+
+    cache_root = state_dir(repo_root) / "model_catalog"
+    cache_path = cache_root / f"{provider}.json"
+    now = time.time()
+    if ttl_seconds > 0:
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached, dict):
+                ts = float(cached.get("ts", 0.0))
+                cached_models_raw = cached.get("models")
+                if (
+                    ts
+                    and (now - ts) < ttl_seconds
+                    and isinstance(cached_models_raw, list)
+                    and all(isinstance(item, dict) for item in cached_models_raw)
+                ):
+                    return [dict(item) for item in cached_models_raw]
+        except Exception:
+            pass
+
     cfg = _load_provider_config(provider, repo_root)
     models: list[dict[str, Any]] = []
     try:
         driver = _driver_for_provider(provider, cfg)
         fetched = driver.list_models()
-        if isinstance(fetched, Iterable):
+        if isinstance(fetched, list):
             models = [dict(item) for item in fetched if isinstance(item, dict)]
     except Exception:  # pragma: no cover - providers may reject list calls
         models = []
@@ -140,6 +174,16 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
         ):
             continue
         filtered.append({"id": identifier, **{k: item[k] for k in item if k != "id"}})
+
+    if ttl_seconds > 0:
+        try:
+            cache_root.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"ts": now, "models": filtered}, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
     return filtered
 
 
@@ -222,6 +266,9 @@ class InkWorkflow(KlingonCMTWorkflow):
     ) -> None:
         super().__init__(show_progress=True, **kwargs)
         self._emitter = emitter
+        # Maintain a compact per-file state map for the Ink UI without printing
+        # to stdout. Keys mirror the legacy renderer but avoid terminal output.
+        self._file_states: dict[str, dict[str, str]] = {}
 
     def _clear_progress_line(self) -> None:  # pragma: no cover - disabled
         return
@@ -273,11 +320,55 @@ class InkWorkflow(KlingonCMTWorkflow):
         return result
 
     def _progress_event(self, kind: str, **info: object) -> None:
+        # Update our in-memory file state map without writing to stdout.
+        file_path = str(info.get("file") or "")
+        if file_path:
+            entry = self._file_states.setdefault(
+                file_path,
+                {"diff": "-", "req": "-", "res": "-", "batch": "-", "commit": "-"},
+            )
+            if kind == "diff-ready":
+                entry["diff"] = "yes"
+            elif kind == "request-sent":
+                entry["req"] = "sent"
+                entry["batch"] = "validating"
+            elif kind == "response":
+                entry["res"] = "ok"
+                # For non-batch flows, response implies ready
+                if entry.get("batch", "-") == "-":
+                    entry["batch"] = "completed"
+            elif kind == "llm" and info.get("detail"):
+                detail = str(info.get("detail") or "").strip().lower()
+                label = detail
+                if detail.startswith("batch status"):
+                    parts = detail.replace("batch status:", "").strip().split()
+                    label = (parts[0] if parts else "").strip().lower()
+                if label in {"validating", "queued"}:
+                    entry["batch"] = "validating"
+                elif label in {"running", "in_progress", "in-progress"}:
+                    entry["batch"] = "in_progress"
+                elif label == "finalizing":
+                    entry["batch"] = "finalizing"
+                elif label == "completed":
+                    entry["batch"] = "completed"
+                elif label:
+                    entry["batch"] = label[:12]
+            elif kind == "commit-start":
+                entry["commit"] = "running"
+            elif kind == "commit-done":
+                entry["commit"] = "ok"
+            elif kind == "commit-error":
+                entry["commit"] = "err"
+
         message = self._format_progress_message(kind, info)
         if not message:
             return
         payload = {"message": message, "stage": kind, **info}
         self._emitter("status", payload)
+
+    def file_states_snapshot(self) -> dict[str, dict[str, str]]:
+        # Return a shallow copy safe for JSON serialisation
+        return {k: dict(v) for k, v in self._file_states.items()}
 
 
 def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
@@ -295,7 +386,7 @@ def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
         preferences = load_preferences(repo_root)
     except Exception:  # pragma: no cover - prefs optional
         preferences = {}
-    catalog = _build_model_catalog(repo_root)
+    # Skip expensive model catalog build for fast startup; Configure view will lazy-load
     response = {
         "repoRoot": str(repo_root),
         "config": _serialise(config),
@@ -303,7 +394,7 @@ def _action_bootstrap(repo_path: str, payload: dict[str, Any]) -> int:
         "defaultModels": DEFAULT_MODELS,
         "providerDetection": detection,
         "preferences": preferences,
-        "modelCatalog": catalog,
+        "modelCatalog": {},
         "argv": argv,
     }
     _emit("complete", response)
@@ -499,12 +590,11 @@ def _action_save_preferences(repo_path: str, payload: dict[str, Any]) -> int:
 
 def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(repo_path)
-    providers = payload.get("providers")
+    providers_payload = payload.get("providers")
+    providers_explicit = isinstance(providers_payload, list) and bool(providers_payload)
+    providers = providers_payload
     if not providers:
         providers = list(DEFAULT_MODELS.keys())
-    catalog = {
-        provider: _list_enriched_models(provider, repo_root) for provider in providers
-    }
     limit = payload.get("limit")
     if isinstance(limit, str) and limit.isdigit():
         limit = int(limit)
@@ -517,7 +607,48 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     only_models = payload.get("onlyModels")
     only_providers = payload.get("onlyProviders")
 
-    results, exclusions = run_benchmark(
+    allowlist: dict[str, set[str]] | None = None
+    disabled_providers: set[str] = set()
+    if not only_models:
+        try:
+            prefs = load_preferences(repo_root)
+        except Exception:  # pragma: no cover - prefs optional
+            prefs = {}
+
+        bench_cfg = prefs.get("benchmark") if isinstance(prefs, dict) else None
+        providers_cfg = None
+        if isinstance(bench_cfg, dict):
+            providers_cfg = bench_cfg.get("providers")
+
+        if isinstance(providers_cfg, dict):
+            allowlist = {}
+            for prov, entry in providers_cfg.items():
+                if not prov:
+                    continue
+                models: list[str] = []
+                if isinstance(entry, list):
+                    models = [str(m).strip() for m in entry if str(m).strip()]
+                elif isinstance(entry, dict):
+                    if entry.get("enabled") is False:
+                        disabled_providers.add(str(prov))
+                    raw_models = entry.get("models")
+                    if isinstance(raw_models, list):
+                        models = [str(m).strip() for m in raw_models if str(m).strip()]
+                if models:
+                    allowlist[str(prov)] = set(models)
+            if not allowlist:
+                allowlist = None
+
+    # Apply disabled providers only when the benchmark did not explicitly
+    # request providers via flags.
+    if disabled_providers and not providers_explicit and not only_providers:
+        providers = [prov for prov in providers if str(prov) not in disabled_providers]
+
+    catalog = {
+        provider: _list_enriched_models(provider, repo_root) for provider in providers
+    }
+
+    results, exclusions, details = run_benchmark_detailed(
         catalog,
         per_provider_limit=int(limit) if limit else None,
         request_timeout=timeout_value,
@@ -525,11 +656,13 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
         progress=_benchmark_progress,
         only_models=only_models,
         only_providers=only_providers,
+        provider_model_allowlist=allowlist,
     )
     leaderboards = _build_leaderboards(results)
     response = {
         **leaderboards,
         "exclusions": [_serialise(ex) for ex in exclusions],
+        "details": [_serialise(item) for item in details],
     }
     if payload.get("includeRaw"):
         response["raw"] = [_serialise(item) for item in results]
@@ -539,6 +672,11 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
 
 def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(payload.get("repoPath") or repo_path)
+
+    # Ink UI prioritizes responsiveness; avoid the optional "second call" used
+    # to add a commit body (header is sufficient for committing).
+    os.environ.setdefault("KCMT_DISABLE_BODY_ENRICHMENT", "1")
+
     overrides = payload.get("overrides") or {}
     config = load_config(repo_root=repo_root, overrides=overrides)
     config.git_repo_path = str(repo_root)
@@ -607,7 +745,19 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     while thread.is_alive():
         snapshot = workflow.stats_snapshot()
         if snapshot != last_sent:
-            _emit("tick", {"stage": stage_tracker["value"], "stats": snapshot})
+            files = {}
+            try:
+                files = workflow.file_states_snapshot()
+            except Exception:  # pragma: no cover - best-effort UI telemetry
+                files = {}
+            _emit(
+                "tick",
+                {
+                    "stage": stage_tracker["value"],
+                    "stats": snapshot,
+                    "files": files,
+                },
+            )
             last_sent = snapshot
         time.sleep(0.2)
     thread.join()
@@ -634,12 +784,32 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     return 0
 
 
+def _action_list_models(repo_path: str, payload: dict[str, Any]) -> int:
+    """Lazy-load model catalog for specific providers on demand."""
+    repo_root = _resolve_repo_root(repo_path)
+    providers = payload.get("providers")
+    if not providers:
+        providers = list(DEFAULT_MODELS.keys())
+    elif isinstance(providers, str):
+        providers = [providers]
+
+    catalog: dict[str, list[dict[str, Any]]] = {}
+    for provider in providers:
+        if provider in DEFAULT_MODELS:
+            catalog[provider] = _list_enriched_models(provider, repo_root)
+
+    response = {"modelCatalog": catalog}
+    _emit("complete", response)
+    return 0
+
+
 _ACTIONS = {
     "bootstrap": _action_bootstrap,
     "save-config": _action_save_config,
     "save-preferences": _action_save_preferences,
     "benchmark": _action_benchmark,
     "workflow": _action_workflow,
+    "list-models": _action_list_models,
 }
 
 

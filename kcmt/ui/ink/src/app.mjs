@@ -1,39 +1,31 @@
 import React, {useCallback, useEffect, useMemo, useState, useRef} from 'react';
 import {Box, Text} from 'ink';
-import Spinner from 'ink-spinner';
 import minimist from 'minimist';
 import gradient from 'gradient-string';
 import {createBackendClient} from './backend-client.mjs';
-import MainMenu from './components/main-menu.mjs';
 import WorkflowView from './components/workflow-view.mjs';
-import BenchmarkView from './components/benchmark-view.mjs';
-import ConfigureView from './components/configure-view.mjs';
+import {AppContext} from './app-context.mjs';
 
-export const AppContext = React.createContext({
-  backend: null,
-  bootstrap: null,
-  refreshBootstrap: () => Promise.resolve(),
-  argv: {},
-});
-
-const argv = minimist(process.argv.slice(2));
+// The Python wrapper invokes: `node index.mjs -- <kcmt args...>`.
+// `minimist` treats `--` as end-of-options, so we must strip it first.
+const rawArgs = process.argv.slice(2);
+const dashDashIndex = rawArgs.indexOf('--');
+const effectiveArgs = dashDashIndex >= 0 ? rawArgs.slice(dashDashIndex + 1) : rawArgs;
+const argv = minimist(effectiveArgs);
 const initialMode = argv.benchmark
   ? 'benchmark'
   : argv.configure || argv['configure-all']
     ? 'configure'
-    : null;
+    : 'workflow';
+
+const VIEW_LOADERS = {
+  menu: () => import('./components/main-menu.mjs'),
+  benchmark: () => import('./components/benchmark-view.mjs'),
+  configure: () => import('./components/configure-view.mjs'),
+};
 
 const h = React.createElement;
 const gradientBanner = gradient(['#4facfe', '#00f2fe']);
-
-const LoadingScreen = ({label = 'Connecting to kcmt magic'} = {}) =>
-  h(
-    Box,
-    {flexDirection: 'column', padding: 1, borderStyle: 'round', borderColor: 'cyan'},
-    h(Text, null, gradientBanner('🚀 kcmt')),
-    h(Text, {dimColor: true}, 'Mode: TUI (Ink)'),
-    h(Text, null, h(Spinner, {type: 'earth'}), ' ', label),
-  );
 
 const ErrorScreen = ({message}) =>
   h(
@@ -50,8 +42,13 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState(null);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
-  const [view, setView] = useState(initialMode || 'menu');
+  const [view, setView] = useState(initialMode || 'workflow');
+  const [viewComponent, setViewComponent] = useState(() =>
+    (initialMode || 'workflow') === 'workflow' ? WorkflowView : null,
+  );
+  const [viewError, setViewError] = useState(null);
   const initialisedRef = useRef(false);
+  const viewCacheRef = useRef(new Map());
 
   const refreshBootstrap = useCallback(async () => {
     setStatus('loading');
@@ -90,12 +87,67 @@ export default function App() {
     }
   }, [status, bootstrap]);
 
-  if (status === 'loading') {
-    return h(LoadingScreen, null);
+  useEffect(() => {
+    let cancelled = false;
+    setViewError(null);
+
+    // Make the default workflow experience instant: render immediately,
+    // let bootstrap finish in the background.
+    if (view === 'workflow') {
+      setViewComponent(() => WorkflowView);
+      viewCacheRef.current.set('workflow', WorkflowView);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cached = viewCacheRef.current.get(view);
+    if (cached) {
+      setViewComponent(() => cached);
+      return;
+    }
+
+    setViewComponent(null);
+
+    const loader = VIEW_LOADERS[view];
+    if (!loader) {
+      setViewError(new Error(`Unknown view: ${view}`));
+      return;
+    }
+
+    loader()
+      .then(mod => {
+        const component = mod && mod.default ? mod.default : null;
+        if (!component) {
+          throw new Error(`View module missing default export: ${view}`);
+        }
+        viewCacheRef.current.set(view, component);
+        if (!cancelled) {
+          setViewComponent(() => component);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setViewError(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  if (status === 'error') {
+    return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
   }
 
-  if (status === 'error' || !bootstrap) {
-    return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
+  if (viewError) {
+    return h(ErrorScreen, {message: viewError.message || 'Failed to load kcmt UI'});
+  }
+
+  if (!viewComponent) {
+    // Intentionally render nothing while a lazy view module loads.
+    return null;
   }
 
   const contextValue = {
@@ -110,7 +162,7 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(BenchmarkView, {onBack: () => setView('menu')}),
+      h(viewComponent, {onBack: () => setView('menu')}),
     );
   }
 
@@ -118,7 +170,7 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(ConfigureView, {onBack: () => setView('menu'), showAdvanced: Boolean(argv['configure-all'])}),
+      h(viewComponent, {onBack: () => setView('menu'), showAdvanced: Boolean(argv['configure-all'])}),
     );
   }
 
@@ -126,14 +178,14 @@ export default function App() {
     return h(
       AppContext.Provider,
       {value: contextValue},
-      h(WorkflowView, {onBack: () => setView('menu')}),
+      h(viewComponent, {onBack: () => setView('menu')}),
     );
   }
 
   return h(
     AppContext.Provider,
     {value: contextValue},
-    h(MainMenu, {
+    h(viewComponent, {
       onNavigate: mode => {
         if (mode === 'exit') {
           process.exit(0);

@@ -1,4 +1,4 @@
-.PHONY: help install install-dev format lint test test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
+.PHONY: help install install-dev format ruff-fix lint test test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
@@ -12,7 +12,7 @@ help:
 	@echo "  test          Run tests"
 	@echo "  test-verbose  Run tests with verbose output"
 	@echo "  coverage      Run tests with coverage report"
-	@echo "  check         Run all checks (format, lint, test)"
+	@echo "  check         Run all fixes and checks (ruff --fix, format, lint, typecheck, test)"
 	@echo ""
 	@echo "Build and Release:"
 	@echo "  clean         Clean all build artifacts"
@@ -56,6 +56,10 @@ lint:
 	@echo "Checking format with black..."
 	black --check ./$(PACKAGE_NAME) tests
 
+ruff-fix:
+	@echo "Auto-fixing lint with ruff..."
+	ruff check --fix ./$(PACKAGE_NAME) tests
+
 # Testing
 test:
 	$(PYTEST) -q
@@ -75,7 +79,7 @@ typecheck:
 	$(UV) run mypy ./$(PACKAGE_NAME)
 
 # All checks
-check: lint typecheck test-strict
+check: ruff-fix format lint typecheck test-strict
 	@echo "All checks passed!"
 
 # Cleaning
