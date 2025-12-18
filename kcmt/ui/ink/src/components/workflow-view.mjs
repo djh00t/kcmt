@@ -2,7 +2,7 @@ import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} fr
 import {Box, Text, useInput, useStdout} from 'ink';
 import Spinner from 'ink-spinner';
 import chalk from 'chalk';
-import {AppContext} from '../app.mjs';
+import {AppContext} from '../app-context.mjs';
 const h = React.createElement;
 
 const STAGE_ORDER = ['prepare', 'commit', 'done'];
@@ -120,12 +120,22 @@ function useMessageLog() {
   return [messages, append];
 }
 
-export default function WorkflowView({onBack}) {
+export default function WorkflowView({onBack} = {}) {
   const {backend, bootstrap, argv} = useContext(AppContext);
   const {stdout} = useStdout();
   const stdoutRows = stdout && stdout.rows ? Number(stdout.rows) : undefined;
   const stdoutCols = stdout && stdout.columns ? Number(stdout.columns) : undefined;
   const lineWidth = stdoutCols ? Math.max(40, stdoutCols - 2) : undefined;
+
+  const HEADER_ROWS = 7;
+  const FOOTER_ROWS = 2;
+  const FILE_ROWS = 2;
+
+  function getFileViewportCount() {
+    const rows = stdoutRows || 30;
+    const bodyRows = Math.max(0, rows - HEADER_ROWS - FOOTER_ROWS);
+    return Math.max(1, Math.floor(bodyRows / FILE_ROWS));
+  }
 
   const [stage, setStage] = useState('prepare');
   const [stats, setStats] = useState(normaliseStats());
@@ -306,7 +316,7 @@ export default function WorkflowView({onBack}) {
     // Scrolling controls for file list view
     if (viewMode === 'files') {
       const fileCount = Object.keys(fileStates || {}).length;
-      const viewport = Math.max(5, (stdoutRows || 30) - 12);
+      const viewport = getFileViewportCount();
       if (key.downArrow || char === 'j') {
         setScroll(prev => Math.min(Math.max(0, fileCount - viewport), prev + 1));
       } else if (key.upArrow || char === 'k') {
@@ -402,9 +412,9 @@ export default function WorkflowView({onBack}) {
     return `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
   }
 
-  const viewportRows = Math.max(5, (stdoutRows || 30) - 12);
-  const start = Math.max(0, Math.min(scroll, Math.max(0, filesArray.length - viewportRows)));
-  const end = Math.min(filesArray.length, start + viewportRows);
+  const viewportFiles = getFileViewportCount();
+  const start = Math.max(0, Math.min(scroll, Math.max(0, filesArray.length - viewportFiles)));
+  const end = Math.min(filesArray.length, start + viewportFiles);
   const visibleFiles = filesArray.slice(start, end);
 
   const fileElements = visibleFiles.length
@@ -419,7 +429,7 @@ export default function WorkflowView({onBack}) {
         lines.push(
           h(
             Text,
-            {key: `file-${start + idx}-row1`},
+            {key: `file-${start + idx}-row1`, wrap: 'truncate'},
             `${shownPath.padEnd(pathMax)}  ${bar} ${String(pct).padStart(3)}%`,
           ),
         );
@@ -428,7 +438,7 @@ export default function WorkflowView({onBack}) {
           lines.push(
             h(
               Text,
-              {key: `file-${start + idx}-row2`},
+              {key: `file-${start + idx}-row2`, wrap: 'truncate'},
               chalk.greenBright(ellipsize(meta.subject, subMax)),
             ),
           );
@@ -437,7 +447,7 @@ export default function WorkflowView({onBack}) {
           lines.push(
             h(
               Text,
-              {key: `file-${start + idx}-row2-err`},
+              {key: `file-${start + idx}-row2-err`, wrap: 'truncate'},
               chalk.red(ellipsize(meta.error, errMax)),
             ),
           );
@@ -445,7 +455,7 @@ export default function WorkflowView({onBack}) {
           lines.push(
             h(
               Text,
-              {key: `file-${start + idx}-status`},
+              {key: `file-${start + idx}-status`, wrap: 'truncate'},
               chalk.dim(statusLabel),
             ),
           );
