@@ -108,6 +108,11 @@ function useMessageLog() {
         const text = String(line);
         next.push({id: idRef.current++, text});
       });
+      // Cap the log to the last N entries to avoid unbounded growth
+      const CAP = 200;
+      if (next.length > CAP) {
+        return next.slice(next.length - CAP);
+      }
       return next;
     });
   }, []);
@@ -135,6 +140,9 @@ export default function WorkflowView({onBack}) {
   const emitterRef = useRef(null);
   const stageRef = useRef('prepare');
   const statsRef = useRef(normaliseStats());
+  const [fileStates, setFileStates] = useState({});
+  const [viewMode, setViewMode] = useState('files'); // 'files' | 'messages'
+  const [scroll, setScroll] = useState(0);
 
   const overrides = useMemo(() => {
     const out = {};
@@ -174,6 +182,9 @@ export default function WorkflowView({onBack}) {
         const line = buildProgressLine(nextStage, nextStats, lineWidth);
         setCurrentProgressLine(line);
         setProgressSnapshots(prev => ({...prev, [nextStage]: line}));
+        if (data?.files && typeof data.files === 'object') {
+          setFileStates(data.files);
+        }
       }
       if (event === 'commit-generated') {
         const file = data?.file || 'unknown file';
@@ -257,6 +268,28 @@ export default function WorkflowView({onBack}) {
       }
       onBack();
     }
+    // Toggle file/messages view
+    if (char === 'm') {
+      setViewMode(prev => (prev === 'files' ? 'messages' : 'files'));
+    }
+    // Scrolling controls for file list view
+    if (viewMode === 'files') {
+      const fileCount = Object.keys(fileStates || {}).length;
+      const viewport = Math.max(5, (stdoutRows || 30) - 12);
+      if (key.downArrow || char === 'j') {
+        setScroll(prev => Math.min(Math.max(0, fileCount - viewport), prev + 1));
+      } else if (key.upArrow || char === 'k') {
+        setScroll(prev => Math.max(0, prev - 1));
+      } else if (key.pageDown) {
+        setScroll(prev => Math.min(Math.max(0, fileCount - viewport), prev + viewport));
+      } else if (key.pageUp) {
+        setScroll(prev => Math.max(0, prev - viewport));
+      } else if (char === 'g' && !key.shift) {
+        setScroll(0);
+      } else if (char === 'g' && key.shift) {
+        setScroll(Math.max(0, fileCount - viewport));
+      }
+    }
   });
 
   useEffect(() => {
@@ -287,13 +320,64 @@ export default function WorkflowView({onBack}) {
     h(Text, {key: 'hdr-model'}, `Model: ${model}`),
     h(Text, {key: 'hdr-endpoint'}, `Endpoint: ${endpoint}`),
     h(Text, {key: 'hdr-retries'}, `Max retries: ${maxRetries}`),
+    h(Text, {key: 'hdr-hint', dimColor: true}, viewMode === 'files' ? 'j/k, PgUp/PgDn to scroll • m to toggle messages • ESC to exit' : 'm to toggle files • ESC to exit'),
     h(Text, {key: 'hdr-gap'}, ''),
   ];
+  // Build file list view
+  const filesArray = useMemo(() => {
+    const map = fileStates || {};
+    const paths = Object.keys(map);
+    paths.sort((a, b) => a.localeCompare(b));
+    return paths.map(p => ({
+      path: p,
+      state: map[p] || {},
+    }));
+  }, [fileStates]);
 
+  function computeProgress(entry) {
+    const s = entry?.state || {};
+    let pct = 0;
+    if (s.diff === 'yes') pct = Math.max(pct, 20);
+    if (s.req === 'sent') pct = Math.max(pct, 40);
+    if (s.res === 'ok') pct = Math.max(pct, 60);
+    if (s.batch === 'completed') pct = Math.max(pct, 80);
+    if (s.commit === 'running') pct = Math.max(pct, 85);
+    if (s.commit === 'ok') pct = 100;
+    if (s.commit === 'err') pct = 100;
+    return pct;
+  }
+
+  function renderBar(pct, width) {
+    const w = Math.max(10, Math.min(30, width || 20));
+    const filled = Math.round((pct / 100) * w);
+    const empty = Math.max(0, w - filled);
+    return `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
+  }
+
+  const viewportRows = Math.max(5, (stdoutRows || 30) - 12);
+  const start = Math.max(0, Math.min(scroll, Math.max(0, filesArray.length - viewportRows)));
+  const end = Math.min(filesArray.length, start + viewportRows);
+  const visibleFiles = filesArray.slice(start, end);
+
+  const fileElements = visibleFiles.length
+    ? visibleFiles.map((item, idx) => {
+        const pct = computeProgress(item);
+        const bar = renderBar(pct, 20);
+        const label = `${item.state.batch || '-'} | ${item.state.commit || '-'}`;
+        const pathMax = Math.max(10, (lineWidth || 80) - 40);
+        const shownPath = ellipsize(item.path, pathMax);
+        return h(
+          Text,
+          {key: `file-${start + idx}`},
+          `${shownPath.padEnd(pathMax)}  ${bar} ${String(pct).padStart(3)}%  ${chalk.dim(label)}`,
+        );
+      })
+    : [h(Text, {key: 'files-empty', dimColor: true}, 'Waiting for workflow activity…')];
+
+  // Messages view (capped)
   const messageElements = messages.map(entry =>
     h(Text, {key: `msg-${entry.id}`}, entry.text)
   );
-
   if (!messageElements.length) {
     messageElements.push(h(Text, {key: 'msg-placeholder', dimColor: true}, 'Waiting for workflow activity…'));
   }
@@ -370,13 +454,19 @@ export default function WorkflowView({onBack}) {
   return h(
     Box,
     rootProps,
+    // Header
     h(
       Box,
       {flexDirection: 'column', flexGrow: 0, gap: 0},
       ...headerElements,
-      ...messageElements,
     ),
-    h(Box, {flexGrow: 1}),
+    // Body (files or messages)
+    h(
+      Box,
+      {flexDirection: 'column', flexGrow: 1, gap: 0},
+      ...(viewMode === 'files' ? fileElements : messageElements),
+    ),
+    // Footer
     h(
       Box,
       {flexDirection: 'column', flexGrow: 0, gap: 0},
