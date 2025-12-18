@@ -141,6 +141,7 @@ export default function WorkflowView({onBack}) {
   const stageRef = useRef('prepare');
   const statsRef = useRef(normaliseStats());
   const [fileStates, setFileStates] = useState({});
+  const [fileMeta, setFileMeta] = useState({}); // { [path]: {subject?, error?} }
   const [viewMode, setViewMode] = useState('files'); // 'files' | 'messages'
   const [scroll, setScroll] = useState(0);
 
@@ -195,11 +196,26 @@ export default function WorkflowView({onBack}) {
           chalk.green(subject),
           '',
         ]);
+        setFileMeta(prev => ({
+          ...prev,
+          [file]: {...(prev[file] || {}), subject},
+        }));
       }
       if (event === 'status') {
         const msg = String(data?.message || '').trim();
+        const stageKey = String(data?.stage || '').toLowerCase();
+        const file = data?.file || '';
         if (msg) {
           appendMessages([chalk.dim(msg)]);
+        }
+        if (file) {
+          if (stageKey === 'commit-error') {
+            const detail = String(data?.detail || data?.message || 'commit failed');
+            setFileMeta(prev => ({
+              ...prev,
+              [file]: {...(prev[file] || {}), error: detail},
+            }));
+          }
         }
       }
       if (event === 'log') {
@@ -214,6 +230,12 @@ export default function WorkflowView({onBack}) {
           '',
         ]);
         setErrors(prev => [...prev, data?.error || `Skipped ${file}`]);
+        if (data?.file && data?.error) {
+          setFileMeta(prev => ({
+            ...prev,
+            [data.file]: {...(prev[data.file] || {}), error: String(data.error)},
+          }));
+        }
       }
       if (event === 'complete') {
         setSummary(data);
@@ -347,6 +369,19 @@ export default function WorkflowView({onBack}) {
     return pct;
   }
 
+  function computeStatus(entry) {
+    const s = entry?.state || {};
+    const meta = fileMeta[entry.path] || {};
+    if (meta.error) return chalk.red('error');
+    if (s.commit === 'ok') return chalk.green('committed');
+    if (s.commit === 'running') return 'committing';
+    if (s.batch && s.batch !== '-' && s.batch !== 'completed') return `batch ${s.batch}`;
+    if (s.res === 'ok') return 'response';
+    if (s.req === 'sent') return 'requesting';
+    if (s.diff === 'yes') return 'diffed';
+    return '-';
+  }
+
   function renderBar(pct, width) {
     const w = Math.max(10, Math.min(30, width || 20));
     const filled = Math.round((pct / 100) * w);
@@ -360,17 +395,41 @@ export default function WorkflowView({onBack}) {
   const visibleFiles = filesArray.slice(start, end);
 
   const fileElements = visibleFiles.length
-    ? visibleFiles.map((item, idx) => {
+    ? visibleFiles.flatMap((item, idx) => {
         const pct = computeProgress(item);
         const bar = renderBar(pct, 20);
-        const label = `${item.state.batch || '-'} | ${item.state.commit || '-'}`;
+        const statusLabel = computeStatus(item);
         const pathMax = Math.max(10, (lineWidth || 80) - 40);
         const shownPath = ellipsize(item.path, pathMax);
-        return h(
-          Text,
-          {key: `file-${start + idx}`},
-          `${shownPath.padEnd(pathMax)}  ${bar} ${String(pct).padStart(3)}%  ${chalk.dim(label)}`,
+        const meta = fileMeta[item.path] || {};
+        const lines = [];
+        lines.push(
+          h(
+            Text,
+            {key: `file-${start + idx}-row1`},
+            `${shownPath.padEnd(pathMax)}  ${bar} ${String(pct).padStart(3)}%  ${chalk.dim(statusLabel)}`,
+          ),
         );
+        if (meta.subject) {
+          const subMax = Math.max(10, (lineWidth || 80) - 4);
+          lines.push(
+            h(
+              Text,
+              {key: `file-${start + idx}-row2`},
+              `    ${chalk.green(ellipsize(meta.subject, subMax))}`,
+            ),
+          );
+        } else if (meta.error) {
+          const errMax = Math.max(10, (lineWidth || 80) - 4);
+          lines.push(
+            h(
+              Text,
+              {key: `file-${start + idx}-row2-err`},
+              `    ${chalk.red(ellipsize(meta.error, errMax))}`,
+            ),
+          );
+        }
+        return lines;
       })
     : [h(Text, {key: 'files-empty', dimColor: true}, 'Waiting for workflow activity…')];
 
@@ -382,6 +441,53 @@ export default function WorkflowView({onBack}) {
     messageElements.push(h(Text, {key: 'msg-placeholder', dimColor: true}, 'Waiting for workflow activity…'));
   }
 
+  function buildAggregateLine() {
+    const snapshot = normaliseStats(statsRef.current || stats);
+    const totalFromFiles = Object.keys(fileStates || {}).length;
+    const total = Math.max(snapshot.total_files || 0, totalFromFiles);
+
+    let diffed = 0;
+    let req = 0;
+    let res = 0;
+    let batchValidating = 0;
+    let batchInProgress = 0;
+    let batchFinalizing = 0;
+    let batchCompleted = 0;
+    let committing = 0;
+    let committed = 0;
+    let commitErr = 0;
+    let metaErr = 0;
+    const meta = fileMeta || {};
+    const fmap = fileStates || {};
+    for (const p of Object.keys(fmap)) {
+      const s = fmap[p] || {};
+      if (s.diff === 'yes') diffed += 1;
+      if (s.req === 'sent') req += 1;
+      if (s.res === 'ok') res += 1;
+      if (s.batch === 'validating' || s.batch === 'queued') batchValidating += 1;
+      if (s.batch === 'in_progress' || s.batch === 'running' || s.batch === 'in-progress') batchInProgress += 1;
+      if (s.batch === 'finalizing') batchFinalizing += 1;
+      if (s.batch === 'completed') batchCompleted += 1;
+      if (s.commit === 'running') committing += 1;
+      if (s.commit === 'ok') committed += 1;
+      if (s.commit === 'err') commitErr += 1;
+      if (meta[p]?.error) metaErr += 1;
+    }
+    const errors = commitErr + metaErr;
+
+    const line = (
+      `${chalk.bold('files')} ${String(total).padStart(3)} │ ` +
+      `${chalk.dim('Δ')} ${String(diffed).padStart(3)} │ ` +
+      `${chalk.cyan('req')} ${String(req).padStart(3)} │ ` +
+      `${chalk.cyan('res')} ${String(res).padStart(3)} │ ` +
+      `${chalk.magenta('batch')} v:${String(batchValidating).padStart(2)} i:${String(batchInProgress).padStart(2)} f:${String(batchFinalizing).padStart(2)} c:${String(batchCompleted).padStart(2)} │ ` +
+      `committing ${String(committing).padStart(3)} │ ` +
+      `${chalk.green('✓')} ${String(committed).padStart(3)} │ ` +
+      `${chalk.red('✗')} ${String(errors).padStart(3)}`
+    );
+    return lineWidth ? ellipsize(line, lineWidth) : line;
+  }
+
   const footerElements = [];
   const legendLine = chalk.dim('Legend: stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s');
   if (status === 'running') {
@@ -391,6 +497,7 @@ export default function WorkflowView({onBack}) {
     if (currentProgressLine) {
       footerElements.push(h(Text, {key: 'progress-live'}, currentProgressLine));
     }
+    footerElements.push(h(Text, {key: 'aggregate-live'}, buildAggregateLine()));
     footerElements.push(h(Text, {key: 'footer-running', dimColor: true}, h(Spinner, {type: 'runner'}), ' Press ESC to abort.'));
   }
 
@@ -437,6 +544,7 @@ export default function WorkflowView({onBack}) {
       footerElements.unshift(h(Text, {key: 'progress-headings'}, chalk.dim('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')));
       footerElements.unshift(...stageBlock);
     }
+    footerElements.push(h(Text, {key: 'aggregate-complete'}, buildAggregateLine()));
     const exitText = status === 'error'
       ? 'Workflow finished with issues. Returning to your shell...'
       : 'Workflow complete. Returning to your shell...';
