@@ -1,5 +1,5 @@
 import React, {useContext, useEffect, useMemo, useRef, useState} from 'react';
-import {Box, Text, useInput} from 'ink';
+import {Box, Text, useInput, useStdout} from 'ink';
 import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import gradient from 'gradient-string';
@@ -175,10 +175,14 @@ function renderProviderSections(payload) {
 
 export default function BenchmarkView({onBack} = {}) {
   const {backend, argv} = useContext(AppContext);
+  const {stdout} = useStdout();
+  const stdoutRows = stdout && stdout.rows ? Number(stdout.rows) : undefined;
   const [status, setStatus] = useState('running');
   const [progress, setProgress] = useState({label: 'Preparing providers…'});
   const [payload, setPayload] = useState(null);
   const emitterRef = useRef(null);
+  const [viewMode, setViewMode] = useState('leaderboard'); // 'leaderboard' | 'details'
+  const [scroll, setScroll] = useState(0);
 
   const options = useMemo(() => {
     const base = {
@@ -187,6 +191,7 @@ export default function BenchmarkView({onBack} = {}) {
       timeout: argv['benchmark-timeout'],
       debug: argv.debug,
       includeRaw: Boolean(argv['benchmark-json']),
+      includeDetails: true,
     };
     if (argv.model) {
       base.onlyModels = [argv.model];
@@ -223,11 +228,98 @@ export default function BenchmarkView({onBack} = {}) {
   }, [backend, options]);
 
   useInput((input, key) => {
+    const char = String(input || '').toLowerCase();
     if (key.escape || input === 'q') {
       emitterRef.current?.cancel?.();
       onBack();
     }
+    if (char === 'd' && status !== 'running') {
+      setScroll(0);
+      setViewMode(prev => (prev === 'leaderboard' ? 'details' : 'leaderboard'));
+    }
+
+    if (char === 'j' || key.downArrow) {
+      if (viewMode !== 'details') return;
+      const entries = Array.isArray(payload?.details) ? payload.details : [];
+      const rows = stdoutRows || 30;
+      const viewport = Math.max(1, Math.floor(Math.max(0, rows - 10) / 4));
+      setScroll(prev => Math.min(Math.max(0, entries.length - viewport), prev + 1));
+    }
+    if (char === 'k' || key.upArrow) {
+      if (viewMode !== 'details') return;
+      setScroll(prev => Math.max(0, prev - 1));
+    }
   });
+
+  function renderDetails() {
+    const entries = Array.isArray(payload?.details) ? payload.details : [];
+    if (!entries.length) {
+      return [h(Text, {key: 'details-empty', dimColor: true}, 'No per-sample details captured.')];
+    }
+
+    const rows = stdoutRows || 30;
+    const viewport = Math.max(1, Math.floor(Math.max(0, rows - 10) / 4));
+    const start = Math.max(0, Math.min(scroll, Math.max(0, entries.length - viewport)));
+    const end = Math.min(entries.length, start + viewport);
+    const visible = entries.slice(start, end);
+
+    const lines = [];
+    lines.push(
+      h(
+        Text,
+        {key: 'details-help', dimColor: true, wrap: 'truncate'},
+        'Details (per sample): j/k to scroll • d to return to leaderboard',
+      ),
+    );
+
+    visible.forEach((entry, idx) => {
+      const provider = entry?.provider || 'unknown';
+      const model = entry?.model || 'unknown';
+      const sample = entry?.sample || 'sample';
+      const ok = Boolean(entry?.success);
+      const latency = entry?.latency_ms != null ? Number(entry.latency_ms).toFixed(1) : '—';
+      const cost = entry?.cost_usd != null ? Number(entry.cost_usd).toFixed(4) : '—';
+      const quality = entry?.quality != null ? Number(entry.quality).toFixed(1) : '—';
+      const header = `${provider}/${model} • ${sample} • ${latency}ms • $${cost} • q=${quality} ${ok ? '✓' : '✗'}`;
+
+      const message = String(entry?.message || '').trim();
+      const subject = message ? message.split(/\r?\n/)[0] : '';
+      const err = String(entry?.error || '').trim();
+      const diff = String(entry?.diff || '').trim();
+      const diffFirstLine = diff ? diff.split(/\r?\n/)[0] : '';
+
+      const breakdown = entry?.quality_breakdown && typeof entry.quality_breakdown === 'object'
+        ? entry.quality_breakdown
+        : {};
+      const parts = [];
+      for (const key of ['format', 'scope', 'subject_len', 'specificity', 'body', 'penalties']) {
+        if (breakdown[key] == null) continue;
+        const val = Number(breakdown[key]);
+        if (Number.isNaN(val)) continue;
+        parts.push(`${key}=${val.toFixed(0)}`);
+      }
+      const criteria = parts.length ? `criteria: ${parts.join(' ')}` : 'criteria: —';
+
+      lines.push(h(Text, {key: `det-${start + idx}-1`, wrap: 'truncate'}, chalk.cyan(header)));
+      lines.push(
+        h(
+          Text,
+          {key: `det-${start + idx}-2`, wrap: 'truncate'},
+          ok ? chalk.green(subject || '(no subject)') : chalk.red(err || subject || 'failed'),
+        ),
+      );
+      lines.push(h(Text, {key: `det-${start + idx}-3`, wrap: 'truncate', dimColor: true}, criteria));
+      lines.push(
+        h(
+          Text,
+          {key: `det-${start + idx}-4`, wrap: 'truncate', dimColor: true},
+          diffFirstLine ? `diff: ${diffFirstLine}` : 'diff: —',
+        ),
+      );
+    });
+
+    return lines;
+  }
 
   const statusLine =
     status === 'running'
@@ -236,12 +328,17 @@ export default function BenchmarkView({onBack} = {}) {
         ? `⚠️ ${progress.label || 'Benchmark failed'}`
         : 'Benchmark complete';
 
+  const footerHint =
+    status === 'running'
+      ? 'Press q to return.'
+      : 'Press d for details • q to return.';
+
   return h(
     Box,
     {flexDirection: 'column', padding: 1, gap: 1, borderStyle: 'round', borderColor: 'yellow'},
     h(Text, null, titleGradient('🧪 kcmt benchmark lab')),
     h(Text, {dimColor: true}, statusLine),
-    payload ? renderProviderSections(payload) : null,
-    h(Text, {dimColor: true}, 'Press q to return.'),
+    payload ? (viewMode === 'details' ? renderDetails() : renderProviderSections(payload)) : null,
+    h(Text, {dimColor: true}, footerHint),
   );
 }
