@@ -16,7 +16,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from .benchmark import BenchResult, run_benchmark
+from .benchmark import BenchResult, run_benchmark_detailed
 from .config import (
     BATCH_TIMEOUT_MIN_SECONDS,
     DEFAULT_MODELS,
@@ -586,12 +586,13 @@ def _action_save_preferences(repo_path: str, payload: dict[str, Any]) -> int:
 
 def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(repo_path)
-    providers = payload.get("providers")
+    providers_payload = payload.get("providers")
+    providers_explicit = isinstance(providers_payload, list) and bool(
+        providers_payload
+    )
+    providers = providers_payload
     if not providers:
         providers = list(DEFAULT_MODELS.keys())
-    catalog = {
-        provider: _list_enriched_models(provider, repo_root) for provider in providers
-    }
     limit = payload.get("limit")
     if isinstance(limit, str) and limit.isdigit():
         limit = int(limit)
@@ -604,7 +605,53 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
     only_models = payload.get("onlyModels")
     only_providers = payload.get("onlyProviders")
 
-    results, exclusions = run_benchmark(
+    allowlist: dict[str, set[str]] | None = None
+    disabled_providers: set[str] = set()
+    if not only_models:
+        try:
+            prefs = load_preferences(repo_root)
+        except Exception:  # pragma: no cover - prefs optional
+            prefs = {}
+
+        bench_cfg = prefs.get("benchmark") if isinstance(prefs, dict) else None
+        providers_cfg = None
+        if isinstance(bench_cfg, dict):
+            providers_cfg = bench_cfg.get("providers")
+
+        if isinstance(providers_cfg, dict):
+            allowlist = {}
+            for prov, entry in providers_cfg.items():
+                if not prov:
+                    continue
+                models: list[str] = []
+                if isinstance(entry, list):
+                    models = [str(m).strip() for m in entry if str(m).strip()]
+                elif isinstance(entry, dict):
+                    if entry.get("enabled") is False:
+                        disabled_providers.add(str(prov))
+                    raw_models = entry.get("models")
+                    if isinstance(raw_models, list):
+                        models = [
+                            str(m).strip() for m in raw_models if str(m).strip()
+                        ]
+                if models:
+                    allowlist[str(prov)] = set(models)
+            if not allowlist:
+                allowlist = None
+
+    # Apply disabled providers only when the benchmark did not explicitly
+    # request providers via flags.
+    if disabled_providers and not providers_explicit and not only_providers:
+        providers = [
+            prov for prov in providers if str(prov) not in disabled_providers
+        ]
+
+    catalog = {
+        provider: _list_enriched_models(provider, repo_root)
+        for provider in providers
+    }
+
+    results, exclusions, details = run_benchmark_detailed(
         catalog,
         per_provider_limit=int(limit) if limit else None,
         request_timeout=timeout_value,
@@ -612,11 +659,13 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
         progress=_benchmark_progress,
         only_models=only_models,
         only_providers=only_providers,
+        provider_model_allowlist=allowlist,
     )
     leaderboards = _build_leaderboards(results)
     response = {
         **leaderboards,
         "exclusions": [_serialise(ex) for ex in exclusions],
+        "details": [_serialise(item) for item in details],
     }
     if payload.get("includeRaw"):
         response["raw"] = [_serialise(item) for item in results]
@@ -626,6 +675,11 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
 
 def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     repo_root = _resolve_repo_root(payload.get("repoPath") or repo_path)
+
+    # Ink UI prioritizes responsiveness; avoid the optional "second call" used
+    # to add a commit body (header is sufficient for committing).
+    os.environ.setdefault("KCMT_DISABLE_BODY_ENRICHMENT", "1")
+
     overrides = payload.get("overrides") or {}
     config = load_config(repo_root=repo_root, overrides=overrides)
     config.git_repo_path = str(repo_root)
