@@ -32,9 +32,9 @@ class CLI:
     def run(self, args: Optional[list[str]] = None) -> int:
         """Dispatch to the Ink UI when interactive, otherwise fallback."""
 
-        _legacy_module.KlingonCMTWorkflow = KlingonCMTWorkflow
-        _legacy_module.CommitGenerator = CommitGenerator
-        _legacy_module.GitRepo = GitRepo
+        _legacy_module.KlingonCMTWorkflow = KlingonCMTWorkflow  # type: ignore[attr-defined]
+        _legacy_module.CommitGenerator = CommitGenerator  # type: ignore[attr-defined]
+        _legacy_module.GitRepo = GitRepo  # type: ignore[attr-defined]
         effective_args = args if args is not None else sys.argv[1:]
         if self._should_use_ink(effective_args):
             code = self._run_with_ink(effective_args)
