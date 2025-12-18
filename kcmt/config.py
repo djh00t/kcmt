@@ -357,7 +357,7 @@ def load_config(
     elif overrides.get("model") or os.environ.get("KLINGON_CMT_LLM_MODEL"):
         model_override = overrides.get("model") or os.environ.get(
             "KLINGON_CMT_LLM_MODEL"
-        )
+        )  # type: ignore[assignment]
         if priority_list:
             priority_list[0] = {
                 "provider": priority_list[0]["provider"],
@@ -368,8 +368,8 @@ def load_config(
     seen_pairs: set[tuple[str, str]] = set()
     deduped: list[dict[str, str]] = []
     for pref in priority_list:
-        prov = pref.get("provider")
-        model_name = pref.get("model")
+        prov = pref.get("provider")  # type: ignore[assignment]
+        model_name = pref.get("model")  # type: ignore[assignment]
         if prov not in DEFAULT_MODELS or not model_name:
             continue
         pair = (prov, model_name)

@@ -803,7 +803,7 @@ Examples:
                 self._print_warning("Invalid selection. Please choose again.")
 
         for idx in range(MAX_PRIORITY):
-            current_provider = slots[idx]["provider"] if slots[idx] else None
+            current_provider = slots[idx]["provider"] if slots[idx] else None  # type: ignore[index]
             provider_choice = prompt_priority_provider(idx, current_provider)
             if provider_choice is None:
                 for rest in range(idx, MAX_PRIORITY):
@@ -820,7 +820,7 @@ Examples:
                     slots[idx] = None
                     break
             default_model = (
-                slots[idx]["model"]
+                slots[idx]["model"]  # type: ignore[index]
                 if slots[idx]
                 else providers_map[provider_choice].get("preferred_model")
                 or DEFAULT_MODELS[provider_choice]["model"]

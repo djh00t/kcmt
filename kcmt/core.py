@@ -206,7 +206,6 @@ class KlingonCMTWorkflow:
         self._status_table_height = 0
         self._footer_width = 0
         self._status_rows_count = 0
-        self._file_status: dict[str, dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Progress rendering helpers
@@ -233,7 +232,7 @@ class KlingonCMTWorkflow:
 
         def _num(val: object, width: int = num_width) -> str:
             try:
-                return f"{int(val):>{width}d}"
+                return f"{int(val):>{width}d}"  # type: ignore[call-overload]
             except Exception:
                 return f"{str(val):>{width}}"
 
@@ -241,7 +240,7 @@ class KlingonCMTWorkflow:
             rate_part = f"{rate:>{rate_width}}"
         else:
             try:
-                rate_part = f"{float(rate):>{rate_width}.2f}"
+                rate_part = f"{float(rate):>{rate_width}.2f}"  # type: ignore[arg-type]
             except Exception:
                 rate_part = f"{str(rate):>{rate_width}}"
 
@@ -908,7 +907,7 @@ class KlingonCMTWorkflow:
                 call_kwargs["request_timeout"] = request_timeout
             if sig and "progress_callback" in sig.parameters:
                 call_kwargs["progress_callback"] = _llm_progress
-            commit_message = suggest_fn(change.diff_content, **call_kwargs)
+            commit_message = suggest_fn(change.diff_content, **call_kwargs)  # type: ignore[arg-type]
             validated = generator.validate_and_fix_commit_message(commit_message)
             if self.debug:
                 print(

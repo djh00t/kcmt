@@ -455,7 +455,7 @@ class LLMClient:
             if progress_callback is not None:
                 call_kwargs["progress_callback"] = progress_callback
             try:
-                return self._call_openai(prompt, **call_kwargs)
+                return self._call_openai(prompt, **call_kwargs)  # type: ignore[arg-type]
             except TypeError:
                 # Backward compatibility for test stubs without new kwargs
                 return self._call_openai(prompt)
@@ -476,7 +476,7 @@ class LLMClient:
             if progress_callback is not None:
                 call_kwargs["progress_callback"] = progress_callback
             try:
-                return await self._call_openai_async(prompt, **call_kwargs)
+                return await self._call_openai_async(prompt, **call_kwargs)  # type: ignore[arg-type]
             except TypeError:
                 return await self._call_openai_async(prompt)
         if request_timeout is None:

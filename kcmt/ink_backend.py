@@ -38,13 +38,13 @@ try:  # Optional imports only needed for model enrichment
     from .providers.pricing import build_enrichment_context, enrich_ids
     from .providers.xai_driver import XAIDriver
 except Exception:  # pragma: no cover - guard optional deps for packaging
-    AnthropicDriver = OpenAIDriver = XAIDriver = None  # type: ignore[assignment]
+    AnthropicDriver = OpenAIDriver = XAIDriver = None  # type: ignore[assignment,misc]
     build_enrichment_context = enrich_ids = None  # type: ignore[assignment]
 
 
 def _serialise(value: Any) -> Any:
     if is_dataclass(value):
-        return {key: _serialise(val) for key, val in asdict(value).items()}
+        return {key: _serialise(val) for key, val in asdict(value).items()}  # type: ignore[arg-type]
     if isinstance(value, dict):
         return {str(key): _serialise(val) for key, val in value.items()}
     if isinstance(value, (list, tuple)):
@@ -83,7 +83,7 @@ def _load_provider_config(provider: str, repo_root: Path) -> Config:
     return cfg
 
 
-def _driver_for_provider(provider: str, cfg: Config):
+def _driver_for_provider(provider: str, cfg: Config) -> Any:
     if provider in {"openai", "github"} and OpenAIDriver is not None:
         return OpenAIDriver(cfg, debug=False)
     if provider == "xai" and XAIDriver is not None:
@@ -104,7 +104,7 @@ def _list_enriched_models(provider: str, repo_root: Path) -> list[dict[str, Any]
     except Exception:  # pragma: no cover - providers may reject list calls
         models = []
 
-    if not models and build_enrichment_context and enrich_ids:
+    if not models and build_enrichment_context and enrich_ids:  # type: ignore[truthy-function]
         try:
             alias_lut, _ctx, _meta = build_enrichment_context()
             ids: list[str] = []

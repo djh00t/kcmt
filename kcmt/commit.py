@@ -205,7 +205,7 @@ class CommitGenerator:
                         call_kwargs["progress_callback"] = progress_cb
                     if progress_cb is not None:
                         progress_cb("request-sent")
-                    msg = generate_fn(diff, context, style, **call_kwargs)
+                    msg = generate_fn(diff, context, style, **call_kwargs)  # type: ignore[arg-type]
                     if not msg or not msg.strip():
                         raise LLMError("LLM returned empty response")
                     if progress_cb is not None:
@@ -466,7 +466,7 @@ class CommitGenerator:
                         generate_fn, "progress_callback"
                     ):
                         call_kwargs["progress_callback"] = progress_callback
-                    msg = await generate_fn(diff, context, style, **call_kwargs)
+                    msg = await generate_fn(diff, context, style, **call_kwargs)  # type: ignore[arg-type]
                     if not msg or not msg.strip():
                         raise LLMError("LLM returned empty response")
                     if not self.validate_conventional_commit(msg):
