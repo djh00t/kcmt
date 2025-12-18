@@ -1,16 +1,10 @@
 import React, {useCallback, useEffect, useMemo, useState, useRef} from 'react';
 import {Box, Text} from 'ink';
-import Spinner from 'ink-spinner';
 import minimist from 'minimist';
 import gradient from 'gradient-string';
 import {createBackendClient} from './backend-client.mjs';
-
-export const AppContext = React.createContext({
-  backend: null,
-  bootstrap: null,
-  refreshBootstrap: () => Promise.resolve(),
-  argv: {},
-});
+import WorkflowView from './components/workflow-view.mjs';
+import {AppContext} from './app-context.mjs';
 
 const argv = minimist(process.argv.slice(2));
 const initialMode = argv.benchmark
@@ -21,22 +15,12 @@ const initialMode = argv.benchmark
 
 const VIEW_LOADERS = {
   menu: () => import('./components/main-menu.mjs'),
-  workflow: () => import('./components/workflow-view.mjs'),
   benchmark: () => import('./components/benchmark-view.mjs'),
   configure: () => import('./components/configure-view.mjs'),
 };
 
 const h = React.createElement;
 const gradientBanner = gradient(['#4facfe', '#00f2fe']);
-
-const LoadingScreen = ({label = 'Connecting to kcmt magic'} = {}) =>
-  h(
-    Box,
-    {flexDirection: 'column', padding: 1, borderStyle: 'round', borderColor: 'cyan'},
-    h(Text, null, gradientBanner('🚀 kcmt')),
-    h(Text, {dimColor: true}, 'Mode: TUI (Ink)'),
-    h(Text, null, h(Spinner, {type: 'earth'}), ' ', label),
-  );
 
 const ErrorScreen = ({message}) =>
   h(
@@ -54,7 +38,9 @@ export default function App() {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
   const [view, setView] = useState(initialMode || 'workflow');
-  const [viewComponent, setViewComponent] = useState(null);
+  const [viewComponent, setViewComponent] = useState(() =>
+    (initialMode || 'workflow') === 'workflow' ? WorkflowView : null,
+  );
   const [viewError, setViewError] = useState(null);
   const initialisedRef = useRef(false);
   const viewCacheRef = useRef(new Map());
@@ -97,12 +83,18 @@ export default function App() {
   }, [status, bootstrap]);
 
   useEffect(() => {
-    if (status !== 'ready') {
-      return;
-    }
-
     let cancelled = false;
     setViewError(null);
+
+    // Make the default workflow experience instant: render immediately,
+    // let bootstrap finish in the background.
+    if (view === 'workflow') {
+      setViewComponent(() => WorkflowView);
+      viewCacheRef.current.set('workflow', WorkflowView);
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const cached = viewCacheRef.current.get(view);
     if (cached) {
@@ -138,13 +130,9 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [status, view]);
+  }, [view]);
 
-  if (status === 'loading') {
-    return h(LoadingScreen, null);
-  }
-
-  if (status === 'error' || !bootstrap) {
+  if (status === 'error') {
     return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
   }
 
@@ -153,7 +141,8 @@ export default function App() {
   }
 
   if (!viewComponent) {
-    return h(LoadingScreen, {label: 'Loading UI'});
+    // Intentionally render nothing while a lazy view module loads.
+    return null;
   }
 
   const contextValue = {
