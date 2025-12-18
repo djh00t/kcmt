@@ -6,7 +6,12 @@ import {createBackendClient} from './backend-client.mjs';
 import WorkflowView from './components/workflow-view.mjs';
 import {AppContext} from './app-context.mjs';
 
-const argv = minimist(process.argv.slice(2));
+// The Python wrapper invokes: `node index.mjs -- <kcmt args...>`.
+// `minimist` treats `--` as end-of-options, so we must strip it first.
+const rawArgs = process.argv.slice(2);
+const dashDashIndex = rawArgs.indexOf('--');
+const effectiveArgs = dashDashIndex >= 0 ? rawArgs.slice(dashDashIndex + 1) : rawArgs;
+const argv = minimist(effectiveArgs);
 const initialMode = argv.benchmark
   ? 'benchmark'
   : argv.configure || argv['configure-all']
