@@ -20,7 +20,7 @@ def test_run_git_command_success(monkeypatch, tmp_path):
     class _R:
         stdout = "ok\n"
 
-    def fake_run(cmd, cwd=None, capture_output=True, text=True, check=True):
+    def fake_run(cmd, cwd=None, capture_output=True, text=True, check=True, encoding=None, errors=None):
         return _R()
 
     monkeypatch.setattr(subprocess, "run", fake_run)

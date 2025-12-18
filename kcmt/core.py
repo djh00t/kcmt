@@ -625,7 +625,7 @@ class KlingonCMTWorkflow:
             else:
                 per_file_timeout = max(per_file_timeout, BATCH_TIMEOUT_MIN_SECONDS)
 
-        timeout_retry_limit = 0
+        timeout_retry_limit = self.max_retries
         timeout_attempt_limit = timeout_retry_limit + 1
         timeout_state = {"value": per_file_timeout}
 

@@ -59,7 +59,6 @@ def test_per_file_timeout(monkeypatch, tmp_path):
 
     wf = KlingonCMTWorkflow(
         repo_path=str(repo),
-        max_retries=1,
         show_progress=False,
         config=cfg,
     )
