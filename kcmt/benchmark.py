@@ -274,6 +274,21 @@ class BenchExclusion:
 
 
 @dataclass
+class BenchSampleDetail:
+    provider: str
+    model: str
+    sample: str
+    diff: str
+    success: bool
+    latency_ms: float
+    cost_usd: float
+    quality: float
+    quality_breakdown: dict[str, float]
+    message: str
+    error: str | None = None
+
+
+@dataclass
 class _PreparedModel:
     provider: str
     model: str
@@ -303,7 +318,7 @@ def _build_config(provider: str, model: str) -> Config:
     return cfg
 
 
-def run_benchmark(
+def _run_benchmark_impl(
     models_map: dict[str, list[dict[str, Any]]],
     *,
     per_provider_limit: int | None = None,
@@ -312,21 +327,27 @@ def run_benchmark(
     progress: Any | None = None,
     only_providers: Iterable[str] | None = None,
     only_models: Iterable[str] | None = None,
-) -> tuple[list[BenchResult], list[BenchExclusion]]:
+    include_details: bool = False,
+    provider_model_allowlist: dict[str, set[str]] | None = None,
+) -> tuple[list[BenchResult], list[BenchExclusion], list[BenchSampleDetail] | None]:
     diffs = sample_diffs()
     results: list[BenchResult] = []
     exclusions: list[BenchExclusion] = []
+    details: list[BenchSampleDetail] | None = [] if include_details else None
     provider_model_counts: dict[str, int] = {}
     total_runs = 0
 
-    provider_filter = {p for p in only_providers} if only_providers else None
+    provider_filter = (
+        {str(p) for p in only_providers} if only_providers else None
+    )
     model_filter = {str(m) for m in only_models} if only_models else None
 
-    ordered_providers = [
-        prov
-        for prov in models_map.keys()
-        if provider_filter is None or prov in provider_filter
-    ]
+    if provider_filter is None:
+        ordered_providers = list(models_map.keys())
+    else:
+        ordered_providers = [
+            prov for prov in models_map.keys() if prov in provider_filter
+        ]
 
     prepared: dict[str, list[_PreparedModel]] = {}
 
@@ -344,31 +365,98 @@ def run_benchmark(
             prepared[provider] = []
             continue
 
-        if model_filter:
-            subset = [item for item in items if str(item.get("id", "")) in model_filter]
-        elif per_provider_limit:
-            subset = items[:per_provider_limit]
-        else:
-            subset = items
+        subset = items
 
-        if model_filter and not subset:
-            if provider_filter is not None and provider in provider_filter:
-                for target in model_filter:
-                    exclusions.append(
-                        BenchExclusion(
-                            provider=provider,
-                            model=target,
-                            reason="model_not_listed",
-                            detail="model not present in provider catalog",
+        allowlist = (
+            provider_model_allowlist.get(provider)
+            if provider_model_allowlist
+            else None
+        )
+        if allowlist is not None:
+            subset = [
+                item
+                for item in subset
+                if str(item.get("id", "")).strip() in allowlist
+            ]
+
+        if model_filter is not None:
+            subset = [
+                item
+                for item in subset
+                if str(item.get("id", "")).strip() in model_filter
+            ]
+        if per_provider_limit:
+            subset = subset[:per_provider_limit]
+
+        if model_filter is not None and not subset:
+            if provider_filter is not None:
+                if provider in provider_filter:
+                    for target in sorted(model_filter):
+                        exclusions.append(
+                            BenchExclusion(
+                                provider=provider,
+                                model=target,
+                                reason="model_not_listed",
+                                detail="model not present in provider catalog",
+                            )
                         )
-                    )
             prepared[provider] = []
             continue
-        subset_len = (
-            len(items[:per_provider_limit]) if per_provider_limit else len(items)
-        )
-        provider_model_counts[provider] = subset_len
-        total_runs += subset_len * len(diffs)
+
+        prepared_models: list[_PreparedModel] = []
+        for entry in subset:
+            model = str(entry.get("id", "")).strip()
+            if not model:
+                continue
+
+            try:
+                in_price = float(entry.get("input_price_per_mtok") or 0.0)
+                out_price = float(entry.get("output_price_per_mtok") or 0.0)
+            except (TypeError, ValueError):
+                in_price = 0.0
+                out_price = 0.0
+
+            try:
+                cfg = _build_config(provider, model)
+                client = LLMClient(cfg, debug=debug)
+            except LLMError as exc:
+                exclusions.append(
+                    BenchExclusion(
+                        provider=provider,
+                        model=model,
+                        reason="client_init_failed",
+                        detail=str(exc),
+                    )
+                )
+                continue
+            except Exception as exc:  # pragma: no cover - defensive
+                exclusions.append(
+                    BenchExclusion(
+                        provider=provider,
+                        model=model,
+                        reason="client_init_failed",
+                        detail=str(exc),
+                    )
+                )
+                continue
+
+            prepared_models.append(
+                _PreparedModel(
+                    provider=provider,
+                    model=model,
+                    client=client,
+                    input_price_per_mtok=in_price,
+                    output_price_per_mtok=out_price,
+                )
+            )
+
+        if not prepared_models:
+            prepared[provider] = []
+            continue
+
+        prepared[provider] = prepared_models
+        provider_model_counts[provider] = len(prepared_models)
+        total_runs += len(prepared_models) * len(diffs)
 
     if callable(progress):
         try:
@@ -405,7 +493,6 @@ def run_benchmark(
                 )
             except Exception:  # pragma: no cover
                 pass
-        subset = items[:per_provider_limit] if per_provider_limit else items
         model_index = 0
         for prepared_model in prepared_models:
             model_index += 1
@@ -437,8 +524,10 @@ def run_benchmark(
                         request_timeout=request_timeout,
                     )
                     successes += 1
+                    err_detail = None
                 except LLMError:
                     msg = ""
+                    err_detail = "LLM request failed"
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
                 latencies.append(elapsed_ms)
                 in_tokens = approx_tokens(diff_text)
@@ -447,8 +536,40 @@ def run_benchmark(
                     in_tokens * (prepared_model.input_price_per_mtok / 1_000_000.0)
                 ) + (out_tokens * (prepared_model.output_price_per_mtok / 1_000_000.0))
                 costs.append(cost)
-                q = score_quality(diff_text, msg).get("score", 0.0)
-                scores.append(float(q))
+                score_payload = score_quality(diff_text, msg)
+                q = float(score_payload.get("score", 0.0))
+                scores.append(q)
+                if details is not None:
+                    diff_for_details = diff_text
+                    if len(diff_for_details) > 2000:
+                        diff_for_details = (
+                            diff_for_details[:1500]
+                            + "\n…\n"
+                            + diff_for_details[-400:]
+                        )
+                    breakdown_raw = score_payload.get("breakdown")
+                    breakdown: dict[str, float] = {}
+                    if isinstance(breakdown_raw, dict):
+                        for key, val in breakdown_raw.items():
+                            try:
+                                breakdown[str(key)] = float(val)
+                            except (TypeError, ValueError):
+                                continue
+                    details.append(
+                        BenchSampleDetail(
+                            provider=prepared_model.provider,
+                            model=prepared_model.model,
+                            sample=name,
+                            diff=str(diff_for_details),
+                            success=bool(msg),
+                            latency_ms=float(elapsed_ms),
+                            cost_usd=float(cost),
+                            quality=float(q),
+                            quality_breakdown=breakdown,
+                            message=str(msg or "").strip(),
+                            error=err_detail,
+                        )
+                    )
                 done += 1
                 if callable(progress):
                     try:
@@ -486,4 +607,53 @@ def run_benchmark(
             progress("done", {"done": done, "total": total_runs})
         except Exception:
             pass
+    return results, exclusions, details
+
+
+def run_benchmark(
+    models_map: dict[str, list[dict[str, Any]]],
+    *,
+    per_provider_limit: int | None = None,
+    request_timeout: float | None = None,
+    debug: bool = False,
+    progress: Any | None = None,
+    only_providers: Iterable[str] | None = None,
+    only_models: Iterable[str] | None = None,
+) -> tuple[list[BenchResult], list[BenchExclusion]]:
+    results, exclusions, _details = _run_benchmark_impl(
+        models_map,
+        per_provider_limit=per_provider_limit,
+        request_timeout=request_timeout,
+        debug=debug,
+        progress=progress,
+        only_providers=only_providers,
+        only_models=only_models,
+        include_details=False,
+        provider_model_allowlist=None,
+    )
     return results, exclusions
+
+
+def run_benchmark_detailed(
+    models_map: dict[str, list[dict[str, Any]]],
+    *,
+    per_provider_limit: int | None = None,
+    request_timeout: float | None = None,
+    debug: bool = False,
+    progress: Any | None = None,
+    only_providers: Iterable[str] | None = None,
+    only_models: Iterable[str] | None = None,
+    provider_model_allowlist: dict[str, set[str]] | None = None,
+) -> tuple[list[BenchResult], list[BenchExclusion], list[BenchSampleDetail]]:
+    results, exclusions, details = _run_benchmark_impl(
+        models_map,
+        per_provider_limit=per_provider_limit,
+        request_timeout=request_timeout,
+        debug=debug,
+        progress=progress,
+        only_providers=only_providers,
+        only_models=only_models,
+        include_details=True,
+        provider_model_allowlist=provider_model_allowlist,
+    )
+    return results, exclusions, list(details or [])
