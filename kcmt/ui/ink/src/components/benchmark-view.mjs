@@ -3,7 +3,7 @@ import {Box, Text, useInput} from 'ink';
 import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import gradient from 'gradient-string';
-import {AppContext} from '../app.mjs';
+import {AppContext} from '../app-context.mjs';
 const h = React.createElement;
 
 const titleGradient = gradient(['#f6d365', '#fda085']);
@@ -173,7 +173,7 @@ function renderProviderSections(payload) {
   return sections;
 }
 
-export default function BenchmarkView({onBack}) {
+export default function BenchmarkView({onBack} = {}) {
   const {backend, argv} = useContext(AppContext);
   const [status, setStatus] = useState('running');
   const [progress, setProgress] = useState({label: 'Preparing providers…'});
