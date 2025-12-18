@@ -21,7 +21,7 @@ const initialMode = argv.benchmark
   ? 'benchmark'
   : argv.configure || argv['configure-all']
     ? 'configure'
-    : null;
+    : 'workflow';
 
 const h = React.createElement;
 const gradientBanner = gradient(['#4facfe', '#00f2fe']);
@@ -50,7 +50,7 @@ export default function App() {
   const [bootstrap, setBootstrap] = useState(null);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
-  const [view, setView] = useState(initialMode || 'menu');
+  const [view, setView] = useState(initialMode || 'workflow');
   const initialisedRef = useRef(false);
 
   const refreshBootstrap = useCallback(async () => {
