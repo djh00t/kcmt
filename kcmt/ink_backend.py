@@ -58,7 +58,10 @@ def _serialise(value: Any) -> Any:
 
 def _emit(event: str, payload: Dict[str, Any]) -> None:
     message = {"event": event, "payload": _serialise(payload)}
-    target = sys.stderr if event == "tick" else sys.stdout
+    # NOTE: use the original interpreter streams so our JSON event protocol is
+    # not swallowed by redirect_stdout/redirect_stderr contexts used elsewhere
+    # to suppress incidental prints from third-party code.
+    target = sys.__stderr__ if event == "tick" else sys.__stdout__
     target.write(json.dumps(message) + "\n")
     target.flush()
 
