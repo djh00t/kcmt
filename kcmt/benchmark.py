@@ -337,9 +337,7 @@ def _run_benchmark_impl(
     provider_model_counts: dict[str, int] = {}
     total_runs = 0
 
-    provider_filter = (
-        {str(p) for p in only_providers} if only_providers else None
-    )
+    provider_filter = {str(p) for p in only_providers} if only_providers else None
     model_filter = {str(m) for m in only_models} if only_models else None
 
     if provider_filter is None:
@@ -368,15 +366,11 @@ def _run_benchmark_impl(
         subset = items
 
         allowlist = (
-            provider_model_allowlist.get(provider)
-            if provider_model_allowlist
-            else None
+            provider_model_allowlist.get(provider) if provider_model_allowlist else None
         )
         if allowlist is not None:
             subset = [
-                item
-                for item in subset
-                if str(item.get("id", "")).strip() in allowlist
+                item for item in subset if str(item.get("id", "")).strip() in allowlist
             ]
 
         if model_filter is not None:
@@ -543,9 +537,7 @@ def _run_benchmark_impl(
                     diff_for_details = diff_text
                     if len(diff_for_details) > 2000:
                         diff_for_details = (
-                            diff_for_details[:1500]
-                            + "\n…\n"
-                            + diff_for_details[-400:]
+                            diff_for_details[:1500] + "\n…\n" + diff_for_details[-400:]
                         )
                     breakdown_raw = score_payload.get("breakdown")
                     breakdown: dict[str, float] = {}
