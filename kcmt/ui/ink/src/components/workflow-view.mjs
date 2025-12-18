@@ -166,7 +166,7 @@ export default function WorkflowView({onBack}) {
       verbose: argv.verbose,
       oneshot: Boolean(argv.oneshot),
       singleFile: argv.file,
-      autoPush: argv['auto-push'] ? true : argv['no-auto-push'] ? false : undefined,
+      autoPush: argv['no-auto-push'] ? false : true,
       compact: Boolean(argv.compact || argv.summary),
     };
     const emitter = backend.runWorkflow(payload);
@@ -575,46 +575,15 @@ export default function WorkflowView({onBack}) {
     if (overallProgress) {
       footerElements.push(h(Text, {key: 'overall-progress'}, overallProgress));
     }
-    footerElements.push(
-      h(Text, {key: 'progress-headings', dimColor: true}, chalk.dim('stage │ Δ diff/total │ req/res │ ready/total │ ✓ │ ✗ │ commits/s')),
-    );
-    if (currentProgressLine) {
-      footerElements.push(h(Text, {key: 'progress-live'}, currentProgressLine));
-    }
     footerElements.push(h(Text, {key: 'aggregate-live'}, buildAggregateLine()));
-    footerElements.push(h(Text, {key: 'footer-running', dimColor: true}, h(Spinner, {type: 'runner'}), ' Press ESC to abort.'));
   }
 
   if (status !== 'running') {
-    // Compact completion view - no redundant stage lines or commit subject repetition
-    if (summary) {
-      const summaryLines = [];
-      const resultSummary = summary?.result?.summary;
-      if (resultSummary) {
-        summaryLines.push(h(Text, {key: 'summary-head', color: 'greenBright'}, resultSummary));
-      }
-      // Commit subjects already shown under each file's progress bar - don't repeat
-      if (summaryLines.length) {
-        footerElements.push(
-          h(Text, {key: 'summary-gap'}, ''),
-          ...summaryLines,
-        );
-      }
+    const overallProgress = buildOverallProgressBar();
+    if (overallProgress) {
+      footerElements.push(h(Text, {key: 'overall-progress-done'}, overallProgress));
     }
-    if (errors.length) {
-      footerElements.push(
-        h(Text, {key: 'errors-gap'}, ''),
-        h(Text, {key: 'errors-title', color: 'redBright'}, 'Issues'),
-        ...errors.slice(-5).map((err, idx) => h(Text, {key: `error-${idx}`, dimColor: true}, `• ${err}`)),
-      );
-    }
-    const exitText = status === 'error'
-      ? 'Workflow finished with issues. Returning to your shell...'
-      : 'Workflow complete. Returning to your shell...';
-    footerElements.push(
-      h(Text, {key: 'footer-gap'}, ''),
-      h(Text, {key: 'footer-complete', dimColor: true}, exitText),
-    );
+    footerElements.push(h(Text, {key: 'aggregate-done'}, buildAggregateLine()));
   }
 
   const rootProps = {flexDirection: 'column', paddingX: 0, paddingY: 0};
