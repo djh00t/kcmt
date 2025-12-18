@@ -7,6 +7,8 @@ from kcmt.core import KlingonCMTWorkflow
 def test_meta_files_skipped(tmp_path, monkeypatch):
     os.chdir(tmp_path)
     os.system("git init -q")
+    os.system("git config user.name tester")
+    os.system("git config user.email tester@example.com")
     (tmp_path / ".gitignore").write_text("*.pyc\n")
     (tmp_path / ".gitattributes").write_text("* text=auto\n")
     (tmp_path / ".gitmodules").write_text('[submodule "x"]\n')
