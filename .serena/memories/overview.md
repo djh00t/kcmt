@@ -1,4 +1,0 @@
-- Purpose: Python CLI and library that stages Git changes atomically and generates conventional commit messages with LLM providers (OpenAI, Anthropic, xAI, GitHub Models). Helps manage multi-file diffs by committing file-by-file with validation, retries, optional auto-push, and configuration wizard.
-- Tech stack: Python 3.12+, packaged via Hatch/uv. Depends on openai client, httpx, requests, genai-prices. CLI entry point `kcmt.main:main` exposes `kcmt`, `commit`, `kc` commands.
-- Structure: `kcmt/` package (cli handling, core workflow, Git helpers, config management, LLM drivers/providers). `kcmt/providers/` contains provider-specific drivers and pricing enrichment. Tests live in `tests/`. Makefile offers common dev targets. README documents usage/configuration.
-- Environment: Runs on Darwin in repo `kcmt` (monorepo subdir). Requires API keys for selected LLM provider stored via `.kcmt/config.json`.
