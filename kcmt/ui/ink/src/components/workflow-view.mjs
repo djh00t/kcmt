@@ -130,6 +130,7 @@ export default function WorkflowView({onBack} = {}) {
   const HEADER_ROWS = 7;
   const FOOTER_ROWS = 2;
   const FILE_ROWS = 2;
+  const COMPLETION_EXIT_DELAY_MS = 1000;
 
   function getFileViewportCount() {
     const rows = stdoutRows || 30;
@@ -337,6 +338,9 @@ export default function WorkflowView({onBack} = {}) {
     if (status === 'running') {
       return undefined;
     }
+    if (pushState === 'pushing') {
+      return undefined;
+    }
     const exitCode = status === 'error' ? 1 : 0;
     const timer = setTimeout(() => {
       if (emitterRef.current && typeof emitterRef.current.cancel === 'function') {
@@ -344,10 +348,10 @@ export default function WorkflowView({onBack} = {}) {
       }
       emitterRef.current = null;
       process.exit(exitCode);
-    }, 750);
+    }, COMPLETION_EXIT_DELAY_MS);
 
     return () => clearTimeout(timer);
-  }, [status]);
+  }, [status, pushState]);
 
   const provider = bootstrap?.config?.provider || 'openai';
   const repo = ellipsize(bootstrap?.repoRoot || '', lineWidth ? lineWidth - 15 : undefined);
@@ -559,6 +563,10 @@ export default function WorkflowView({onBack} = {}) {
       progressPct += 5;   // Full push
     } else if (status === 'completed' && committed === total) {
       progressPct += 5;   // Assume push done if all committed and completed
+    }
+
+    if (status === 'completed' && pushState !== 'pushing') {
+      progressPct = 100;
     }
     
     progressPct = Math.min(100, Math.max(0, progressPct));
