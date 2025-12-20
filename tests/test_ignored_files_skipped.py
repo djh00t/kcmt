@@ -59,13 +59,13 @@ def test_ignored_files_are_not_committed(tmp_path, monkeypatch):
 
     file_commits = [r for r in results.get("file_commits", []) if r.success]
     committed_paths = [r.file_path for r in file_commits]
-    
+
     # Verify expected files are committed
     assert ".gitignore" in committed_paths, "Expected .gitignore to be committed"
     assert any(
         path.endswith("keep.py") for path in committed_paths
     ), "Expected keep.py to be committed"
-    
+
     # Ensure no files from the ignored directory were committed
     assert not any(
         "ignored_dir" in path for path in committed_paths
