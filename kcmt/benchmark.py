@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .config import (
-    Config,
     DEFAULT_MODELS,
     PROVIDER_DISPLAY_NAMES,
+    Config,
     load_config,
     state_dir,
 )
@@ -861,9 +861,7 @@ def render_benchmark_markdown_report(
 
     lines.append("")
     lines.append("## Test Suite")
-    lines.append(
-        "| Sample | Scenario | Intent | Files | Changed lines |"
-    )
+    lines.append("| Sample | Scenario | Intent | Files | Changed lines |")
     lines.append("| --- | --- | --- | --- | --- |")
     for name, diff_text in sample_diffs():
         meta = _SAMPLE_METADATA.get(name, {})
@@ -893,9 +891,7 @@ def render_benchmark_markdown_report(
     lines.append(
         "| Quality | Average 0-100 score from the rubric below, based on conventional commit adherence. |"
     )
-    lines.append(
-        "| Success | Successful responses divided by total samples. |"
-    )
+    lines.append("| Success | Successful responses divided by total samples. |")
     lines.append("| Runs | Number of samples executed per model. |")
 
     lines.append("")
@@ -915,9 +911,7 @@ def render_benchmark_markdown_report(
     lines.append(
         "| Body | 10 | Body present when diffs are at least 10 changed lines. |"
     )
-    lines.append(
-        "| Penalties | -5 each | Generic words; -2 for trailing period. |"
-    )
+    lines.append("| Penalties | -5 each | Generic words; -2 for trailing period. |")
     lines.append(
         "Quality is the sum of components (minus penalties), clamped to 0-100, then averaged across samples."
     )
@@ -993,9 +987,7 @@ def render_benchmark_markdown_report(
             label = PROVIDER_DISPLAY_NAMES.get(provider, provider)
             lines.append("")
             lines.append(f"### {label}")
-            lines.append(
-                "| Model | Latency (ms) | Cost | Quality | Success | Runs |"
-            )
+            lines.append("| Model | Latency (ms) | Cost | Quality | Success | Runs |")
             lines.append("| --- | --- | --- | --- | --- | --- |")
             for item in rows:
                 lines.append(
