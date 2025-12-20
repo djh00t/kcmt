@@ -2,6 +2,9 @@
 
 ### Feat
 
+- **cli**: add benchmark markdown report generation
+- **benchmark**: Add markdown report generation
+- **benchmark**: add datetime and pathlib imports
 - **ci**: add release notes workflow
 - **hooks**: add commit-msg hook for conventional commits
 - **build**: add automated git tag and push to release
