@@ -161,6 +161,8 @@ release: build
 	TWINE_NON_INTERACTIVE=1 \
 	twine upload dist/*
 	@echo "Released version $(VERSION) to PyPI"
+	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
+	@git push origin v$(VERSION)
 
 # Development workflow shortcuts
 dev-setup: install-dev
