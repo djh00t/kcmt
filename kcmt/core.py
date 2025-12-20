@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .commit import CommitGenerator
@@ -344,7 +345,8 @@ class KlingonCMTWorkflow:
     def _process_deletions_first(
         self, status_entries: Optional[list[tuple[str, str]]] = None
     ) -> List[CommitResult]:
-        """Process all deletions first with a single commit."""
+        """Process all deletions first with per-file commits."""
+
         results: List[CommitResult] = []
 
         deletions_start = time.perf_counter()
@@ -357,29 +359,38 @@ class KlingonCMTWorkflow:
         if not deleted_files:
             return results
 
-        commit_message = "chore: remove deleted files\n\nRemoved files:\n" + "\n".join(
-            f"- {f}" for f in deleted_files
-        )
+        for file_path in deleted_files:
+            commit_message = self._generate_deletion_commit_message(file_path)
+            try:
+                validated_message = (
+                    self.commit_generator.validate_and_fix_commit_message(
+                        commit_message
+                    )
+                )
+            except ValidationError:
+                validated_message = commit_message
 
-        try:
-            validated_message = self.commit_generator.validate_and_fix_commit_message(
-                commit_message
+            result = self._attempt_commit(
+                validated_message,
+                max_retries=self.max_retries,
+                file_path=file_path,
             )
-        except ValidationError:
-            validated_message = self._generate_deletion_commit_message(deleted_files)
+            results.append(result)
 
-        result = self._attempt_commit(
-            validated_message,
-            max_retries=self.max_retries,
-        )
-        results.append(result)
         return results
 
-    def _generate_deletion_commit_message(self, deleted_files: List[str]) -> str:
-        """Generate a commit message for deleted files."""
-        if len(deleted_files) == 1:
-            return f"chore: remove {deleted_files[0]}"
-        return f"chore: remove {len(deleted_files)} files"
+    def _sanitize_scope(self, file_path: str) -> str:
+        """Normalize a file path into a conventional commit scope."""
+
+        scope = Path(file_path).name
+        scope = re.sub(r"[^A-Za-z0-9_-]+", "-", scope).strip("-")
+        return scope or "file"
+
+    def _generate_deletion_commit_message(self, file_path: str) -> str:
+        """Generate a per-file deletion commit message."""
+
+        scope = self._sanitize_scope(file_path)
+        return f"chore({scope}): file deleted"
 
     def _process_per_file_commits(
         self, status_entries: Optional[list[tuple[str, str]]] = None
@@ -400,13 +411,6 @@ class KlingonCMTWorkflow:
         non_deletion_files = [
             entry for entry in all_changed_files if "D" not in entry[0]
         ]
-
-        # Skip control/meta files that shouldn't usually receive their own
-        # atomic commits to avoid surprising commits (e.g. tests expecting
-        # .gitignore to be ignored). These can still be committed manually
-        # via --file if desired.
-        META_SKIP = {".gitignore", ".gitattributes", ".gitmodules"}
-        non_deletion_files = [e for e in non_deletion_files if e[1] not in META_SKIP]
 
         if not non_deletion_files:
             return results

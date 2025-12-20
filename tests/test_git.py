@@ -84,7 +84,7 @@ def test_process_deletions_first_stages_deleted(monkeypatch, tmp_path):
     repo = object.__new__(GitRepo)
     repo.repo_path = tmp_path
 
-    calls = []
+    calls: list[list[str]] = []
 
     def fake_porcelain(self):
         return [
@@ -93,15 +93,19 @@ def test_process_deletions_first_stages_deleted(monkeypatch, tmp_path):
             ("D ", "dir/file2.py"),
         ]
 
-    def fake_stage(file_path):
-        calls.append(file_path)
+    def fake_run(self, args, env=None):  # noqa: ARG001
+        calls.append(args)
+        return ""
 
     monkeypatch.setattr(GitRepo, "_run_git_porcelain", fake_porcelain)
-    monkeypatch.setattr(GitRepo, "stage_file", lambda self, p: fake_stage(p))
+    monkeypatch.setattr(GitRepo, "_run_git_command", fake_run)
 
     deleted = GitRepo.process_deletions_first(repo)
     assert deleted == ["file1.txt", "dir/file2.py"]
-    assert calls == ["file1.txt", "dir/file2.py"]
+    assert calls == [
+        ["update-index", "--force-remove", "--", "file1.txt"],
+        ["update-index", "--force-remove", "--", "dir/file2.py"],
+    ]
 
 
 def _make_result(stdout: str = "", returncode: int = 0, stderr: str = ""):

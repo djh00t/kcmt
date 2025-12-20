@@ -91,7 +91,14 @@ venv.bak/
 **/package-lock.json
 **/yarn.lock
 
+# UV ignores
+.uv-cache/
+
+# kcmt ignores
+.kcmt/
+
 # Project specific
+.serena/
 test-
 .kcmt/last_run.json
 

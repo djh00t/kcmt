@@ -37,7 +37,9 @@ def test_deletion_only_commit(tmp_path, monkeypatch):
     res = wf.execute_workflow()
     deletions = res["deletions_committed"]
     assert deletions, "Expected a deletion commit"
+    assert len(deletions) == 1
     assert deletions[0].success
-    assert deletions[0].message.startswith("chore: remove")
+    assert deletions[0].message == "chore(delete_me-txt): file deleted"
+    assert deletions[0].file_path == "delete_me.txt"
 
     clear_active_config()
