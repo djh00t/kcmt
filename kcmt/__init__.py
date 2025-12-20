@@ -3,7 +3,7 @@
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
 # Public API (lazy-exported to avoid import-time side effects)
 __all__ = [
