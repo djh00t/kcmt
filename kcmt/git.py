@@ -320,7 +320,9 @@ class GitRepo:
             if "D" not in status:
                 continue
             deleted_files.append(file_path)
-            self.stage_file(file_path)
+            # Stage deletions even when the working tree file no longer exists.
+            # `git add <path>` fails for removed files; use update-index instead.
+            self._run_git_command(["update-index", "--force-remove", "--", file_path])
 
         return deleted_files
 
