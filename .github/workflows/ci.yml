@@ -70,6 +70,14 @@ jobs:
       - name: Install project (editable)
         run: uv pip install -e .
 
+      - name: Commit message lint (push)
+        if: github.event_name != 'pull_request'
+        run: uv run cz check --rev-range HEAD~20..HEAD
+
+      - name: Commit message lint (pull request)
+        if: github.event_name == 'pull_request'
+        run: uv run cz check --rev-range origin/${{ github.base_ref }}..HEAD
+
       - name: Ruff (lint)
         run: uv run ruff check kcmt tests
 
