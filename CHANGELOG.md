@@ -1,0 +1,308 @@
+## Unreleased
+
+### Feat
+
+- **ci**: add release notes workflow
+- **hooks**: add commit-msg hook for conventional commits
+- **build**: add automated git tag and push to release
+- **release**: add user agent to PyPI uploads
+- **openai**: add transient error fallback for integration tests
+- **config**: add benchmark configuration to settings
+- **ui**: add details view with scrolling for benchmark
+- **llm**: add env var to disable body enrichment
+- **api**: enhance benchmark with details and provider filtering
+- **ui**: add AppContext for Ink UI
+- **ui**: enhance workflow view scrolling and text wrapping
+- **config**: add hydration for configure view component
+- **ui**: improve terminal error handling and restoration
+- **models**: add caching to model listing
+- **ui**: simplify workflow view footer display
+- **ui**: enhance workflow status and progress display
+- **ui**: add lazy loading for provider models
+- **client**: add listModels method
+- **ui**: enhance workflow view with file metadata and summary
+- **ui**: add file list view with progress and toggle mode
+- **ui**: set default view to workflow
+- **ui**: add file state tracking for Ink UI
+- **cli**: prefer Ink by default for interactive TTY sessions
+- **build**: add ruff auto-fix and update check target
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **test**: stubbed commit message
+- **config**: enforce minimum batch timeout
+- **test**: stubbed commit message
+- **core**: add progress header display
+- **ui**: enhance progress display in workflow view
+- **ui**: add diffs, requests, and responses to workflow view
+- **core**: add diff, request, and response tracking to stats
+- **ui**: add progress legend to workflow view footer
+- **ui**: add terminal width handling for progress lines
+- **ui**: Add text ellipsizing for terminal width
+- **ui**: enhance provider configuration with model selection and batch…
+- **ui**: add alt screen buffer support to TUI
+- **test**: stubbed commit message
+- **ui**: add OpenAI batch mode workflow
+- **api**: add batch and responses fallback
+- **api**: support batch progress options
+- **config**: improve batch options and install
+- **core**: handle progress and batch config
+- **core**: add workflow progress events
+- **config**: store config globally
+- **core**: add spinner progress handling for commits
+- **coverage**: update coverage configuration to include additional files
+- **ui**: allow quitting workflow with 'q' at any time
+- **ui**: Initialize view based on CLI flags
+- **config**: add argv support to bootstrap action
+- **ui**: display exclusions in empty benchmark view
+- **ui**: add structured error handling for stderr
+- **backend**: redirect tick events to stderr
+- **ui**: enhance workflow view with progress tracking and logging
+- **ui**: enhance configuration with provider and priority management
+- **ui**: align benchmark score columns to right
+- **config**: refactor provider configuration to support multiple…
+- **config**: enhance provider config and workflow metrics
+- **config**: add model priorities and preferred models
+- **ui**: Enhance file commit display in workflow view
+- **ui**: enhance benchmark view with provider sections
+- **ui**: add viewport priming for ink TUI
+- **cli**: add sanity checks for API key and endpoint mix-ups
+- **config**: add sanitization and auto-correction for LLM config
+- **cli**: Add auto-installation of Ink UI dependencies
+- **cli**: add Ink runtime availability check
+- **cli**: add ink ui frontend
+- **pricing**: add offline mode support
+- **openai**: add close method for resource cleanup
+- **providers**: Add close method to BaseDriver
+- **anthropic**: add resource management for HTTP clients
+- **llm**: add resource management to LLMClient
+- **tests**: add mock fixture for Anthropic messages API
+- prompt to install commitizen when missing
+- **config**: switch primary LLM to X.AI
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **core**: adjust something
+- **deps**: enable HTTP/2 support for httpx
+- **openai**: add pooled HTTP client for API requests
+- **anthropic_driver**: add system prompt support and optimize HTTP…
+- **git**: add method to get head diff for paths
+- **core**: add batched diff building and worker concurrency
+- **commit**: add memoization and fast path for small diffs
+- **cli**: add --workers option for LLM concurrency control
+- **config**: update models and add secondary provider
+- **docs**: update README to include new environment variables and connection pooling details
+- **benchmark**: add LLM commit message generation benchmarking
+- **config**: add env.example for API provider keys
+- **benchmarks**: add benchmark results for 2025-10-03
+- **bench**: add benchmark results for 2025-10-03
+- **benchmarks**: add benchmark results for AI models
+- **benchmarks**: add performance benchmark results
+- **benchmarks**: add benchmark results file
+- **llm**: add retry logic for missing commit header errors
+- **config**: add per-provider settings support
+- **cli**: add configuration and benchmarking options
+- **config**: update provider configurations and enable auto push
+- **config**: set default auto_push to True
+- **cli**: add --no-auto-push option to disable auto push
+- **config**: add optional secondary provider config fields
+- **generator**: add secondary provider fallback
+- **cli**: add interactive model selection with pricing and secondary…
+- **config**: add secondary LLM provider configuration
+- **core**: integrate provider-specific default timeouts
+- **providers**: add dynamic default request timeout resolution
+- **providers**: add default timeouts for providers
+- **anthropic**: use default request timeout resolution
+- **llm**: add provider-specific default request timeout
+- **gitignore**: add test- directory to ignore list
+- **openai**: add async client support
+- **anthropic**: add async invoke and request timeout support
+- **llm**: add request timeout support
+- **cmt**: add adaptive timeouts and timeout support to commit…
+- **commit**: add request_timeout parameter support
+- **llm**: add async support for LLM providers
+- **commit**: add async method for LLM-based commit message generation
+- **core**: update last run snapshot
+- **core**: update last run snapshot
+- **core**: add last run snapshot persistence
+- **core**: add async commit preparation and performance metrics
+- **cli**: add status command and compact mode
+- **docs**: add built-in metrics summary feature
+- **core**: add failure limit notification in workflow preparation
+- **config**: enable auto push
+- **core**: add verbose logging and improve error handling
+- **config**: switch LLM provider to xAI
+- add uv.lock
+- **core**: add core.py implementation
+- **core**: add periodic debug heartbeats
+- **core**: add git.py implementation
+- **core**: add core.py implementation
+- **core**: add cli.py implementation
+- **core**: add optional workflow profiling
+- **core**: add startup profiling timers
+- **core**: add find_git_repo_root helper
+- **core**: add XAI driver for OpenAI-compatible API
+- **core**: add provider BaseDriver abstraction
+- **core**: add pricing.py implementation
+- **api**: add Anthropic LLM provider driver
+- **core**: add openai_driver.py implementation
+- **core**: add heuristic commit generators
+- **core**: add heuristic short-circuits and fallback
+- **core**: add cli.py implementation
+- **core**: drivers and LLM output sanitization
+- **core**: add get_file_diff_text helper
+- **core**: per-file prepare timeout and debug logs
+- **core**: skip meta files from auto-commits
+- **config**: persist boolean feature flags
+- **core**: add push method to GitRepo
+- **core**: add auto-push functionality after commits
+- **config**: add auto_push configuration option
+- **config**: add --auto-push option
+- **config**: add allow_fallback config option
+- **config**: add --allow-fallback CLI option
+- **git**: add check for ignored paths in status
+- **core**: add retry logic for LLM commit message generation
+- **tests**: add pytest fixture for config reset
+- **config**: Add Serena project configuration for kcmt
+- **config**: add kcmt tool configuration file
+- **core**: expand untracked directories in status
+- **core**: enhance git operations for selective commits
+- **core**: add commit.py
+- **cli**: allow proceeding without API key in test mode
+- **core**: add cli.py implementation
+- **core**: add debug logging to openai api calls
+- **build**: add strict test and typecheck targets
+- **build**: add comprehensive Makefile for project automation
+- **core**: add handling for large diffs
+- **config**: add comprehensive gitignore file
+- **init**: add initial implementation of kcmt package with lazy attribute loading
+
+### Fix
+
+- **git**: stage deleted files using update-index
+- **tests**: remove trailing space from stub return string
+- **ui**: handle '--' separator in CLI args
+- **backend**: use original streams to avoid redirection
+- **tests**: fix remaining 4 failing tests and formatting
+- **tests**: fix 3 failing unit tests
+- **types**: resolve all mypy strict mode errors
+- **cli**: add type ignore comments for mypy strict mode
+- **config,cli**: address PR review comments
+- **api**: enforce batch timeout, emit progress
+- **config**: enforce minimum batch timeout
+- **config**: enforce minimum batch timeout
+- **core**: remove trailing spaces from progress rate display
+- **ui**: exit process when workflow completes
+- **core**: enforce utf-8 on git subprocess
+- **tests**: use config_file_path helper
+- **ui**: handle status and safe cancel
+- **ui**: ensure save methods return promises
+- **cli**: resolve ink backend regressions
+- update kcmt/ui/ink/src/backend-client.mjs
+- update kcmt/ui/ink/src/components/workflow-view.mjs
+- update kcmt/core.py
+- **openai-drive**: update kcmt/providers/openai_driver.py
+- **tests**: remove redundant addopts from test-strict
+- **xai**: use timezone-aware UTC timestamps
+- **openai**: use timezone-aware timestamp to avoid deprecation
+- **git**: update kcmt/git.py
+- **xai-driver**: update kcmt/providers/xai_driver.py
+- **dependencies**: update httpx dependency to include HTTP/2 support
+- **providers**: set default request timeout to 5 seconds in…
+- **openai**: reduce default request timeout to 5 seconds
+- **workflow**: replace list with deque for retry queue to improve performance
+- **workflow**: implement retry mechanism for failed commit preparations
+- **tests**: update timeout test to track call counts and assert final attempt errors
+- **optional**: refresh openai loader caching
+- appease strict mypy typing
+- **git**: ensure commits have default identity
+- **config**: normalize repo and git paths
+- **config**: detect git repo root and normalize repo_path
+- **config**: prevent reusing persisted values across providers
+- **config**: correct commit type for config file updates
+- **config**: avoid reusing old provider's api_key_env
+
+### Refactor
+
+- **core**: switch deletion processing to per-file commits
+- **llm**: split disable_enrichment line
+- **backend**: enhance type safety and code clarity
+- **benchmark**: condense multi-line expressions
+- **benchmark**: extract impl and add detailed mode
+- **ui**: update AppContext import and default props
+- **ui**: update import path and add default props
+- **ui**: implement lazy loading for UI views
+- **ui**: improve workflow view responsiveness
+- **tests**: improve reset_config fixture
+- **core**: centralize and improve progress rendering
+- **cli**: simplify legacy CLI detection logic
+- **config**: add safe JSON loading with encoding tolerance
+- **ui**: simplify log and error handling in workflow view
+- **ui**: simplify viewport priming logic
+- **config**: add model priorities and remove legacy fields
+- **provider**: support multiple LLM providers with priority…
+- **ui**: replace JSX with React.createElement
+- **ui**: replace JSX with React.createElement
+- **ui**: convert JSX to React.createElement
+- **ui**: replace JSX with React.createElement
+- **ui**: switch JSX to React.createElement in app.mjs
+- **core**: simplify prepare_fn argument passing
+- **typing**: remove unused type import
+- **cli**: add type hint and simplify filter logic
+- **benchmark**: add model count tracking and simplify code
+- **config**: remove secondary provider and openai preferred model
+- **tests**: condense file_path assignment
+- **llm**: format code for better readability
+- **git**: improve code formatting and remove unused imports
+- **core**: reformat code for improved readability
+- **config**: improve load_config readability
+- **commit**: improve code formatting for readability
+- **cli**: format help strings and wrap lines
+- **benchmark**: clean up imports and improve code formatting
+- **xai**: optimize HTTP client usage in list_models
+- **llm**: update Anthropic prompt handling and system text building
+- **core**: optimize prepare commit messages workflow
+- **tests**: update test to verify LLM usage for all diffs
+- **tests**: remove deprecated allow_fallback
+- **tests**: remove redundant assertions and allow-fallback option
+- **llm**: remove fallback heuristics and enforce strict output…
+- **git**: optimize status operations
+- **config**: remove allow_fallback config option
+- **commit**: remove heuristic fallbacks and short-circuits
+- **cli**: remove allow-fallback option and enhance output
+- **config**: simplify config loading and persistence
+- **core**: remove fallback heuristic generation
+- **tests**: reorder import statements for consistency
+- **tests**: reorder imports and test setup
+- **core**: improve code
+- **core**: remove unused diff line counting
+- **config**: enhance config loading and state management
+- **core**: enhance heuristic fallback for commit messages
+- **core**: improve LLM error handling in commit generator
+- **core**: enhance error handling in commit preparation
+- **core**: update core.py
+- **core**: make file commits atomic
+- **cli**: improve API key error handling and workflow compatibility
+
+### Perf
+
+- **ui**: optimize workflow view loading
+- **cli**: add fast path for node dependency check
+- **backend**: optimize bootstrap with lazy model catalog loading
+- **benchmarks**: add benchmark results for AI models
+- **core**: accelerate workflow setup on large repos
+- **core**: accelerate workflow and refresh cli ui
+- **core**: profile git-status and diff collection
