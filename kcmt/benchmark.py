@@ -109,6 +109,30 @@ index 999..aaa 100644
     ]
 
 
+_SAMPLE_METADATA: dict[str, dict[str, str]] = {
+    "feature-add": {
+        "scenario": "math helper gain",
+        "intent": "Adds a guarded divide helper including error handling",
+    },
+    "bugfix-conditional": {
+        "scenario": "auth guard fix",
+        "intent": "Tightens a conditional to avoid null dereferences",
+    },
+    "docs-update": {
+        "scenario": "README polish",
+        "intent": "Rewords usage copy in Markdown",
+    },
+    "refactor-utils": {
+        "scenario": "slugify cleanup",
+        "intent": "Refactors a helper to normalize whitespace and characters",
+    },
+    "tests-add": {
+        "scenario": "regression tests",
+        "intent": "Adds a focused regression test",
+    },
+}
+
+
 # -------------------------------
 # Scoring & utilities
 # -------------------------------
@@ -659,6 +683,34 @@ def run_benchmark_detailed(
     return results, exclusions, list(details or [])
 
 
+def _extract_diff_files(diff: str) -> list[str]:
+    files: list[str] = []
+    for line in diff.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        path = parts[2]
+        if path.startswith("a/"):
+            path = path[2:]
+        if path and path not in files:
+            files.append(path)
+    return files
+
+
+def _count_changed_lines(diff: str) -> int:
+    count = 0
+    for line in diff.splitlines():
+        if not line:
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            count += 1
+    return count
+
+
 def _fmt_money(value: float) -> str:
     if value < 1.0:
         return f"${value:.4f}"
@@ -754,8 +806,8 @@ def render_benchmark_markdown_report(
     total_models = len(results)
     total_runs = sum(r.runs for r in results)
     sample_count = params.get("samples")
-    if sample_count is None and results:
-        sample_count = max(r.runs for r in results)
+    if sample_count is None:
+        sample_count = len(sample_diffs())
 
     lines: list[str] = [
         "# kcmt Benchmark Report",
@@ -789,6 +841,87 @@ def render_benchmark_markdown_report(
     if exclusions:
         lines.append(f"- Exclusions: {len(exclusions)}")
 
+    lines.append("")
+    lines.append("## Workflow")
+    lines.append(
+        "1. Discover provider model catalogs and pricing based on available API keys."
+    )
+    lines.append(
+        "2. Apply provider/model filters and per-provider limits from the CLI/UI."
+    )
+    lines.append(
+        "3. For each model, run every sample diff from the test suite to generate a conventional commit message."
+    )
+    lines.append(
+        "4. Record latency per sample, estimate cost from token heuristics and pricing, and score message quality."
+    )
+    lines.append(
+        "5. Aggregate averages across samples to produce leaderboards and per-provider tables."
+    )
+
+    lines.append("")
+    lines.append("## Test Suite")
+    lines.append(
+        "| Sample | Scenario | Intent | Files | Changed lines |"
+    )
+    lines.append("| --- | --- | --- | --- | --- |")
+    for name, diff_text in sample_diffs():
+        meta = _SAMPLE_METADATA.get(name, {})
+        scenario = meta.get("scenario") or "-"
+        intent = meta.get("intent") or "-"
+        files = _extract_diff_files(diff_text)
+        files_display = ", ".join(files) if files else "-"
+        changed = _count_changed_lines(diff_text)
+        lines.append(
+            "| {sample} | {scenario} | {intent} | {files} | {changed} |".format(
+                sample=_escape_md(name),
+                scenario=_escape_md(scenario),
+                intent=_escape_md(intent),
+                files=_escape_md(files_display),
+                changed=str(changed),
+            )
+        )
+
+    lines.append("")
+    lines.append("## Metrics")
+    lines.append("| Metric | Definition |")
+    lines.append("| --- | --- |")
+    lines.append("| Latency (ms) | Average wall-clock time per sample. |")
+    lines.append(
+        "| Cost | Estimated USD per sample using token heuristics and per-1M token pricing. |"
+    )
+    lines.append(
+        "| Quality | Average 0-100 score from the rubric below, based on conventional commit adherence. |"
+    )
+    lines.append(
+        "| Success | Successful responses divided by total samples. |"
+    )
+    lines.append("| Runs | Number of samples executed per model. |")
+
+    lines.append("")
+    lines.append("## Scoring Rubric")
+    lines.append("| Component | Points | Notes |")
+    lines.append("| --- | --- | --- |")
+    lines.append(
+        "| Format | 30 | Subject matches conventional commit prefix with a standard type. |"
+    )
+    lines.append("| Scope | 10 | Scope included in the prefix when present. |")
+    lines.append(
+        "| Subject length | Up to 10 | Full points at or under 72 chars; 0.2 penalty per extra char (max 10). |"
+    )
+    lines.append(
+        "| Specificity | 0/12/20/30 | Keyword overlap between diff and subject. |"
+    )
+    lines.append(
+        "| Body | 10 | Body present when diffs are at least 10 changed lines. |"
+    )
+    lines.append(
+        "| Penalties | -5 each | Generic words; -2 for trailing period. |"
+    )
+    lines.append(
+        "Quality is the sum of components (minus penalties), clamped to 0-100, then averaged across samples."
+    )
+
     if not results:
         lines.append("")
         lines.append("_No benchmarkable models were run._")
@@ -796,6 +929,7 @@ def render_benchmark_markdown_report(
         leaderboards = _build_benchmark_leaderboards(results)
         lines.append("")
         lines.append("## Leaderboards")
+        lines.append("Top 10 models per category.")
 
         def _leaderboard_rows(items: list[BenchResult]) -> list[list[str]]:
             rows: list[list[str]] = []
