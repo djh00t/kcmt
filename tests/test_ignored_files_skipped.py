@@ -58,6 +58,10 @@ def test_ignored_files_are_not_committed(tmp_path, monkeypatch):
     results = wf.execute_workflow()
 
     file_commits = [r for r in results.get("file_commits", []) if r.success]
-    # Only the kept file should be committed
-    assert len(file_commits) == 1, file_commits
-    assert file_commits[0].file_path.endswith("keep.py")
+    # .gitignore and kept file should be committed, but not ignored_dir/skip.txt
+    assert len(file_commits) == 2, file_commits
+    committed_paths = [r.file_path for r in file_commits]
+    assert ".gitignore" in committed_paths
+    assert any(path.endswith("keep.py") for path in committed_paths)
+    # Ensure no files from the ignored directory were committed
+    assert not any("ignored_dir" in path for path in committed_paths)
