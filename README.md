@@ -1,4 +1,4 @@
-# kcmt — AI-powered atomic Git staging and committing
+# kcmt — Klingon Commit AI-powered atomic automated conventional commits
 
 kcmt is a small Python library and CLI that helps you:
 
@@ -30,24 +30,31 @@ Supported Python versions
 
 ## Installation
 
-Install from the repository with pip or uv:
+Install from PyPI or GitHub with pip or uv:
 
-- Latest from GitHub (subdirectory install):
+- PyPI:
   - pip:
-    - pip install "git+<https://github.com/djh00t/arby#subdirectory=kcmt>"
+    - pip install kcmt
   - uv:
-    - uv pip install "git+<https://github.com/djh00t/arby#subdirectory=kcmt>"
+    - uv pip install kcmt
 
-- Local editable install (from the monorepo root):
+- Latest from GitHub:
   - pip:
-    - pip install -e ./kcmt
+    - pip install "git+<https://github.com/djh00t/kcmt.git>"
   - uv:
-    - uv pip install -e ./kcmt
+    - uv pip install "git+<https://github.com/djh00t/kcmt.git>"
+
+- Local editable install (from the repo root):
+  - pip:
+    - pip install -e .
+  - uv:
+    - uv pip install -e .
 
 Dependencies
 
-- openai>=1.108.1 (shared client for OpenAI-compatible providers)
-- httpx>=0.25.0 (Anthropic REST client)
+- openai>=2.14.0 (shared client for OpenAI-compatible providers)
+- httpx[http2]>=0.28.1 (Anthropic REST client)
+- genai-prices>=0.0.49 (pricing board for --list-models)
 
 ## Configuration
 
@@ -247,45 +254,59 @@ adopts kcmt inherits the same conventional commit guardrails automatically.
 
 ## Library usage examples
 
-Basic: generate a message from staged changes
+### Generate a message from staged changes
 
-- from kcmt.config import load_config
-- cfg = load_config()
-- from kcmt.commit import CommitGenerator
-- gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
-- msg = gen.generate_from_staged(context="Refactor widgets", style="conventional")
-- print(msg)
+```python
+from kcmt.config import load_config
+from kcmt.commit import CommitGenerator
 
-Generate from working tree changes
+cfg = load_config()  # also sets the active config for other helpers
+gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
+msg = gen.generate_from_staged(context="Refactor widgets", style="conventional")
+print(msg)
+```
 
-- from kcmt.config import load_config
-- cfg = load_config()
-- from kcmt.commit import CommitGenerator
-- gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
-- msg = gen.generate_from_working(context="Work in progress", style="conventional")
-- print(msg)
+### Generate from working tree changes
 
-Run the full atomic workflow
+```python
+from kcmt.config import load_config
+from kcmt.commit import CommitGenerator
 
-- from kcmt.config import load_config
-- cfg = load_config()
-- from kcmt.core import KlingonCMTWorkflow
-- wf = KlingonCMTWorkflow(repo_path=cfg.git_repo_path, max_retries=3, config=cfg)
-- results = wf.execute_workflow()
-- print(results["summary"])
-- for r in results.get("file_commits", []):
-  - print(r.success, r.commit_hash, r.message)
+cfg = load_config()
+gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
+msg = gen.generate_from_working(context="Work in progress", style="conventional")
+print(msg)
+```
 
-Using GitRepo directly
+### Run the full atomic workflow
 
-- from kcmt.config import load_config
-- cfg = load_config()
-- from kcmt.git import GitRepo
-- repo = GitRepo(cfg.git_repo_path, cfg)
-- print(repo.get_working_diff())
-- if repo.has_working_changes():
-  - repo.stage_file("README.md")
-  - repo.commit("docs: update readme")
+```python
+from kcmt.config import load_config
+from kcmt.core import KlingonCMTWorkflow
+
+cfg = load_config()
+wf = KlingonCMTWorkflow(repo_path=cfg.git_repo_path, max_retries=3, config=cfg)
+results = wf.execute_workflow()
+
+print(results["summary"])
+for result in results.get("file_commits", []):
+    print(result.success, result.commit_hash, result.message)
+```
+
+### Use `GitRepo` directly
+
+```python
+from kcmt.config import load_config
+from kcmt.git import GitRepo
+
+cfg = load_config()
+repo = GitRepo(cfg.git_repo_path, cfg)
+
+print(repo.get_working_diff())
+if repo.has_working_changes():
+    repo.stage_file("README.md")
+    repo.commit("docs: update readme")
+```
 
 ## API documentation (high-level)
 
@@ -356,11 +377,10 @@ Core workflow
 
 Notes on behavior
 
-- Deletions are grouped and committed first with a generated message.
+- Deletions are committed first, one commit per deleted file with a generated message (`chore(<scope>): file deleted`).
 - Then remaining file changes are parsed from git diff and committed per-file.
 - Commit messages are validated and may be LLM-fixed on failure; retries are applied.
-- Enrichment pass: for substantial diffs (>=10 changed lines) a second LLM call may add a concise multi-line body explaining what and why while preserving the original header.
-- Fast fail: after retry exhaustion (currently 3 attempts) kcmt raises an `LLMError`; no heuristic commit message is generated.
+- Fast fail: after retry exhaustion (currently two LLM attempts per file) kcmt raises an `LLMError`; no heuristic commit message is generated.
 - If `--auto-push` is enabled and at least one commit succeeds, kcmt attempts `git push origin <current-branch>` and records the result (`results['pushed']=True`).
 
 ## Development
@@ -374,7 +394,7 @@ Prereqs
 Set up
 
 - uv venv &amp;&amp; source .venv/bin/activate  # or python -m venv .venv
-- uv pip install -e ./kcmt  # or pip install -e ./kcmt
+- uv pip install -e .  # or pip install -e .
 - uv pip install pytest            # or pip install pytest
 
 Run tests (from project root)
@@ -403,11 +423,7 @@ Security notes
 
 ## Changelog
 
-- 0.1.2 — Update default OpenAI model to `gpt-5-mini-2025-08-07` (automatic
-  migration from legacy `gpt-5-mini`), test helper env var
-  `KCMT_TEST_DISABLE_OPENAI` to bypass real API calls in isolated tests.
-- 0.1.1 — Auto-push option, improved retries, subject-only length enforcement.
-- 0.1.0 — Initial release: CLI + atomic workflow + LLM commit generation.
+- Current release: 0.3.2 — see GitHub Releases for full notes.
 
 ## License
 
