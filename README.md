@@ -421,6 +421,16 @@ Security notes
 - Treat it like any other secret; avoid checking it into logs or code.
 - Prefer passing the token via the CLI or securely provisioned environment.
 
+Git hook for commit messages
+
+- A `commit-msg` hook is provided under `.githooks/commit-msg` to enforce conventional commits locally. Enable it once per repo:
+
+```shell
+git config core.hooksPath .githooks
+```
+
+This runs `cz check` on commit messages and blocks non-compliant commits.
+
 ## Changelog
 
 - Current release: 0.3.2 — see GitHub Releases for full notes.
