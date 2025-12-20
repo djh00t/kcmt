@@ -34,6 +34,10 @@ jobs:
           uv run cz changelog --unreleased-version="$VERSION" --file CHANGELOG.generated.md
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Build distributions
+        run: |
+          uv run python -m build
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -42,3 +46,5 @@ jobs:
           body_path: release_notes.md
           files: |
             CHANGELOG.generated.md
+            dist/*.whl
+            dist/*.tar.gz
