@@ -61,10 +61,6 @@ pattern = "__version__\\s*=\\s*[\"'](?P<version>[^\"']+)[\"']"
 packages = ["kcmt"]
 include = ["LICENSE"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"kcmt/ui/ink" = "kcmt/ui/ink"
-
-
 [tool.hatch.build.targets.sdist]
 include = [
   "kcmt",
