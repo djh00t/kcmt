@@ -1,0 +1,44 @@
+name: Release Notes
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync dependencies (dev)
+        run: uv sync --group dev
+
+      - name: Generate release notes and changelog
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          uv run cz changelog --dry-run --unreleased-version="$VERSION" > release_notes.md
+          uv run cz changelog --unreleased-version="$VERSION" --file CHANGELOG.generated.md
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: v${{ steps.notes.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            CHANGELOG.generated.md
