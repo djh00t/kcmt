@@ -5,7 +5,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .config import DEFAULT_MODELS, Config, load_config
+from .config import (
+    DEFAULT_MODELS,
+    Config,
+    load_config,
+)
 from .exceptions import LLMError
 from .llm import LLMClient
 
@@ -649,3 +653,271 @@ def run_benchmark_detailed(
         provider_model_allowlist=provider_model_allowlist,
     )
     return results, exclusions, list(details or [])
+
+
+def _fmt_money(value: float) -> str:
+    if value < 1.0:
+        return f"${value:.4f}"
+    return f"${value:.2f}"
+
+
+def _escape_md(value: object) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return "-"
+    return text.replace("|", "\\|")
+
+
+def _build_benchmark_leaderboards(
+    results: list[BenchResult],
+) -> dict[str, list[BenchResult]]:
+    if not results:
+        return {
+            "overall": [],
+            "fastest": [],
+            "cheapest": [],
+            "best_quality": [],
+            "most_stable": [],
+        }
+
+    fastest = sorted(results, key=lambda r: (r.avg_latency_ms, r.avg_cost_usd))[:10]
+    cheapest = sorted(results, key=lambda r: (r.avg_cost_usd, r.avg_latency_ms))[:10]
+    best_quality = sorted(results, key=lambda r: (-r.quality, r.avg_latency_ms))[:10]
+    most_stable = sorted(results, key=lambda r: (-r.success_rate, r.avg_latency_ms))[
+        :10
+    ]
+
+    min_lat = min(r.avg_latency_ms for r in results)
+    max_lat = max(r.avg_latency_ms for r in results)
+    min_cost = min(r.avg_cost_usd for r in results)
+    max_cost = max(r.avg_cost_usd for r in results)
+
+    def _norm(val: float, low: float, high: float) -> float:
+        if high <= low:
+            return 1.0
+        return (val - low) / (high - low)
+
+    overall_pairs: list[tuple[float, BenchResult]] = []
+    for item in results:
+        quality_score = item.quality / 100.0
+        cost_score = 1.0 - _norm(item.avg_cost_usd, min_cost, max_cost)
+        latency_score = 1.0 - _norm(item.avg_latency_ms, min_lat, max_lat)
+        overall_score = 0.4 * quality_score + 0.3 * cost_score + 0.3 * latency_score
+        overall_pairs.append((overall_score, item))
+    overall = [
+        entry for _score, entry in sorted(overall_pairs, key=lambda kv: -kv[0])[:10]
+    ]
+
+    return {
+        "overall": overall,
+        "fastest": fastest,
+        "cheapest": cheapest,
+        "best_quality": best_quality,
+        "most_stable": most_stable,
+    }
+
+
+def render_benchmark_markdown_report(
+    results: list[BenchResult],
+    exclusions: list[BenchExclusion],
+    *,
+    timestamp: str,
+    repo_path: str,
+    params: dict[str, Any] | None = None,
+) -> str:
+    params = params or {}
+    clean_ts = timestamp.strip() if timestamp else ""
+    if not clean_ts:
+        clean_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    repo_display = repo_path or "."
+
+    provider_list: list[str] = []
+    providers_raw = params.get("providers")
+    if isinstance(providers_raw, (list, tuple, set)):
+        provider_list = [str(item) for item in providers_raw if str(item).strip()]
+    elif isinstance(providers_raw, str) and providers_raw.strip():
+        provider_list = [providers_raw.strip()]
+    if not provider_list:
+        provider_list = sorted({r.provider for r in results})
+
+    model_list: list[str] = []
+    models_raw = params.get("models")
+    if isinstance(models_raw, (list, tuple, set)):
+        model_list = [str(item) for item in models_raw if str(item).strip()]
+    elif isinstance(models_raw, str) and models_raw.strip():
+        model_list = [models_raw.strip()]
+
+    total_models = len(results)
+    total_runs = sum(r.runs for r in results)
+    sample_count = params.get("samples")
+    if sample_count is None and results:
+        sample_count = max(r.runs for r in results)
+
+    lines: list[str] = [
+        "# kcmt Benchmark Report",
+        "",
+        "## Run Summary",
+        f"- Timestamp: {clean_ts}",
+        f"- Repository: {repo_display}",
+    ]
+    if provider_list:
+        lines.append(f"- Providers: {', '.join(sorted(provider_list))}")
+    if model_list:
+        lines.append(f"- Model filter: {', '.join(sorted(model_list))}")
+
+    limit = params.get("limit")
+    if isinstance(limit, int) and limit > 0:
+        lines.append(f"- Per-provider limit: {limit}")
+
+    timeout = params.get("timeout")
+    if timeout is not None:
+        try:
+            timeout_val = float(timeout)
+            lines.append(f"- Request timeout (s): {timeout_val:.2f}")
+        except (TypeError, ValueError):
+            lines.append(f"- Request timeout (s): {timeout}")
+
+    if isinstance(sample_count, int) and sample_count > 0:
+        lines.append(f"- Samples per model: {sample_count}")
+
+    lines.append(f"- Total models: {total_models}")
+    lines.append(f"- Total runs: {total_runs}")
+    if exclusions:
+        lines.append(f"- Exclusions: {len(exclusions)}")
+
+    if not results:
+        lines.append("")
+        lines.append("_No benchmarkable models were run._")
+    else:
+        leaderboards = _build_benchmark_leaderboards(results)
+        lines.append("")
+        lines.append("## Leaderboards")
+
+        def _leaderboard_rows(items: list[BenchResult]) -> list[list[str]]:
+            rows: list[list[str]] = []
+            for idx, item in enumerate(items, start=1):
+                rows.append(
+                    [
+                        str(idx),
+                        _escape_md(item.provider),
+                        _escape_md(item.model),
+                        f"{item.avg_latency_ms:.1f}",
+                        _fmt_money(item.avg_cost_usd),
+                        f"{item.quality:.1f}",
+                        f"{item.success_rate:.0%}",
+                        str(item.runs),
+                    ]
+                )
+            return rows
+
+        def _render_table(headers: list[str], rows: list[list[str]]) -> None:
+            if not rows:
+                lines.append("_No results._")
+                return
+            lines.append("| " + " | ".join(headers) + " |")
+            lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+            for row in rows:
+                lines.append("| " + " | ".join(row) + " |")
+
+        sections = [
+            ("Overall", leaderboards.get("overall", [])),
+            ("Fastest", leaderboards.get("fastest", [])),
+            ("Cheapest", leaderboards.get("cheapest", [])),
+            ("Best Quality", leaderboards.get("best_quality", [])),
+            ("Most Stable", leaderboards.get("most_stable", [])),
+        ]
+        for title, rows in sections:
+            lines.append("")
+            lines.append(f"### {title}")
+            _render_table(
+                [
+                    "Rank",
+                    "Provider",
+                    "Model",
+                    "Latency (ms)",
+                    "Cost",
+                    "Quality",
+                    "Success",
+                    "Runs",
+                ],
+                _leaderboard_rows(rows),
+            )
+
+        lines.append("")
+        lines.append("## Results by Provider")
+        grouped: dict[str, list[BenchResult]] = {}
+        for item in results:
+            grouped.setdefault(item.provider, []).append(item)
+        for provider in sorted(grouped.keys()):
+            rows = sorted(
+                grouped[provider], key=lambda r: (r.avg_latency_ms, r.avg_cost_usd)
+            )
+            label = PROVIDER_DISPLAY_NAMES.get(provider, provider)
+            lines.append("")
+            lines.append(f"### {label}")
+            lines.append(
+                "| Model | Latency (ms) | Cost | Quality | Success | Runs |"
+            )
+            lines.append("| --- | --- | --- | --- | --- | --- |")
+            for item in rows:
+                lines.append(
+                    "| {model} | {lat:.1f} | {cost} | {quality:.1f} | {success:.0%} | {runs} |".format(
+                        model=_escape_md(item.model),
+                        lat=item.avg_latency_ms,
+                        cost=_fmt_money(item.avg_cost_usd),
+                        quality=item.quality,
+                        success=item.success_rate,
+                        runs=item.runs,
+                    )
+                )
+
+    if exclusions:
+        lines.append("")
+        lines.append("## Excluded Models")
+        lines.append("| Provider | Model | Reason | Detail |")
+        lines.append("| --- | --- | --- | --- |")
+        for item in exclusions:
+            lines.append(
+                "| {provider} | {model} | {reason} | {detail} |".format(
+                    provider=_escape_md(item.provider),
+                    model=_escape_md(item.model),
+                    reason=_escape_md(item.reason),
+                    detail=_escape_md(item.detail) if item.detail else "-",
+                )
+            )
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_benchmark_markdown_report(
+    *,
+    results: list[BenchResult],
+    exclusions: list[BenchExclusion],
+    repo_root: Path | str | None,
+    timestamp: str,
+    params: dict[str, Any] | None = None,
+) -> Path | None:
+    try:
+        repo_path = Path(repo_root) if repo_root is not None else Path(".")
+    except TypeError:
+        repo_path = Path(".")
+
+    report = render_benchmark_markdown_report(
+        results,
+        exclusions,
+        timestamp=timestamp,
+        repo_path=str(repo_path),
+        params=params,
+    )
+    safe_ts = timestamp.strip() if timestamp else ""
+    if not safe_ts:
+        safe_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_ts = safe_ts.replace(":", "")
+    try:
+        report_dir = state_dir(repo_path) / "benchmarks"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        path = report_dir / f"benchmark-{safe_ts}.md"
+        path.write_text(report, encoding="utf-8")
+        return path
+    except OSError:
+        return None
