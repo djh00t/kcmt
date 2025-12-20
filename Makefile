@@ -142,14 +142,14 @@ build: clean
 release-test: build
 	@echo "Uploading to TestPyPI..."
 	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for TestPyPI"
-	twine upload --repository testpypi dist/*
+	PYPI_USER_AGENT="$(TEST_PYPI_USER_AGENT)" twine upload --repository testpypi dist/*
 
 release: build
 	@echo "Uploading to PyPI..."
 	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for PyPI"
 	@read -p "Are you sure you want to release version $(VERSION) to PyPI? (y/N) " confirm && \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		twine upload dist/*; \
+		PYPI_USER_AGENT="$(PYPI_USER_AGENT)" twine upload dist/*; \
 		echo "Released version $(VERSION) to PyPI"; \
 	else \
 		echo "Release cancelled"; \
