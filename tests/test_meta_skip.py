@@ -35,16 +35,19 @@ def test_meta_files_committed(tmp_path, monkeypatch):
 
     from kcmt.commit import CommitGenerator
 
+    # Map filenames to their commit messages
+    commit_messages = {
+        "regular.txt": "chore(core): update regular.txt",
+        ".gitignore": "chore(core): update .gitignore",
+        ".gitattributes": "chore(core): update .gitattributes",
+        ".gitmodules": "chore(core): update .gitmodules",
+    }
+
     def fake_suggest(self, diff, context, style):  # noqa: D401, ARG001
-        # Generate appropriate commit messages for each file
-        if "regular.txt" in context:
-            return "chore(core): update regular.txt"
-        elif ".gitignore" in context:
-            return "chore(core): update .gitignore"
-        elif ".gitattributes" in context:
-            return "chore(core): update .gitattributes"
-        elif ".gitmodules" in context:
-            return "chore(core): update .gitmodules"
+        # Extract filename from context and return appropriate message
+        for filename, message in commit_messages.items():
+            if filename in context:
+                return message
         return "chore(core): update file"
 
     monkeypatch.setattr(
