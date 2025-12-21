@@ -1006,13 +1006,13 @@ def render_benchmark_markdown_report(
         lines.append("## Excluded Models")
         lines.append("| Provider | Model | Reason | Detail |")
         lines.append("| --- | --- | --- | --- |")
-        for item in exclusions:
+        for exclusion in exclusions:
             lines.append(
                 "| {provider} | {model} | {reason} | {detail} |".format(
-                    provider=_escape_md(item.provider),
-                    model=_escape_md(item.model),
-                    reason=_escape_md(item.reason),
-                    detail=_escape_md(item.detail) if item.detail else "-",
+                    provider=_escape_md(exclusion.provider),
+                    model=_escape_md(exclusion.model),
+                    reason=_escape_md(exclusion.reason),
+                    detail=_escape_md(exclusion.detail) if exclusion.detail else "-",
                 )
             )
 

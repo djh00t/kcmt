@@ -766,17 +766,17 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     while thread.is_alive():
         snapshot = workflow.stats_snapshot()
         if snapshot != last_sent:
-            files = {}
+            files_snapshot: dict[str, dict[str, str]] = {}
             try:
-                files = workflow.file_states_snapshot()
+                files_snapshot = workflow.file_states_snapshot()
             except Exception:  # pragma: no cover - best-effort UI telemetry
-                files = {}
+                files_snapshot = {}
             _emit(
                 "tick",
                 {
                     "stage": stage_tracker["value"],
                     "stats": snapshot,
-                    "files": files,
+                    "files": files_snapshot,
                 },
             )
             last_sent = snapshot
