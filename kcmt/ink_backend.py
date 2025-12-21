@@ -795,9 +795,15 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
             metrics_summary = str(metrics_obj.summary())
         except Exception:  # pragma: no cover - defensive
             metrics_summary = None
+    files: dict[str, dict[str, str]] = {}
+    try:
+        files = workflow.file_states_snapshot()
+    except Exception:  # pragma: no cover - defensive
+        files = {}
     response = {
         "result": _serialise(result),
         "stats": workflow.stats_snapshot(),
+        "files": files,
         "commit_subjects": workflow.commit_subjects(),
         "metrics_summary": metrics_summary,
     }
