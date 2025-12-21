@@ -1,0 +1,55 @@
+keystone:
+  project_id: kcmt
+  owner: djh00t
+
+  # Current assimilation state
+  state: governed
+
+  # Optional declared intent (used only for governance planning)
+  target_state: ipbanked
+
+  # Dates (ISO-8601)
+  assimilated_at: 2025-12-21
+  last_reviewed: 2025-12-21
+
+  metadata:
+    role: tool
+    description: >
+      Klingon Commit (kcmt) generates properly scoped Conventional Commit
+      messages by analysing git diffs. It also provides an LLM benchmarking toolkit
+      for evaluating commit message generation models.
+    maturity: semi-mature
+    primary_language: python
+    secondary_languages: []
+    active: true
+
+  analysis:
+    enabled: true
+    languages:
+      - python
+    tools:
+      - python_ast
+      - dependency_graph
+      - coverage_map
+    last_run: null
+
+  enforcement:
+    forward_only: true
+    require_make_check: true
+    min_coverage: 80
+    commit_discipline: true
+    one_file_per_commit: true
+    conventional_commits: true
+    require_footer_refs: true
+
+  ip_candidates:
+    - name: kcmt_commit_engine
+      description: >
+        Core engine that analyses diffs and generates scoped Conventional
+        Commit messages.
+      status: candidate   # candidate | extracted | rejected
+      extracted: false
+
+  notes:
+    - "Ticket / issue footer support pending"
+    - "AST analysis indicates low coupling"
