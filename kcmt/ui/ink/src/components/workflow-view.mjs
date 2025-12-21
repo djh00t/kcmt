@@ -260,6 +260,9 @@ export default function WorkflowView({onBack} = {}) {
       if (event === 'complete') {
         setSummary(data);
         setStatus('completed');
+        if (data?.files && typeof data.files === 'object') {
+          setFileStates(data.files);
+        }
         if (Array.isArray(data?.commit_subjects)) {
           setCommitSubjects(data.commit_subjects.map(item => String(item))); // already serialised
         }
