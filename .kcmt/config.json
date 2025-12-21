@@ -28,8 +28,8 @@
     "github": {
       "name": "GitHub Models",
       "endpoint": "https://models.github.ai/inference",
-      "api_key_env": "GITHUB_TOKEN",
-      "preferred_model": "gpt-4.1-mini"
+      "api_key_env": "GITHUB_MODELS_TOKEN",
+      "preferred_model": "gpt-5.1-mini"
     }
   },
   "model_priority": [

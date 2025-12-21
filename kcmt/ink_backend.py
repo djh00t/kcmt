@@ -13,10 +13,15 @@ import sys
 import threading
 import time
 from dataclasses import asdict, is_dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
-from .benchmark import BenchResult, run_benchmark_detailed
+from .benchmark import (
+    BenchResult,
+    run_benchmark_detailed,
+    write_benchmark_markdown_report,
+)
 from .config import (
     BATCH_TIMEOUT_MIN_SECONDS,
     DEFAULT_MODELS,
@@ -658,12 +663,28 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
         only_providers=only_providers,
         provider_model_allowlist=allowlist,
     )
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    report_params = {
+        "limit": int(limit) if limit else None,
+        "timeout": timeout_value,
+        "providers": providers,
+        "models": only_models,
+    }
+    report_path = write_benchmark_markdown_report(
+        results=results,
+        exclusions=exclusions,
+        repo_root=repo_root,
+        timestamp=timestamp,
+        params=report_params,
+    )
     leaderboards = _build_leaderboards(results)
     response = {
         **leaderboards,
         "exclusions": [_serialise(ex) for ex in exclusions],
         "details": [_serialise(item) for item in details],
     }
+    if report_path is not None:
+        response["report_path"] = str(report_path)
     if payload.get("includeRaw"):
         response["raw"] = [_serialise(item) for item in results]
     _emit("complete", response)
@@ -745,17 +766,17 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     while thread.is_alive():
         snapshot = workflow.stats_snapshot()
         if snapshot != last_sent:
-            files = {}
+            files_snapshot: dict[str, dict[str, str]] = {}
             try:
-                files = workflow.file_states_snapshot()
+                files_snapshot = workflow.file_states_snapshot()
             except Exception:  # pragma: no cover - best-effort UI telemetry
-                files = {}
+                files_snapshot = {}
             _emit(
                 "tick",
                 {
                     "stage": stage_tracker["value"],
                     "stats": snapshot,
-                    "files": files,
+                    "files": files_snapshot,
                 },
             )
             last_sent = snapshot
@@ -774,9 +795,15 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
             metrics_summary = str(metrics_obj.summary())
         except Exception:  # pragma: no cover - defensive
             metrics_summary = None
+    files: dict[str, dict[str, str]] = {}
+    try:
+        files = workflow.file_states_snapshot()
+    except Exception:  # pragma: no cover - defensive
+        files = {}
     response = {
         "result": _serialise(result),
         "stats": workflow.stats_snapshot(),
+        "files": files,
         "commit_subjects": workflow.commit_subjects(),
         "metrics_summary": metrics_summary,
     }

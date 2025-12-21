@@ -1348,7 +1348,7 @@ Examples:
 
         # Run benchmark
         try:
-            from .benchmark import run_benchmark
+            from .benchmark import run_benchmark, write_benchmark_markdown_report
         except Exception as e:  # pragma: no cover - import protection
             self._print_error(f"Benchmark module unavailable: {e}")
             return 1
@@ -1437,6 +1437,20 @@ Examples:
             only_providers=provider_filter,
             only_models=model_filter,
         )
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        report_params = {
+            "limit": limit,
+            "timeout": timeout,
+            "providers": list(providers),
+            "models": sorted(model_filter) if model_filter else None,
+        }
+        write_benchmark_markdown_report(
+            results=results,
+            exclusions=exclusions,
+            repo_root=self._repo_root,
+            timestamp=timestamp,
+            params=report_params,
+        )
 
         if not results:
             if exclusions:
@@ -1498,7 +1512,7 @@ Examples:
         try:
             snapshot = {
                 "schema_version": 1,
-                "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "timestamp": timestamp,
                 "repo_path": str(self._repo_root) if self._repo_root else ".",
                 "params": {
                     "limit": limit,

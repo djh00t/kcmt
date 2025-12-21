@@ -29,6 +29,10 @@ PACKAGE_NAME = kcmt
 PYTHON = python3
 UV = uv
 PYTEST = $(UV) run pytest
+PYPI_TOKEN ?=
+TEST_PYPI_TOKEN ?=
+TWINE_USER ?= __token__
+TWINE_TEST_USER ?= __token__
 
 # Get current version
 VERSION := $(shell python -c "import kcmt; print(kcmt.__version__)")
@@ -141,19 +145,24 @@ build: clean
 # Release
 release-test: build
 	@echo "Uploading to TestPyPI..."
-	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for TestPyPI"
-	PYPI_USER_AGENT="$(TEST_PYPI_USER_AGENT)" twine upload --repository testpypi dist/*
+	@echo "Set TEST_PYPI_TOKEN or TWINE_PASSWORD to avoid interactive prompts"
+	PYPI_USER_AGENT="$(TEST_PYPI_USER_AGENT)" \
+	TWINE_USERNAME="$(TWINE_TEST_USER)" \
+	TWINE_PASSWORD="$(or $(TEST_PYPI_TOKEN),$(TWINE_PASSWORD))" \
+	TWINE_NON_INTERACTIVE=1 \
+	twine upload --repository testpypi dist/*
 
 release: build
 	@echo "Uploading to PyPI..."
-	@echo "Make sure you have TWINE_USERNAME and TWINE_PASSWORD set for PyPI"
-	@read -p "Are you sure you want to release version $(VERSION) to PyPI? (y/N) " confirm && \
-	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		PYPI_USER_AGENT="$(PYPI_USER_AGENT)" twine upload dist/*; \
-		echo "Released version $(VERSION) to PyPI"; \
-	else \
-		echo "Release cancelled"; \
-	fi
+	@echo "Set PYPI_TOKEN or TWINE_PASSWORD to avoid interactive prompts"
+	PYPI_USER_AGENT="$(PYPI_USER_AGENT)" \
+	TWINE_USERNAME="$(TWINE_USER)" \
+	TWINE_PASSWORD="$(or $(PYPI_TOKEN),$(TWINE_PASSWORD))" \
+	TWINE_NON_INTERACTIVE=1 \
+	twine upload dist/*
+	@echo "Released version $(VERSION) to PyPI"
+	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
+	@git push origin v$(VERSION)
 
 # Development workflow shortcuts
 dev-setup: install-dev

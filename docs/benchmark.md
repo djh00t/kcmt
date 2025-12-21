@@ -94,3 +94,12 @@ missing credentials can be remedied quickly.
 Add `--benchmark-json` or `--benchmark-csv` to emit structured reports that
 include both the run results and the exclusions table. These outputs are ideal
 for regression tracking in CI.
+
+## Markdown reports
+
+Each benchmark run writes a markdown report alongside the JSON snapshot in the
+repo-scoped state directory:
+
+- `~/.config/kcmt/repos/<repo>/benchmarks/benchmark-<timestamp>.md`
+
+Set `KCMT_CONFIG_HOME` to change the base directory for these artifacts.
