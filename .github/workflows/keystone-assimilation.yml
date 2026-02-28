@@ -1,0 +1,40 @@
+name: Keystone Assimilation Watcher
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * 0"   # Weekly
+  workflow_dispatch:
+
+jobs:
+  assimilation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install keystone-assimilation from PyPI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade keystone-assimilation
+
+      - name: Run Keystone Assimilation Analysis
+        run: |
+          keystone-assimilation-run
+
+      - name: Upload assimilation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: keystone-assimilation-report
+          path: keystone-assimilation-report/
