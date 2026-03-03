@@ -47,7 +47,7 @@
 
 ## Cross-Platform Matrix Results
 
-- Latest successful run: `https://github.com/djh00t/kcmt/actions/runs/22627397926`
+- Latest successful run: `https://github.com/djh00t/kcmt/actions/runs/22627603656`
 - Outcome:
   - `Parity (ubuntu-latest)`: success
   - `Parity (windows-latest)`: success

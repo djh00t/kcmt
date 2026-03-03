@@ -144,7 +144,7 @@
 - [X] T050 [P] Add optional Ratatui interactive mode behind TTY gate while preserving FR-001 compatibility in rust/crates/kcmt-tui/src/lib.rs
 - [X] T051 Execute quickstart validation updates for FR-008 and SC-001..SC-006 in /Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/quickstart.md
 - [X] T052 Capture full regression and performance gate results for FR-007/FR-008 and SC-001..SC-006 in /Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/tasks-validation.md
-- [ ] T062 [P] Execute macOS/Linux/Windows parity matrix (`high-usage-workflows` + `exit-error-baseline`) and record evidence for NFR-005 in /Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/tasks-validation.md
+- [X] T062 [P] Execute macOS/Linux/Windows parity matrix (`high-usage-workflows` + `exit-error-baseline`) and record evidence for NFR-005 in /Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/tasks-validation.md
 
 ---
 
