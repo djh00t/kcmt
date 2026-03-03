@@ -126,11 +126,14 @@ Produced artifacts:
 3. Validation and rollout quickstart: [/Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/quickstart.md](/Users/djh/work/src/github.com_local/djh00t/kcmt/specs/001-rust-parity-migration/quickstart.md)
 4. Agent context refresh via `.specify/scripts/bash/update-agent-context.sh codex`
 
-## Phase 2: Planning Stop Point
+## Phase 2: Planning Hand-off Status
 
-The plan now stops at Phase 2 planning boundary (no task breakdown yet).
+Task generation has been completed via `/speckit.tasks`, and implementation work is in
+progress against the generated checklist in
+`specs/001-rust-parity-migration/tasks.md`.
 
-Next command: `/speckit.tasks` to generate an executable task list from this plan and associated artifacts.
+Current hand-off note: implementation is largely complete with final
+cross-platform parity execution evidence pending for `T062`.
 
 ## Complexity Tracking
 
