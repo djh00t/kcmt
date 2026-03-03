@@ -57,6 +57,7 @@ jobs:
           uv pip install -e .
 
       - name: Python contract probes
+        timeout-minutes: 15
         shell: bash
         run: |
           mkdir -p artifacts
