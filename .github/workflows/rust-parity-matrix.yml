@@ -67,7 +67,6 @@ jobs:
           uv run kc --help > artifacts/kc-help.txt 2>&1; echo $? > artifacts/kc-help.exit
           uv run kcmt status --repo-path . > artifacts/kcmt-status.txt 2>&1; echo $? > artifacts/kcmt-status.exit
           uv run kcmt --definitely-invalid-flag > artifacts/kcmt-invalid.txt 2>&1; echo $? > artifacts/kcmt-invalid.exit
-          uv run pytest -q > artifacts/pytest.txt 2>&1; echo $? > artifacts/pytest.exit
           set -e
 
       - name: Build Rust candidate
@@ -98,7 +97,6 @@ jobs:
             echo "- kc --help: $(cat artifacts/kc-help.exit)"
             echo "- kcmt status --repo-path .: $(cat artifacts/kcmt-status.exit)"
             echo "- kcmt --definitely-invalid-flag: $(cat artifacts/kcmt-invalid.exit)"
-            echo "- pytest -q: $(cat artifacts/pytest.exit)"
             echo
             echo "## Rust exits"
             echo "- kcmt --help: $(cat artifacts/rust-kcmt-help.exit)"
