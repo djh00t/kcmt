@@ -1,0 +1,14 @@
+```console
+$ kcmt --help
+? Usage: kcmt [OPTIONS] [COMMAND]
+```
+
+```console
+$ commit --help
+? Usage: commit [OPTIONS] [COMMAND]
+```
+
+```console
+$ kc --help
+? Usage: kc [OPTIONS] [COMMAND]
+```

@@ -1,0 +1,28 @@
+[package]
+name = "kcmt-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI surface for kcmt Rust migration."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kcmt"
+path = "src/bin/kcmt.rs"
+
+[[bin]]
+name = "commit"
+path = "src/bin/commit.rs"
+
+[[bin]]
+name = "kc"
+path = "src/bin/kc.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+kcmt-bench = { path = "../kcmt-bench" }
+kcmt-core = { path = "../kcmt-core" }

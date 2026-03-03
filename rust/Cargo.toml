@@ -1,0 +1,24 @@
+[workspace]
+members = [
+  "crates/kcmt-core",
+  "crates/kcmt-cli",
+  "crates/kcmt-provider",
+  "crates/kcmt-bench",
+  "crates/kcmt-tui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.78"
+
+[workspace.dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.37", features = ["macros", "process", "rt-multi-thread", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"

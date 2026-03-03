@@ -102,3 +102,24 @@ venv.bak/
 test-
 .kcmt/last_run.json
 
+# Rust
+target/
+**/target/
+debug/
+release/
+*.rs.bk
+*.rlib
+*.prof*
+
+# Logs
+*.log
+
+# Env variants (keep committed example)
+.env*
+!.env.example
+
+# Universal editor/temp files
+.vscode/
+.idea/
+*.tmp
+*.swp
