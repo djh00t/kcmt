@@ -28,6 +28,13 @@ Supported Python versions
 
 - Python 3.12+
 
+## Governance
+
+- Planning and implementation governance is defined in `.specify/memory/constitution.md`.
+- For scoped feature work, follow `spec -> plan -> tasks -> implement`.
+- Changes that affect CLI compatibility, git safety, performance claims, or secret
+  handling should include explicit evidence in spec/plan/tasks artifacts.
+
 ## Installation
 
 Install from PyPI or GitHub with pip or uv:

@@ -42,3 +42,15 @@
 - Entrypoints defined in `pyproject.toml`: `kcmt`, `commit`, `kc` -> `kcmt.main:main`.
 - Workflow orchestrated by `KlingonCMTWorkflow` in `kcmt/core.py`; provider drivers live in `kcmt/providers/`.
 
+## Governance
+- Constitution authority: `.specify/memory/constitution.md` is the top governance source for spec/plan/tasks workflows.
+- Required planning flow: `spec -> plan -> tasks -> implement`.
+- Constitution gates and `make check` are required before merge for implementation changes.
+
+
+## Active Technologies
+- Rust stable (target 1.78+), Python 3.12 retained temporarily for parity harness and transition wrappers + `clap`, `tokio`, `reqwest`, `serde`/`serde_json`, `tracing`, `anyhow`/`thiserror`, optional `ratatui` for interactive TUI phase (001-rust-parity-migration)
+- Local filesystem only (`~/.config/kcmt`, environment variables, git working tree/index); no server-side database (001-rust-parity-migration)
+
+## Recent Changes
+- 001-rust-parity-migration: Added Rust stable (target 1.78+), Python 3.12 retained temporarily for parity harness and transition wrappers + `clap`, `tokio`, `reqwest`, `serde`/`serde_json`, `tracing`, `anyhow`/`thiserror`, optional `ratatui` for interactive TUI phase
