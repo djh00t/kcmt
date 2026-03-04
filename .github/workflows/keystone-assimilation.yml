@@ -42,7 +42,12 @@ jobs:
 
       - name: Run Keystone Assimilation Analysis
         run: |
-          keystone-assimilation-run
+          python - <<'PY'
+          from keystone_assimilation.cli import run_main
+
+          report_path = run_main()
+          print(report_path)
+          PY
 
       - name: Upload assimilation artifacts
         uses: actions/upload-artifact@v4
