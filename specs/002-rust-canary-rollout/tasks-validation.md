@@ -19,7 +19,15 @@
 - Workflow YAML validation:
   - Command: `python -c ... yaml.safe_load(...)` over `.github/workflows/rust-canary-smoke.yml`, `.github/workflows/ci.yml`, `.github/workflows/keystone-assimilation.yml`
   - Result: all parsed successfully
+- PR #17 CI evidence:
+  - Canary Smoke (ubuntu): https://github.com/djh00t/kcmt/actions/runs/22670425223/job/65712776439
+  - CI (Python 3.12): https://github.com/djh00t/kcmt/actions/runs/22670425180/job/65712776505
+  - CI (Python 3.13): https://github.com/djh00t/kcmt/actions/runs/22670425180/job/65712776529
+  - Parity (ubuntu): https://github.com/djh00t/kcmt/actions/runs/22670425168/job/65712776489
+  - Parity (macOS): https://github.com/djh00t/kcmt/actions/runs/22670425168/job/65712776486
+  - Parity (windows): https://github.com/djh00t/kcmt/actions/runs/22670425168/job/65712776511
+  - Assimilation: https://github.com/djh00t/kcmt/actions/runs/22670425193/job/65712776502
 
 ## Notes
 
-- CI canary evidence links will be attached after branch push and workflow execution.
+- All required PR checks are passing (7/7).
