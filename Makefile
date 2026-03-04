@@ -48,21 +48,21 @@ install-dev:
 # Formatting and linting
 format:
 	@echo "Sorting imports with isort..."
-	isort ./$(PACKAGE_NAME) tests
+	$(UV) run isort ./$(PACKAGE_NAME) tests
 	@echo "Formatting code with black..."
-	black ./$(PACKAGE_NAME) tests
+	$(UV) run black ./$(PACKAGE_NAME) tests
 
 lint:
 	@echo "Linting with ruff..."
-	ruff check ./$(PACKAGE_NAME) tests
+	$(UV) run ruff check ./$(PACKAGE_NAME) tests
 	@echo "Checking import order with isort..."
-	isort --check-only ./$(PACKAGE_NAME) tests
+	$(UV) run isort --check-only ./$(PACKAGE_NAME) tests
 	@echo "Checking format with black..."
-	black --check ./$(PACKAGE_NAME) tests
+	$(UV) run black --check ./$(PACKAGE_NAME) tests
 
 ruff-fix:
 	@echo "Auto-fixing lint with ruff..."
-	ruff check --fix ./$(PACKAGE_NAME) tests
+	$(UV) run ruff check --fix ./$(PACKAGE_NAME) tests
 
 # Testing
 test:
