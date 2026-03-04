@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kcmt.benchmark.result.schema.json",
+  "title": "KcmtBenchmarkSnapshot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "timestamp",
+    "repo_path",
+    "params",
+    "results"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "UTC timestamp in ISO-8601 format"
+    },
+    "repo_path": {
+      "type": "string"
+    },
+    "params": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": ["integer", "null"]
+        },
+        "timeout": {
+          "type": ["number", "null"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "avg_latency_ms",
+          "avg_cost_usd",
+          "quality",
+          "success_rate",
+          "runs"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "avg_latency_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "avg_cost_usd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "quality": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "success_rate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "exclusions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["provider", "model", "reason"],
+        "properties": {
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "reason": { "type": "string" },
+          "detail": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

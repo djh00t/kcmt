@@ -1,0 +1,113 @@
+name: Rust Parity Matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "rust/**"
+      - "kcmt/main.py"
+      - "specs/001-rust-parity-migration/**"
+      - ".github/workflows/rust-parity-matrix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Parity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust_bin: kcmt
+            commit_bin: commit
+            kc_bin: kc
+          - os: macos-latest
+            rust_bin: kcmt
+            commit_bin: commit
+            kc_bin: kc
+          - os: windows-latest
+            rust_bin: kcmt.exe
+            commit_bin: commit.exe
+            kc_bin: kc.exe
+
+    env:
+      UV_CACHE_DIR: .uv-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          uv sync --all-extras --dev
+          uv pip install -e .
+
+      - name: Python contract probes
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          uv run kcmt --help > artifacts/kcmt-help.txt 2>&1; echo $? > artifacts/kcmt-help.exit
+          uv run commit --help > artifacts/commit-help.txt 2>&1; echo $? > artifacts/commit-help.exit
+          uv run kc --help > artifacts/kc-help.txt 2>&1; echo $? > artifacts/kc-help.exit
+          uv run kcmt status --repo-path . > artifacts/kcmt-status.txt 2>&1; echo $? > artifacts/kcmt-status.exit
+          uv run kcmt --definitely-invalid-flag > artifacts/kcmt-invalid.txt 2>&1; echo $? > artifacts/kcmt-invalid.exit
+          set -e
+
+      - name: Build Rust candidate
+        shell: bash
+        run: |
+          cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+
+      - name: Rust contract probes
+        shell: bash
+        run: |
+          set +e
+          ./rust/target/release/${{ matrix.rust_bin }} --help > artifacts/rust-kcmt-help.txt 2>&1; echo $? > artifacts/rust-kcmt-help.exit
+          ./rust/target/release/${{ matrix.commit_bin }} --help > artifacts/rust-commit-help.txt 2>&1; echo $? > artifacts/rust-commit-help.exit
+          ./rust/target/release/${{ matrix.kc_bin }} --help > artifacts/rust-kc-help.txt 2>&1; echo $? > artifacts/rust-kc-help.exit
+          ./rust/target/release/${{ matrix.rust_bin }} status > artifacts/rust-status.txt 2>&1; echo $? > artifacts/rust-status.exit
+          ./rust/target/release/${{ matrix.rust_bin }} --definitely-invalid-flag > artifacts/rust-invalid.txt 2>&1; echo $? > artifacts/rust-invalid.exit
+          set -e
+
+      - name: Build parity evidence markdown
+        shell: bash
+        run: |
+          {
+            echo "# Parity Evidence (${{ matrix.os }})"
+            echo
+            echo "## Python exits"
+            echo "- kcmt --help: $(cat artifacts/kcmt-help.exit)"
+            echo "- commit --help: $(cat artifacts/commit-help.exit)"
+            echo "- kc --help: $(cat artifacts/kc-help.exit)"
+            echo "- kcmt status --repo-path .: $(cat artifacts/kcmt-status.exit)"
+            echo "- kcmt --definitely-invalid-flag: $(cat artifacts/kcmt-invalid.exit)"
+            echo
+            echo "## Rust exits"
+            echo "- kcmt --help: $(cat artifacts/rust-kcmt-help.exit)"
+            echo "- commit --help: $(cat artifacts/rust-commit-help.exit)"
+            echo "- kc --help: $(cat artifacts/rust-kc-help.exit)"
+            echo "- kcmt status: $(cat artifacts/rust-status.exit)"
+            echo "- kcmt --definitely-invalid-flag: $(cat artifacts/rust-invalid.exit)"
+          } > artifacts/parity-evidence-${{ matrix.os }}.md
+
+      - name: Upload parity artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-${{ matrix.os }}
+          path: artifacts/

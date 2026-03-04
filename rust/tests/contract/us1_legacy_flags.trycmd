@@ -1,0 +1,9 @@
+```console
+$ kcmt --oneshot --no-progress
+? (placeholder) oneshot mode
+```
+
+```console
+$ commit --file kcmt/core.py
+? (placeholder) file-scoped mode
+```
