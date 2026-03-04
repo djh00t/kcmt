@@ -1,0 +1,63 @@
+name: Rust Canary Smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "kcmt/main.py"
+      - "scripts/canary/**"
+      - "tests/test_main_entrypoint.py"
+      - "tests/test_runtime_canary_probe.py"
+      - "docs/rust-migration-rollout.md"
+      - "specs/002-rust-canary-rollout/**"
+      - ".github/workflows/rust-canary-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  canary-smoke:
+    name: Canary Smoke (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          uv sync --all-extras --dev
+          uv pip install -e .
+
+      - name: Build Rust candidate
+        shell: bash
+        run: |
+          cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+
+      - name: Run canary probe scenarios
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          uv run python scripts/canary/runtime_canary_probe.py \
+            --rust-bin "$PWD/rust/target/release/kcmt" \
+            --report artifacts/runtime-canary-report.json \
+            2>&1 | tee artifacts/runtime-canary.log
+
+      - name: Upload canary artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-canary-smoke
+          path: artifacts/

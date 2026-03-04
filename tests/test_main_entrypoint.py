@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pathlib
 
 from kcmt import main as main_mod
@@ -38,6 +39,30 @@ def test_resolve_rust_binary_uses_repo_default(monkeypatch):
     assert resolved.parts[-4:] == ("rust", "target", "release", "kcmt")
 
 
+def test_build_runtime_decision_invalid_runtime_value(monkeypatch):
+    monkeypatch.setenv("KCMT_RUNTIME", "mystery")
+    monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+
+    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust")
+
+    assert decision["selected_runtime"] == "python"
+    assert decision["decision_reason"] == "invalid_runtime_value"
+    assert decision["runtime_mode"] == "mystery"
+
+
+def test_build_runtime_decision_auto_canary_disabled(monkeypatch):
+    monkeypatch.setenv("KCMT_RUNTIME", "auto")
+    monkeypatch.setenv("KCMT_RUST_CANARY", "0")
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+
+    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust")
+
+    assert decision["selected_runtime"] == "python"
+    assert decision["decision_reason"] == "auto_canary_disabled"
+    assert decision["canary_enabled"] is False
+
+
 def test_run_rust_runtime_returns_none_when_disabled(monkeypatch):
     monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: False)
     assert main_mod._run_rust_runtime() is None
@@ -66,6 +91,59 @@ def test_run_rust_runtime_executes_binary_and_returns_code(monkeypatch):
 
     assert main_mod._run_rust_runtime() == 7
     assert called == [["/tmp/kcmt-rust", "status", "--repo-path", "."]]
+
+
+def test_emit_runtime_trace_enabled_writes_json(monkeypatch, capsys):
+    monkeypatch.setenv("KCMT_RUNTIME_TRACE", "1")
+    decision = {
+        "selected_runtime": "python",
+        "decision_reason": "runtime_python",
+        "runtime_mode": "python",
+        "canary_enabled": False,
+        "rust_binary": "/tmp/kcmt-rust",
+        "rust_binary_exists": False,
+    }
+
+    main_mod._emit_runtime_trace(decision)
+    out = capsys.readouterr()
+    parsed = json.loads(out.err.strip())
+
+    assert out.out == ""
+    assert parsed["selected_runtime"] == "python"
+    assert parsed["decision_reason"] == "runtime_python"
+
+
+def test_emit_runtime_trace_disabled_has_no_output(monkeypatch, capsys):
+    monkeypatch.delenv("KCMT_RUNTIME_TRACE", raising=False)
+    decision = {
+        "selected_runtime": "python",
+        "decision_reason": "runtime_python",
+        "runtime_mode": "python",
+        "canary_enabled": False,
+        "rust_binary": "/tmp/kcmt-rust",
+        "rust_binary_exists": False,
+    }
+
+    main_mod._emit_runtime_trace(decision)
+    out = capsys.readouterr()
+
+    assert out.out == ""
+    assert out.err == ""
+
+
+def test_run_rust_runtime_emits_trace_on_fallback(monkeypatch, capsys):
+    monkeypatch.setenv("KCMT_RUNTIME", "auto")
+    monkeypatch.setenv("KCMT_RUST_CANARY", "1")
+    monkeypatch.setenv("KCMT_RUNTIME_TRACE", "1")
+    monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/missing-kcmt")
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: False)
+
+    assert main_mod._run_rust_runtime() is None
+    out = capsys.readouterr()
+    parsed = json.loads(out.err.strip())
+
+    assert parsed["selected_runtime"] == "python"
+    assert parsed["decision_reason"] == "rust_binary_missing"
 
 
 def test_main_returns_rust_runtime_code(monkeypatch):
