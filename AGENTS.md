@@ -51,6 +51,8 @@
 ## Active Technologies
 - Rust stable (target 1.78+), Python 3.12 retained temporarily for parity harness and transition wrappers + `clap`, `tokio`, `reqwest`, `serde`/`serde_json`, `tracing`, `anyhow`/`thiserror`, optional `ratatui` for interactive TUI phase (001-rust-parity-migration)
 - Local filesystem only (`~/.config/kcmt`, environment variables, git working tree/index); no server-side database (001-rust-parity-migration)
+- Python 3.12 (primary wrapper and tests), Rust stable binaries (already implemented) + `pytest`, `uv`, GitHub Actions, existing Rust workspace binaries (`kcmt`, `commit`, `kc`) (002-rust-canary-rollout)
+- N/A (ephemeral trace output only) (002-rust-canary-rollout)
 
 ## Recent Changes
 - 001-rust-parity-migration: Added Rust stable (target 1.78+), Python 3.12 retained temporarily for parity harness and transition wrappers + `clap`, `tokio`, `reqwest`, `serde`/`serde_json`, `tracing`, `anyhow`/`thiserror`, optional `ratatui` for interactive TUI phase
