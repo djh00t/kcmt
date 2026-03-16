@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kcmt.dev/contracts/runtime-trace.schema.json",
+  "title": "Runtime Decision Trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "selected_runtime",
+    "decision_reason",
+    "runtime_mode",
+    "canary_enabled",
+    "rust_binary",
+    "rust_binary_exists"
+  ],
+  "properties": {
+    "selected_runtime": {
+      "type": "string",
+      "enum": ["python", "rust"]
+    },
+    "decision_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runtime_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "canary_enabled": {
+      "type": "boolean"
+    },
+    "rust_binary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rust_binary_exists": {
+      "type": "boolean"
+    }
+  }
+}
