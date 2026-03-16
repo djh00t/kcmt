@@ -15,7 +15,7 @@ uv pip install -e .
 
 ```bash
 KCMT_RUNTIME=python uv run kcmt --help
-KCMT_RUNTIME=python uv run kcmt status --repo-path .
+KCMT_RUNTIME=python uv run kcmt status --help
 ```
 
 Expected: commands run via Python path with normal behavior.

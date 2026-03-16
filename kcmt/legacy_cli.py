@@ -165,6 +165,42 @@ Examples:
             action="store_true",
             help="Emit the saved run snapshot JSON instead of formatted output",
         )
+        benchmark_parser = subparsers.add_parser(
+            "benchmark",
+            help="Run explicit benchmark modes without changing legacy --benchmark",
+        )
+        benchmark_subparsers = benchmark_parser.add_subparsers(dest="benchmark_mode")
+        runtime_parser = benchmark_subparsers.add_parser(
+            "runtime",
+            help="Benchmark Python and Rust runtimes on the same repo corpus",
+        )
+        runtime_parser.add_argument(
+            "--repo-path",
+            default=".",
+            help="Path to the runtime benchmark corpus (default: current dir)",
+        )
+        runtime_parser.add_argument(
+            "--runtime",
+            choices=("python", "rust", "both"),
+            default="both",
+            help="Runtime selection for the benchmark report (default: both)",
+        )
+        runtime_parser.add_argument(
+            "--iterations",
+            type=int,
+            default=3,
+            help="How many iterations to run per scenario (default: 3)",
+        )
+        runtime_parser.add_argument(
+            "--rust-bin",
+            default=None,
+            help="Optional path to the Rust kcmt binary for runtime benchmarking",
+        )
+        runtime_parser.add_argument(
+            "--json",
+            action="store_true",
+            help="Emit the runtime benchmark report as JSON",
+        )
 
         parser.add_argument(
             "--configure",
@@ -289,7 +325,10 @@ Examples:
         parser.add_argument(
             "--benchmark",
             action="store_true",
-            help=("Run a local benchmark across providers/models using sample diffs"),
+            help=(
+                "Run the legacy provider/model benchmark using sample diffs "
+                "(use 'benchmark runtime' for Python-vs-Rust timing)"
+            ),
         )
         parser.add_argument(
             "--benchmark-limit",
@@ -383,24 +422,36 @@ Examples:
                 getattr(parsed_args, "profile_startup", False) or env_profile
             )
 
+            runtime_benchmark_mode = (
+                getattr(parsed_args, "command", None) == "benchmark"
+                and getattr(parsed_args, "benchmark_mode", None) == "runtime"
+            )
             requested_path = (
                 Path(parsed_args.repo_path).expanduser().resolve(strict=False)
             )
 
             detected_root: Optional[Path] = None
-            with self._profile_timer(
-                "find-git-root",
-                extra=lambda: (
-                    f"found={detected_root}" if detected_root else "found=<none>"
-                ),
-            ):
-                detected_root = find_git_repo_root(requested_path)
+            if not runtime_benchmark_mode:
+                with self._profile_timer(
+                    "find-git-root",
+                    extra=lambda: (
+                        f"found={detected_root}" if detected_root else "found=<none>"
+                    ),
+                ):
+                    detected_root = find_git_repo_root(requested_path)
 
-            repo_root = (detected_root or requested_path).resolve(strict=False)
+            repo_root = (
+                requested_path
+                if runtime_benchmark_mode
+                else (detected_root or requested_path).resolve(strict=False)
+            )
             self._repo_root = repo_root
             non_interactive = (
                 bool(os.environ.get("PYTEST_CURRENT_TEST")) or not sys.stdin.isatty()
             )
+
+            if runtime_benchmark_mode:
+                return self._execute_runtime_benchmark(parsed_args, repo_root)
 
             self._maybe_offer_commitizen_install(repo_root, non_interactive)
 
@@ -534,6 +585,11 @@ Examples:
                         "Proceeding without API key (test mode, explicit "
                         "api-key-env provided)."
                     )
+                elif self._runtime_benchmark_mode_enabled() and (
+                    getattr(parsed_args, "single_file", None)
+                    or getattr(parsed_args, "oneshot", False)
+                ):
+                    pass
                 else:
                     self._print_error(
                         "No API key available. Run 'kcmt --configure' to "
@@ -645,6 +701,21 @@ Examples:
         except OSError:
             pass
         self._print_info("Okay, we'll skip the Commitizen prompt next time.")
+
+    def _runtime_benchmark_mode_enabled(self) -> bool:
+        raw_value = os.environ.get("KCMT_RUNTIME_BENCHMARK", "")
+        return raw_value.lower() in {"1", "true", "yes", "on"}
+
+    def _runtime_benchmark_commit_message(
+        self, file_path: str, max_commit_length: int
+    ) -> str:
+        path = Path(file_path)
+        stem = path.stem or "file"
+        scope = path.parent.name or "repo"
+        message = f"chore({scope}): update {stem}"
+        if len(message) > max_commit_length:
+            message = message[:max_commit_length]
+        return message
 
     def _collect_overrides(
         self, args: argparse.Namespace, repo_root: Path
@@ -1725,6 +1796,49 @@ Examples:
 
         return 0
 
+    def _execute_runtime_benchmark(
+        self, args: argparse.Namespace, repo_root: Path
+    ) -> int:
+        try:
+            from .benchmark import (
+                render_runtime_benchmark_report,
+                run_runtime_benchmark,
+                runtime_benchmark_report_to_dict,
+                write_runtime_benchmark_report,
+            )
+        except Exception as err:  # pragma: no cover - import protection
+            self._print_error(f"Runtime benchmark module unavailable: {err}")
+            return 1
+
+        try:
+            report = run_runtime_benchmark(
+                repo_root,
+                runtime=str(getattr(args, "runtime", "both")),
+                iterations=max(int(getattr(args, "iterations", 3) or 1), 1),
+                rust_bin=getattr(args, "rust_bin", None),
+            )
+        except (OSError, ValueError, FileNotFoundError) as err:
+            self._print_error(str(err))
+            return 1
+
+        write_runtime_benchmark_report(report, repo_root=repo_root)
+
+        if bool(getattr(args, "json", False)):
+            print(
+                json.dumps(
+                    runtime_benchmark_report_to_dict(report),
+                    indent=2,
+                    ensure_ascii=False,
+                    cls=DecimalFriendlyJSONEncoder,
+                )
+            )
+        else:
+            print(render_runtime_benchmark_report(report), end="")
+
+        if any(result.status == "failed" for result in report.results):
+            return 1
+        return 0
+
     def _execute_verify_keys(self, args: argparse.Namespace, repo_root: Path) -> int:
         detected = detect_available_providers()
         providers = sorted(DEFAULT_MODELS.keys())
@@ -2061,17 +2175,32 @@ Examples:
                 return 0
             diff = wdiff
 
-        gen = CommitGenerator(repo_path=config.git_repo_path, config=config)
-        msg = gen.suggest_commit_message(
-            diff,
-            context=f"File: {file_path}",
-            style="conventional",
-        )
-        msg = gen.validate_and_fix_commit_message(msg)
+        if self._runtime_benchmark_mode_enabled():
+            msg = self._runtime_benchmark_commit_message(
+                file_path,
+                config.max_commit_length,
+            )
+        else:
+            gen = CommitGenerator(repo_path=config.git_repo_path, config=config)
+            msg = gen.suggest_commit_message(
+                diff,
+                context=f"File: {file_path}",
+                style="conventional",
+            )
+            msg = gen.validate_and_fix_commit_message(msg)
 
         repo.commit(msg)
         recent = repo.get_recent_commits(1)
         commit_hash = recent[0].split()[0] if recent else None
+
+        snapshot = self._build_single_file_snapshot(
+            args=args,
+            config=config,
+            file_path=file_path,
+            message=msg,
+            commit_hash=commit_hash,
+        )
+        self._persist_run_snapshot(snapshot)
 
         # Simple success message for oneshot/single file mode
         self._print_success(f"✓ {file_path}")
@@ -2080,6 +2209,61 @@ Examples:
             self._print_info(f"  {commit_hash[:8]}")
 
         return 0
+
+    def _build_single_file_snapshot(
+        self,
+        *,
+        args: argparse.Namespace,
+        config: Config,
+        file_path: str,
+        message: str,
+        commit_hash: Optional[str],
+    ) -> dict[str, Any]:
+        repo_display = str(self._repo_root) if self._repo_root else config.git_repo_path
+        snapshot = {
+            "schema_version": 1,
+            "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "repo_path": repo_display,
+            "provider": config.provider,
+            "model": config.model,
+            "endpoint": config.llm_endpoint,
+            "max_retries": args.max_retries,
+            "file_limit": None,
+            "compact": self._compact_mode,
+            "duration_seconds": 0.0,
+            "rate_commits_per_sec": 0.0,
+            "counts": {
+                "files_total": 1,
+                "prepared_total": 1,
+                "processed_total": 1,
+                "prepared_failures": 0,
+                "commit_success": 1,
+                "commit_failure": 0,
+                "deletions_total": 0,
+                "deletions_success": 0,
+                "deletions_failure": 0,
+                "overall_success": 1,
+                "overall_failure": 0,
+                "errors": 0,
+            },
+            "pushed": False,
+            "summary": "Successfully completed 1 commits. Committed 1 file change(s)",
+            "errors": [],
+            "commits": [
+                {
+                    "success": True,
+                    "commit_hash": commit_hash,
+                    "message": message,
+                    "error": None,
+                    "file_path": file_path,
+                }
+            ],
+            "deletions": [],
+            "subjects": [message],
+            "stats": {},
+            "auto_push_state": self._describe_auto_push(False),
+        }
+        return snapshot
 
     # ------------------------------------------------------------------
     # Run snapshot & formatting helpers

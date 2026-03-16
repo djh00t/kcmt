@@ -20,19 +20,26 @@
 
 ```bash
 KCMT_RUNTIME=python uv run kcmt --help
-KCMT_RUNTIME=python uv run kcmt status --repo-path .
+KCMT_RUNTIME=python uv run kcmt status --help
 ```
 
 ### Canary
 
 ```bash
-KCMT_RUNTIME=auto KCMT_RUST_CANARY=1 KCMT_RUST_BIN=\"$(pwd)/rust/target/release/kcmt\" KCMT_RUNTIME_TRACE=1 uv run kcmt --help
+KCMT_RUNTIME=auto KCMT_RUST_CANARY=1 KCMT_RUST_BIN="$(pwd)/rust/target/release/kcmt" KCMT_RUNTIME_TRACE=1 uv run kcmt --help
 ```
 
 ### CI-Equivalent Canary Probe
 
 ```bash
 uv run python scripts/canary/runtime_canary_probe.py --rust-bin \"$(pwd)/rust/target/release/kcmt\"
+```
+
+### Runtime Benchmark Evidence
+
+```bash
+python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
+KCMT_RUST_BIN="$(pwd)/rust/target/release/kcmt" uv run kcmt benchmark runtime --repo-path "$REPO" --runtime both --json
 ```
 
 ## Rollback Procedure

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable
 
 from .config import (
@@ -1049,5 +1056,550 @@ def write_benchmark_markdown_report(
         path = report_dir / f"benchmark-{safe_ts}.md"
         path.write_text(report, encoding="utf-8")
         return path
+    except OSError:
+        return None
+
+
+RUNTIME_BENCHMARK_SCHEMA_VERSION = "1.0.0"
+RUNTIME_BENCHMARK_METADATA_FILENAME = ".kcmt-runtime-corpus.json"
+RUNTIME_BENCHMARK_ENV = "KCMT_RUNTIME_BENCHMARK"
+
+
+@dataclass
+class RuntimeBenchmarkResult:
+    scenario_id: str
+    workflow_contract_id: str
+    corpus_id: str
+    runtime: str
+    command_label: str
+    iterations: int
+    status: str
+    wall_time_ms: float
+    median_time_ms: float | None = None
+    peak_rss_bytes: int | None = None
+    exit_code: int | None = None
+    failure_reason: str | None = None
+
+
+@dataclass
+class RuntimeBenchmarkSummary:
+    scenario_count: int
+    passed: int
+    failed: int
+    excluded: int
+    median_wall_time_ms: float | None
+
+
+@dataclass
+class RuntimeBenchmarkRun:
+    schema_version: str
+    timestamp: str
+    command_set: str
+    corpora: list[str]
+    results: list[RuntimeBenchmarkResult]
+    summary: dict[str, RuntimeBenchmarkSummary]
+
+
+@dataclass(frozen=True)
+class _RuntimeBenchmarkScenario:
+    scenario_id: str
+    workflow_contract_id: str
+    command_label: str
+    expected_stdout_fragment: str
+
+
+def _runtime_benchmark_repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _runtime_benchmark_metadata_path(repo_path: Path) -> Path:
+    return repo_path / RUNTIME_BENCHMARK_METADATA_FILENAME
+
+
+def _load_runtime_benchmark_corpus_metadata(repo_path: Path) -> dict[str, Any]:
+    metadata_path = _runtime_benchmark_metadata_path(repo_path)
+    if metadata_path.exists():
+        loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            return dict(loaded)
+
+    default_target = "src/app.py"
+    if not (repo_path / default_target).exists():
+        for candidate in sorted(repo_path.rglob("*.py")):
+            default_target = str(candidate.relative_to(repo_path))
+            break
+
+    kind = "synthetic" if (repo_path / ".git").exists() else "realistic"
+    return {
+        "id": repo_path.name or "runtime-corpus",
+        "kind": kind,
+        "file_count": sum(1 for item in repo_path.rglob("*") if item.is_file()),
+        "git_history_state": "seeded-history" if kind == "realistic" else "no-commits",
+        "change_shape": ["nested-paths"],
+        "default_file_target": default_target,
+    }
+
+
+def _runtime_benchmark_target_file(repo_path: Path, metadata: dict[str, Any]) -> str:
+    target = str(metadata.get("default_file_target") or "").strip()
+    if target and (repo_path / target).exists():
+        return target
+
+    for candidate in sorted(repo_path.rglob("*.py")):
+        return str(candidate.relative_to(repo_path))
+    for candidate in sorted(repo_path.rglob("*")):
+        if candidate.is_file():
+            return str(candidate.relative_to(repo_path))
+    raise FileNotFoundError(f"No benchmarkable files found under {repo_path}")
+
+
+def _runtime_benchmark_scenarios(
+    repo_path: Path, metadata: dict[str, Any]
+) -> list[_RuntimeBenchmarkScenario]:
+    target = _runtime_benchmark_target_file(repo_path, metadata)
+    return [
+        _RuntimeBenchmarkScenario(
+            scenario_id=f"{metadata['id']}:status-repo-path",
+            workflow_contract_id="status-repo-path",
+            command_label="kcmt status --repo-path <repo>",
+            expected_stdout_fragment="Commit status",
+        ),
+        _RuntimeBenchmarkScenario(
+            scenario_id=f"{metadata['id']}:oneshot-repo-path",
+            workflow_contract_id="oneshot-repo-path",
+            command_label="kcmt --oneshot --repo-path <repo>",
+            expected_stdout_fragment="✓ ",
+        ),
+        _RuntimeBenchmarkScenario(
+            scenario_id=f"{metadata['id']}:file-repo-path",
+            workflow_contract_id="file-repo-path",
+            command_label=f"kcmt --file {target} --repo-path <repo>",
+            expected_stdout_fragment="✓ ",
+        ),
+    ]
+
+
+def _copy_runtime_corpus(source: Path, destination: Path) -> None:
+    shutil.copytree(source, destination)
+
+
+def _git(repo_path: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo_path), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _prepare_realistic_runtime_corpus(
+    repo_path: Path, metadata: dict[str, Any]
+) -> dict[str, Any]:
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(repo_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if not (repo_path / ".git").exists():
+        _git(repo_path, "init")
+        _git(repo_path, "branch", "-M", "main")
+    _git(repo_path, "config", "user.name", "kcmt-benchmark")
+    _git(repo_path, "config", "user.email", "kcmt-benchmark@example.com")
+    _git(repo_path, "add", ".")
+    _git(repo_path, "commit", "-m", "chore(repo): seed")
+
+    target_path = repo_path / _runtime_benchmark_target_file(repo_path, metadata)
+    original = target_path.read_text(encoding="utf-8")
+    if "format_subject" in original and "runtime benchmark" not in original:
+        updated = original.rstrip() + "\n\n# runtime benchmark mutation\n"
+    else:
+        updated = original.rstrip() + "\n# runtime benchmark mutation\n"
+    target_path.write_text(updated, encoding="utf-8")
+
+    extra_file = repo_path / "notes" / "runtime-benchmark.md"
+    extra_file.parent.mkdir(parents=True, exist_ok=True)
+    extra_file.write_text(
+        "# Runtime Benchmark Fixture\n\nThis file is intentionally untracked.\n",
+        encoding="utf-8",
+    )
+
+    deleted = repo_path / "docs" / "notes.md"
+    if deleted.exists():
+        deleted.unlink()
+
+    ignore_file = repo_path / ".gitignore"
+    if not ignore_file.exists():
+        ignore_file.write_text("*.local\n", encoding="utf-8")
+    ignored = repo_path / "debug.local"
+    ignored.write_text("ignored=true\n", encoding="utf-8")
+
+    return metadata
+
+
+def _materialize_runtime_corpus(
+    source_repo: Path,
+) -> tuple[Path, dict[str, Any]]:
+    metadata = _load_runtime_benchmark_corpus_metadata(source_repo)
+    temp_root = Path(tempfile.mkdtemp(prefix=f"kcmt-runtime-{metadata['id']}-"))
+    repo_path = temp_root / "repo"
+    _copy_runtime_corpus(source_repo, repo_path)
+
+    if (repo_path / ".git").exists():
+        _git(repo_path, "config", "user.name", "kcmt-benchmark")
+        _git(repo_path, "config", "user.email", "kcmt-benchmark@example.com")
+    else:
+        metadata = _prepare_realistic_runtime_corpus(repo_path, metadata)
+
+    return repo_path, metadata
+
+
+def _runtime_benchmark_python_command() -> list[str]:
+    return [sys.executable, "-m", "kcmt.main"]
+
+
+def default_runtime_benchmark_rust_bin() -> Path:
+    configured = os.environ.get("KCMT_RUST_BIN", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve(strict=False)
+    return (
+        _runtime_benchmark_repo_root() / "rust" / "target" / "release" / "kcmt"
+    ).resolve(strict=False)
+
+
+def _runtime_benchmark_env(config_home: Path, runtime: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["KCMT_USE_INK"] = "0"
+    env["KCMT_AUTO_INSTALL_INK_DEPS"] = "0"
+    env["KCMT_CONFIG_HOME"] = str(config_home)
+    env[RUNTIME_BENCHMARK_ENV] = "1"
+    env["KCMT_NO_SPINNER"] = "1"
+    env.setdefault("OPENAI_API_KEY", "kcmt-runtime-benchmark")
+    env.setdefault("GIT_AUTHOR_NAME", "kcmt-benchmark")
+    env.setdefault("GIT_AUTHOR_EMAIL", "kcmt-benchmark@example.com")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    if runtime == "python":
+        env["KCMT_RUNTIME"] = "python"
+    return env
+
+
+def _execute_runtime_command(
+    command: list[str], *, env: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    started = time.perf_counter()
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(_runtime_benchmark_repo_root()),
+    )
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    return completed, elapsed_ms
+
+
+def _failure_reason(completed: subprocess.CompletedProcess[str]) -> str:
+    stderr = completed.stderr.strip()
+    stdout = completed.stdout.strip()
+    detail = stderr or stdout or "command failed without output"
+    return f"exit {completed.returncode}: {detail}"
+
+
+def _scenario_command(
+    runtime: str,
+    repo_path: Path,
+    scenario: _RuntimeBenchmarkScenario,
+    metadata: dict[str, Any],
+    rust_bin: Path | None,
+) -> list[str]:
+    if runtime == "python":
+        base = _runtime_benchmark_python_command()
+    else:
+        if rust_bin is None:
+            raise FileNotFoundError("Rust binary is not configured")
+        base = [str(rust_bin)]
+
+    if scenario.workflow_contract_id == "status-repo-path":
+        return [*base, "status", "--repo-path", str(repo_path)]
+    if scenario.workflow_contract_id == "oneshot-repo-path":
+        return [*base, "--oneshot", "--repo-path", str(repo_path)]
+    target = _runtime_benchmark_target_file(repo_path, metadata)
+    return [*base, "--file", target, "--repo-path", str(repo_path)]
+
+
+def _prepare_status_snapshot(
+    runtime: str,
+    repo_path: Path,
+    metadata: dict[str, Any],
+    rust_bin: Path | None,
+    env: dict[str, str],
+) -> str | None:
+    target = _runtime_benchmark_target_file(repo_path, metadata)
+    prep_command = _scenario_command(
+        runtime,
+        repo_path,
+        _RuntimeBenchmarkScenario(
+            scenario_id="prep:file-repo-path",
+            workflow_contract_id="file-repo-path",
+            command_label=f"kcmt --file {target} --repo-path <repo>",
+            expected_stdout_fragment="✓ ",
+        ),
+        metadata,
+        rust_bin,
+    )
+    completed, _ = _execute_runtime_command(prep_command, env=env)
+    if completed.returncode != 0:
+        return _failure_reason(completed)
+    return None
+
+
+def _run_runtime_scenario(
+    runtime: str,
+    source_repo: Path,
+    metadata: dict[str, Any],
+    scenario: _RuntimeBenchmarkScenario,
+    *,
+    iterations: int,
+    rust_bin: Path | None,
+) -> RuntimeBenchmarkResult:
+    if runtime == "rust":
+        if (
+            rust_bin is None
+            or not rust_bin.exists()
+            or not os.access(rust_bin, os.X_OK)
+        ):
+            return RuntimeBenchmarkResult(
+                scenario_id=scenario.scenario_id,
+                workflow_contract_id=scenario.workflow_contract_id,
+                corpus_id=str(metadata["id"]),
+                runtime=runtime,
+                command_label=scenario.command_label,
+                iterations=iterations,
+                status="excluded",
+                wall_time_ms=0.0,
+                median_time_ms=None,
+                peak_rss_bytes=None,
+                exit_code=None,
+                failure_reason=f"Rust binary not available: {rust_bin}",
+            )
+
+    durations: list[float] = []
+    last_exit_code = 0
+    failure_reason: str | None = None
+
+    for _ in range(iterations):
+        repo_path, materialized_metadata = _materialize_runtime_corpus(source_repo)
+        config_home = repo_path.parent / ".kcmt-config"
+        env = _runtime_benchmark_env(config_home, runtime)
+
+        try:
+            if scenario.workflow_contract_id == "status-repo-path":
+                prep_error = _prepare_status_snapshot(
+                    runtime,
+                    repo_path,
+                    materialized_metadata,
+                    rust_bin,
+                    env,
+                )
+                if prep_error:
+                    failure_reason = prep_error
+                    last_exit_code = 1
+                    break
+
+            command = _scenario_command(
+                runtime,
+                repo_path,
+                scenario,
+                materialized_metadata,
+                rust_bin,
+            )
+            completed, elapsed_ms = _execute_runtime_command(command, env=env)
+            last_exit_code = completed.returncode
+            durations.append(elapsed_ms)
+            if completed.returncode != 0:
+                failure_reason = _failure_reason(completed)
+                break
+            if scenario.expected_stdout_fragment not in completed.stdout:
+                failure_reason = (
+                    "missing expected stdout fragment: "
+                    f"{scenario.expected_stdout_fragment}"
+                )
+                last_exit_code = 1
+                break
+        finally:
+            shutil.rmtree(repo_path.parent, ignore_errors=True)
+
+    passed = failure_reason is None
+    return RuntimeBenchmarkResult(
+        scenario_id=scenario.scenario_id,
+        workflow_contract_id=scenario.workflow_contract_id,
+        corpus_id=str(metadata["id"]),
+        runtime=runtime,
+        command_label=scenario.command_label,
+        iterations=iterations,
+        status="passed" if passed else "failed",
+        wall_time_ms=sum(durations),
+        median_time_ms=float(median(durations)) if durations else None,
+        peak_rss_bytes=None,
+        exit_code=last_exit_code if durations or failure_reason else None,
+        failure_reason=failure_reason,
+    )
+
+
+def _build_runtime_summary(
+    results: list[RuntimeBenchmarkResult], runtime: str
+) -> RuntimeBenchmarkSummary:
+    relevant = [item for item in results if item.runtime == runtime]
+    passing = [item for item in relevant if item.status == "passed"]
+    median_wall_time_ms = None
+    if passing:
+        median_wall_time_ms = float(
+            median(
+                [
+                    (
+                        item.median_time_ms
+                        if item.median_time_ms is not None
+                        else item.wall_time_ms
+                    )
+                    for item in passing
+                ]
+            )
+        )
+    return RuntimeBenchmarkSummary(
+        scenario_count=len(relevant),
+        passed=sum(1 for item in relevant if item.status == "passed"),
+        failed=sum(1 for item in relevant if item.status == "failed"),
+        excluded=sum(1 for item in relevant if item.status == "excluded"),
+        median_wall_time_ms=median_wall_time_ms,
+    )
+
+
+def runtime_benchmark_report_to_dict(report: RuntimeBenchmarkRun) -> dict[str, Any]:
+    return asdict(report)
+
+
+def run_runtime_benchmark(
+    repo_path: Path | str,
+    *,
+    runtime: str = "both",
+    iterations: int = 3,
+    rust_bin: Path | str | None = None,
+) -> RuntimeBenchmarkRun:
+    repo_root = Path(repo_path).expanduser().resolve(strict=False)
+    if not repo_root.exists():
+        raise FileNotFoundError(f"Runtime benchmark corpus does not exist: {repo_root}")
+    if runtime not in {"python", "rust", "both"}:
+        raise ValueError(f"Unsupported runtime benchmark mode: {runtime}")
+
+    metadata = _load_runtime_benchmark_corpus_metadata(repo_root)
+    scenarios = _runtime_benchmark_scenarios(repo_root, metadata)
+    requested_runtimes = ["python", "rust"] if runtime == "both" else [runtime]
+    rust_path = None
+    if rust_bin is not None:
+        rust_path = Path(rust_bin).expanduser().resolve(strict=False)
+    elif "rust" in requested_runtimes:
+        rust_path = default_runtime_benchmark_rust_bin()
+
+    results: list[RuntimeBenchmarkResult] = []
+    for selected_runtime in requested_runtimes:
+        for scenario in scenarios:
+            results.append(
+                _run_runtime_scenario(
+                    selected_runtime,
+                    repo_root,
+                    metadata,
+                    scenario,
+                    iterations=iterations,
+                    rust_bin=rust_path,
+                )
+            )
+
+    return RuntimeBenchmarkRun(
+        schema_version=RUNTIME_BENCHMARK_SCHEMA_VERSION,
+        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        command_set="local-workflows-v1",
+        corpora=[str(metadata["id"])],
+        results=results,
+        summary={
+            "python": _build_runtime_summary(results, "python"),
+            "rust": _build_runtime_summary(results, "rust"),
+        },
+    )
+
+
+def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
+    lines = [
+        "# kcmt Runtime Benchmark",
+        "",
+        f"- Timestamp: {report.timestamp}",
+        f"- Command set: {report.command_set}",
+        f"- Corpora: {', '.join(report.corpora)}",
+        "",
+        "| Runtime | Scenarios | Passed | Failed | Excluded | Median wall time (ms) |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for runtime_name in ("python", "rust"):
+        summary = report.summary[runtime_name]
+        median_text = (
+            f"{summary.median_wall_time_ms:.2f}"
+            if summary.median_wall_time_ms is not None
+            else "-"
+        )
+        lines.append(
+            f"| {runtime_name} | {summary.scenario_count} | {summary.passed} | "
+            f"{summary.failed} | {summary.excluded} | {median_text} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "| Scenario | Runtime | Status | Iterations | Total wall time (ms) | Median (ms) | Failure |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for result in report.results:
+        median_text = (
+            f"{result.median_time_ms:.2f}" if result.median_time_ms is not None else "-"
+        )
+        lines.append(
+            "| {scenario} | {runtime} | {status} | {iterations} | {wall:.2f} | {median} | {failure} |".format(
+                scenario=_escape_md(result.scenario_id),
+                runtime=result.runtime,
+                status=result.status,
+                iterations=result.iterations,
+                wall=result.wall_time_ms,
+                median=median_text,
+                failure=(
+                    _escape_md(result.failure_reason) if result.failure_reason else "-"
+                ),
+            )
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_runtime_benchmark_report(
+    report: RuntimeBenchmarkRun,
+    *,
+    repo_root: Path | str | None,
+) -> Path | None:
+    try:
+        target_root = Path(repo_root) if repo_root is not None else Path(".")
+    except TypeError:
+        target_root = Path(".")
+
+    payload = json.dumps(
+        runtime_benchmark_report_to_dict(report),
+        indent=2,
+        ensure_ascii=False,
+    )
+    safe_ts = report.timestamp.replace(":", "")
+    try:
+        report_dir = state_dir(target_root) / "benchmarks"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        output_path = report_dir / f"runtime-benchmark-{safe_ts}.json"
+        output_path.write_text(payload + "\n", encoding="utf-8")
+        return output_path
     except OSError:
         return None

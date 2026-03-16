@@ -21,6 +21,48 @@ comparable across providers:
 
 Every provider/model combination that can be initialized runs all five samples.
 
+## Runtime benchmark mode
+
+Provider-quality benchmarking and runtime benchmarking are now separate on purpose:
+
+- `kcmt --benchmark` keeps the existing provider/model quality leaderboard.
+- `kcmt benchmark runtime ...` compares the Python and Rust CLIs on the same repo
+  corpus without live LLM traffic.
+
+To build a deterministic synthetic runtime corpus, generate a fixture repo first:
+
+```bash
+python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
+```
+
+That command prints a `repo_path` plus a stable `corpus_id`. You can verify the
+fixture with plain git:
+
+```bash
+git -C /path/to/generated/repo status --short | head
+```
+
+The checked-in realistic corpus lives at
+`tests/fixtures/runtime_corpus/mini_realistic_repo/`.
+
+Run the runtime benchmark like this:
+
+```bash
+kcmt benchmark runtime --repo-path /path/to/generated/repo --runtime both --json
+```
+
+The runtime report includes:
+
+- `command_set`: currently `local-workflows-v1`
+- `corpora`: the stable corpus identifiers included in the run
+- `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
+  and `--file <target> --repo-path`
+- `summary`: per-runtime pass/fail/exclusion counts and median wall time
+
+Missing runtimes are recorded explicitly as `excluded` results. For example, if
+the Rust binary is unavailable, the report still emits Python results and
+documents why Rust was skipped.
+
 ## Metrics collected
 
 For each provider/model the benchmark records:

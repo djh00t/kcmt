@@ -1,7 +1,59 @@
 import json
+import subprocess
+from pathlib import Path
 
 import kcmt.cli as cli_module
 from kcmt.config import config_file_path, state_dir
+from kcmt.legacy_cli import LegacyCLI
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _create_runtime_corpus(tmp_path: Path) -> Path:
+    repo = tmp_path / "runtime-cli-corpus"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(repo)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if not (repo / ".git").exists():
+        _git(repo, "init")
+        _git(repo, "branch", "-M", "main")
+    _git(repo, "config", "user.name", "Tester")
+    _git(repo, "config", "user.email", "tester@example.com")
+    source_file = repo / "src" / "app.py"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text(
+        "def greet() -> str:\n    return 'hello'\n", encoding="utf-8"
+    )
+    (repo / ".kcmt-runtime-corpus.json").write_text(
+        json.dumps(
+            {
+                "id": "pytest-cli-runtime-corpus",
+                "kind": "synthetic",
+                "file_count": 1,
+                "git_history_state": "seeded-history",
+                "change_shape": ["modified", "nested-paths"],
+                "default_file_target": "src/app.py",
+            }
+        ),
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "chore(repo): seed")
+    source_file.write_text(
+        "def greet() -> str:\n    return 'hello from benchmark'\n", encoding="utf-8"
+    )
+    return repo
 
 
 def test_cli_help_returns_zero():
@@ -243,3 +295,169 @@ def test_cli_status_without_snapshot(monkeypatch, tmp_path, capsys):
     output = capsys.readouterr().out
     assert code == 1
     assert "No kcmt run history" in output
+
+
+def test_cli_status_raw_snapshot(tmp_path, capsys):
+    snapshot = {
+        "repo_path": str(tmp_path),
+        "summary": "Successfully completed 1 commits.",
+        "counts": {
+            "commit_success": 1,
+            "commit_failure": 0,
+        },
+    }
+    history_dir = state_dir(tmp_path)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "last_run.json").write_text(json.dumps(snapshot))
+
+    cli = cli_module.CLI()
+    code = cli.run(["status", "--repo-path", str(tmp_path), "--raw"])
+    output = capsys.readouterr().out
+
+    assert code == 0
+    assert json.loads(output) == snapshot
+
+
+def test_cli_runtime_benchmark_json(tmp_path, capsys):
+    repo = _create_runtime_corpus(tmp_path)
+
+    cli = cli_module.CLI()
+    code = cli.run(
+        [
+            "benchmark",
+            "runtime",
+            "--repo-path",
+            str(repo),
+            "--runtime",
+            "python",
+            "--iterations",
+            "1",
+            "--json",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert code == 0
+    payload = json.loads(output)
+    assert payload["schema_version"] == "1.0.0"
+    assert payload["command_set"] == "local-workflows-v1"
+    assert payload["corpora"] == ["pytest-cli-runtime-corpus"]
+    assert len(payload["results"]) == 3
+    assert all(item["runtime"] == "python" for item in payload["results"])
+
+
+def test_legacy_cli_benchmark_flag_preserves_provider_dispatch(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    def _fake_maybe_offer(self, repo_root: Path, non_interactive: bool) -> None:
+        assert repo_root == tmp_path
+        assert non_interactive is True
+
+    def _fake_benchmark(self, args):
+        calls.append("provider")
+        assert args.benchmark is True
+        assert getattr(args, "command", None) is None
+        return 0
+
+    def _fake_runtime(self, args, repo_root: Path):
+        calls.append("runtime")
+        return 0
+
+    monkeypatch.setattr(LegacyCLI, "_maybe_offer_commitizen_install", _fake_maybe_offer)
+    monkeypatch.setattr(LegacyCLI, "_execute_benchmark", _fake_benchmark)
+    monkeypatch.setattr(LegacyCLI, "_execute_runtime_benchmark", _fake_runtime)
+
+    cli = LegacyCLI()
+    code = cli.run(["--benchmark", "--repo-path", str(tmp_path)])
+
+    assert code == 0
+    assert calls == ["provider"]
+
+
+def test_legacy_cli_runtime_benchmark_dispatches_explicit_mode(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    def _fake_benchmark(self, args):
+        calls.append("provider")
+        return 0
+
+    def _fake_runtime(self, args, repo_root: Path):
+        calls.append("runtime")
+        assert repo_root == tmp_path
+        assert args.runtime == "python"
+        assert args.command == "benchmark"
+        assert args.benchmark_mode == "runtime"
+        return 0
+
+    monkeypatch.setattr(LegacyCLI, "_execute_benchmark", _fake_benchmark)
+    monkeypatch.setattr(LegacyCLI, "_execute_runtime_benchmark", _fake_runtime)
+
+    cli = LegacyCLI()
+    code = cli.run(
+        [
+            "benchmark",
+            "runtime",
+            "--repo-path",
+            str(tmp_path),
+            "--runtime",
+            "python",
+            "--iterations",
+            "1",
+        ]
+    )
+
+    assert code == 0
+    assert calls == ["runtime"]
+
+
+def test_legacy_cli_runtime_benchmark_preserves_explicit_corpus_path(
+    monkeypatch, tmp_path
+):
+    host_repo = tmp_path / "host-repo"
+    host_repo.mkdir()
+    _git(host_repo, "init", "-q")
+    _git(host_repo, "config", "user.name", "Tester")
+    _git(host_repo, "config", "user.email", "tester@example.com")
+
+    corpus = host_repo / "fixtures" / "runtime-corpus"
+    corpus.mkdir(parents=True)
+    (corpus / ".kcmt-runtime-corpus.json").write_text(
+        json.dumps(
+            {
+                "id": "nested-runtime-corpus",
+                "kind": "synthetic",
+                "file_count": 1,
+                "git_history_state": "seeded-history",
+                "change_shape": ["modified"],
+                "default_file_target": "app.py",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (corpus / "app.py").write_text("print('nested corpus')\n", encoding="utf-8")
+
+    captured: list[Path] = []
+
+    def _fake_runtime(self, args, repo_root: Path):
+        captured.append(repo_root)
+        assert repo_root == corpus.resolve()
+        return 0
+
+    monkeypatch.setattr(LegacyCLI, "_execute_runtime_benchmark", _fake_runtime)
+
+    cli = LegacyCLI()
+    code = cli.run(
+        [
+            "benchmark",
+            "runtime",
+            "--repo-path",
+            str(corpus),
+            "--runtime",
+            "python",
+            "--iterations",
+            "1",
+        ]
+    )
+
+    assert code == 0
+    assert captured == [corpus.resolve()]

@@ -207,6 +207,16 @@ Options:
 
 Snapshots are saved under `~/.config/kcmt/repos/<repo-id>/benchmarks/benchmark-<timestamp>.json` for later comparison.
 
+Runtime benchmarking is a separate mode:
+
+```shell
+python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
+kcmt benchmark runtime --repo-path /path/to/generated/repo --runtime both --json
+```
+
+That command compares the Python and Rust CLIs on the same repo corpus without
+mixing runtime timing into the provider-quality leaderboard.
+
 ## Quick start (CLI)
 
 ```shell
@@ -246,6 +256,8 @@ Exit codes
   scoring rubric and pass/fail guidance. Missing credentials are listed in the
   "Excluded Models" table at the end of each run.
 - `--benchmark-json` / `--benchmark-csv` – print results in machine-readable formats.
+- `benchmark runtime --repo-path PATH --runtime {python,rust,both} --json` –
+  compare Python and Rust local workflow timings on the same repo corpus.
 
 ## Conventional commit automation
 

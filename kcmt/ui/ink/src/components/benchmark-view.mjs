@@ -336,7 +336,8 @@ export default function BenchmarkView({onBack} = {}) {
   return h(
     Box,
     {flexDirection: 'column', padding: 1, gap: 1, borderStyle: 'round', borderColor: 'yellow'},
-    h(Text, null, titleGradient('🧪 kcmt benchmark lab')),
+    h(Text, null, titleGradient('🧪 kcmt provider benchmark lab')),
+    h(Text, {dimColor: true}, 'Provider leaderboard only. Use `kcmt benchmark runtime ...` in the legacy CLI for runtime timing.'),
     h(Text, {dimColor: true}, statusLine),
     payload ? (viewMode === 'details' ? renderDetails() : renderProviderSections(payload)) : null,
     h(Text, {dimColor: true}, footerHint),
