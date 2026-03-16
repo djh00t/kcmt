@@ -594,6 +594,33 @@ def _action_save_preferences(repo_path: str, payload: dict[str, Any]) -> int:
 
 
 def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
+    benchmark_mode = str(
+        payload.get("mode") or payload.get("benchmarkMode") or ""
+    ).strip()
+    if benchmark_mode and benchmark_mode.lower() != "provider":
+        _emit(
+            "error",
+            {
+                "message": (
+                    "Ink benchmark UI only supports provider benchmarking. "
+                    "Use `kcmt benchmark runtime ...` in the legacy CLI for "
+                    "runtime timing."
+                )
+            },
+        )
+        return 1
+    if any(key in payload for key in ("runtime", "iterations", "rustBin", "rust_bin")):
+        _emit(
+            "error",
+            {
+                "message": (
+                    "Runtime benchmark options are not supported in the Ink "
+                    "benchmark UI. Use `kcmt benchmark runtime ...` instead."
+                )
+            },
+        )
+        return 1
+
     repo_root = _resolve_repo_root(repo_path)
     providers_payload = payload.get("providers")
     providers_explicit = isinstance(providers_payload, list) and bool(providers_payload)

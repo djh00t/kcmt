@@ -1,0 +1,14 @@
+{
+  "id": "mini-realistic-fixture",
+  "kind": "realistic",
+  "file_count": 3,
+  "git_history_state": "seeded-history",
+  "change_shape": [
+    "modified",
+    "deleted",
+    "untracked",
+    "ignored-files",
+    "nested-paths"
+  ],
+  "default_file_target": "src/app.py"
+}

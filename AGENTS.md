@@ -53,6 +53,8 @@
 - Local filesystem only (`~/.config/kcmt`, environment variables, git working tree/index); no server-side database (001-rust-parity-migration)
 - Python 3.12 (primary wrapper and tests), Rust stable binaries (already implemented) + `pytest`, `uv`, GitHub Actions, existing Rust workspace binaries (`kcmt`, `commit`, `kc`) (002-rust-canary-rollout)
 - N/A (ephemeral trace output only) (002-rust-canary-rollout)
+- Python 3.12, Rust 1.78 workspace + Python `argparse`, `pytest`, `uv`; Rust `clap`, `serde`, `serde_json`, `sha2`, `time` (003-bring-rust-cli)
+- Local filesystem only (`~/.config/kcmt`, repo-local git working tree, runtime corpus fixtures, benchmark artifacts) (003-bring-rust-cli)
 
 ## Recent Changes
 - 001-rust-parity-migration: Added Rust stable (target 1.78+), Python 3.12 retained temporarily for parity harness and transition wrappers + `clap`, `tokio`, `reqwest`, `serde`/`serde_json`, `tracing`, `anyhow`/`thiserror`, optional `ratatui` for interactive TUI phase

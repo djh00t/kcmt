@@ -56,6 +56,7 @@ class CLI:
         arg_list = args or []
         # Flags that should always use the legacy CLI (non-TUI).
         legacy_tokens = {
+            "benchmark",
             "status",
             "--raw",
             "--list-models",

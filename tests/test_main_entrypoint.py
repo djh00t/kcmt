@@ -93,6 +93,28 @@ def test_run_rust_runtime_executes_binary_and_returns_code(monkeypatch):
     assert called == [["/tmp/kcmt-rust", "status", "--repo-path", "."]]
 
 
+def test_run_rust_runtime_preserves_status_raw_args(monkeypatch):
+    called: list[list[str]] = []
+
+    def _fake_run(args: list[str], check: bool):
+        called.append(args)
+        assert check is False
+        return type("CompletedProcessStub", (), {"returncode": 0})()
+
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: True)
+    monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+    monkeypatch.setattr(
+        main_mod.sys,
+        "argv",
+        ["kcmt", "status", "--repo-path", "/tmp/repo", "--raw"],
+    )
+    monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+    assert main_mod._run_rust_runtime() == 0
+    assert called == [["/tmp/kcmt-rust", "status", "--repo-path", "/tmp/repo", "--raw"]]
+
+
 def test_emit_runtime_trace_enabled_writes_json(monkeypatch, capsys):
     monkeypatch.setenv("KCMT_RUNTIME_TRACE", "1")
     decision = {

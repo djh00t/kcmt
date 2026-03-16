@@ -26,3 +26,5 @@ anyhow.workspace = true
 clap.workspace = true
 kcmt-bench = { path = "../kcmt-bench" }
 kcmt-core = { path = "../kcmt-core" }
+serde_json.workspace = true
+sha2.workspace = true
