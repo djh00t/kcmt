@@ -1,11 +1,9 @@
 import React, {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text, useInput, useStdout} from 'ink';
-import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 import {AppContext} from '../app-context.mjs';
+import {buildWorkflowViewModel} from './workflow-progress-model.mjs';
 const h = React.createElement;
-
-const STAGE_ORDER = ['prepare', 'commit', 'done'];
 
 function ellipsize(text, maxLength) {
   const value = text == null ? '' : String(text);
@@ -40,54 +38,8 @@ function normaliseStats(stats = {}) {
     diffs_built: stats.diffs_built ?? 0,
     requests: stats.requests ?? 0,
     responses: stats.responses ?? 0,
+    elapsed: stats.elapsed ?? 0,
   };
-}
-
-function buildProgressLine(stage, stats, maxWidth) {
-  const snapshot = normaliseStats(stats);
-  const total = Math.max(0, snapshot.total_files);
-  const diffs = Math.max(0, Math.min(snapshot.diffs_built, total));
-  const requests = Math.max(0, snapshot.requests);
-  const responses = Math.max(0, snapshot.responses);
-  const processed = Math.max(0, Math.min(snapshot.processed, total));
-  const prepared = Math.max(0, Math.min(snapshot.prepared, total));
-  const success = Math.max(0, snapshot.successes);
-  const failures = Math.max(0, snapshot.failures);
-  const rate = Number.isFinite(snapshot.rate) ? snapshot.rate : 0;
-
-  const stageStyles = {
-    prepare: {icon: '🧠', color: chalk.cyan},
-    commit: {icon: '🚀', color: chalk.green},
-    done: {icon: '🏁', color: chalk.yellow},
-  };
-  const {icon, color} = stageStyles[stage] || stageStyles.prepare;
-  const stageLabel = (stage || 'progress').toUpperCase().padEnd(7);
-
-  const diffStr = String(diffs).padStart(3);
-  const processedStr = String(processed).padStart(3);
-  const totalStr = String(total).padStart(3);
-  const preparedStr = String(prepared).padStart(3);
-  const reqStr = String(requests).padStart(3);
-  const resStr = String(responses).padStart(3);
-  const successStr = String(success).padStart(3);
-  const failureStr = String(failures).padStart(3);
-  const rateStr = rate.toFixed(2).padStart(5);
-
-  const line = (
-    `${chalk.bold(`${icon} kcmt`)} ` +
-    `${color(stageLabel)} │ ` +
-    `${chalk.dim(`Δ ${diffStr}`)}/${totalStr} │ ` +
-    `${chalk.cyan(`req ${reqStr}`)}/${chalk.cyan(`${resStr} res`)} │ ` +
-    `${chalk.green(`${preparedStr}/${totalStr} ready`)} │ ` +
-    `${chalk.green(`✓ ${successStr}`)} │ ` +
-    `${chalk.red(`✗ ${failureStr}`)} │ ` +
-    `${chalk.dim(`${rateStr} commits/s`)}`
-  );
-
-  if (!maxWidth) {
-    return line;
-  }
-  return ellipsize(line, maxWidth);
 }
 
 function useMessageLog() {
@@ -120,6 +72,14 @@ function useMessageLog() {
   return [messages, append];
 }
 
+function chunkItems(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 export default function WorkflowView({onBack} = {}) {
   const {backend, bootstrap, argv} = useContext(AppContext);
   const {stdout} = useStdout();
@@ -127,8 +87,8 @@ export default function WorkflowView({onBack} = {}) {
   const stdoutCols = stdout && stdout.columns ? Number(stdout.columns) : undefined;
   const lineWidth = stdoutCols ? Math.max(40, stdoutCols - 2) : undefined;
 
-  const HEADER_ROWS = 7;
-  const FOOTER_ROWS = 2;
+  const HEADER_ROWS = 13;
+  const FOOTER_ROWS = 3;
   const FILE_ROWS = 2;
   const COMPLETION_EXIT_DELAY_MS = 1000;
 
@@ -141,12 +101,6 @@ export default function WorkflowView({onBack} = {}) {
   const [stage, setStage] = useState('prepare');
   const [stats, setStats] = useState(normaliseStats());
   const [status, setStatus] = useState('running');
-  const [summary, setSummary] = useState(null);
-  const [errors, setErrors] = useState([]);
-  const [progressSnapshots, setProgressSnapshots] = useState({});
-  const [currentProgressLine, setCurrentProgressLine] = useState('');
-  const [commitSubjects, setCommitSubjects] = useState([]);
-  const [metricsSummary, setMetricsSummary] = useState('');
   const [messages, appendMessages] = useMessageLog();
   const emitterRef = useRef(null);
   const stageRef = useRef('prepare');
@@ -192,9 +146,6 @@ export default function WorkflowView({onBack} = {}) {
         stageRef.current = nextStage;
         setStats(nextStats);
         setStage(nextStage);
-        const line = buildProgressLine(nextStage, nextStats, lineWidth);
-        setCurrentProgressLine(line);
-        setProgressSnapshots(prev => ({...prev, [nextStage]: line}));
         if (data?.files && typeof data.files === 'object') {
           setFileStates(data.files);
         }
@@ -249,7 +200,6 @@ export default function WorkflowView({onBack} = {}) {
           detail,
           '',
         ]);
-        setErrors(prev => [...prev, data?.error || `Skipped ${file}`]);
         if (data?.file && data?.error) {
           setFileMeta(prev => ({
             ...prev,
@@ -258,21 +208,11 @@ export default function WorkflowView({onBack} = {}) {
         }
       }
       if (event === 'complete') {
-        setSummary(data);
         setStatus('completed');
         if (data?.files && typeof data.files === 'object') {
           setFileStates(data.files);
         }
-        if (Array.isArray(data?.commit_subjects)) {
-          setCommitSubjects(data.commit_subjects.map(item => String(item))); // already serialised
-        }
-        if (data?.metrics_summary) {
-          setMetricsSummary(String(data.metrics_summary));
-        }
         const doneStats = normaliseStats(data?.stats || statsRef.current);
-        const doneLine = buildProgressLine('done', doneStats, lineWidth);
-        setProgressSnapshots(prev => ({...prev, done: doneLine}));
-        setCurrentProgressLine('');
         stageRef.current = 'done';
         statsRef.current = doneStats;
         setStage('done');
@@ -280,14 +220,12 @@ export default function WorkflowView({onBack} = {}) {
       if (event === 'error') {
         const messageText = data?.message || 'Workflow failed';
         setStatus('error');
-        setErrors(prev => [...prev, messageText]);
         appendMessages(chalk.red(`✖ ${messageText}`));
       }
     });
 
       emitter.on('error', err => {
         setStatus('error');
-        setErrors(prev => [...prev, err.message]);
       });
 
     emitter.on('done', () => {
@@ -362,55 +300,103 @@ export default function WorkflowView({onBack} = {}) {
   const endpoint = ellipsize(bootstrap?.config?.llm_endpoint || '', lineWidth ? lineWidth - 12 : undefined);
   const maxRetries = argv['max-retries'] || bootstrap?.config?.max_retries || 3;
 
+  const viewportFiles = getFileViewportCount();
+  const viewModel = useMemo(
+    () =>
+      buildWorkflowViewModel({
+        stage,
+        status,
+        stats,
+        fileStates,
+        fileMeta,
+        now: Date.now() / 1000,
+        viewportCount: viewportFiles,
+        pushState,
+      }),
+    [stage, status, stats, fileStates, fileMeta, viewportFiles, pushState],
+  );
+
+  function formatStageCounter(counter) {
+    const label = chalk.bold(counter.label);
+    if (counter.label === 'Commits completed') {
+      return `${label}: ${chalk.green(counter.value)}`;
+    }
+    if (counter.label === 'Commits in progress') {
+      return `${label}: ${chalk.yellow(counter.value)}`;
+    }
+    if (counter.label === 'Failures') {
+      return `${label}: ${chalk.red(counter.value)}`;
+    }
+    if (counter.label === 'Push') {
+      const pushValue = String(counter.value || '');
+      let painter = chalk.dim;
+      if (pushValue === 'Pushing') {
+        painter = chalk.yellow;
+      } else if (pushValue === 'Done') {
+        painter = chalk.green;
+      } else if (pushValue === 'Failed') {
+        painter = chalk.red;
+      }
+      return `${label}: ${painter(pushValue)}`;
+    }
+    if (counter.label.startsWith('LLM')) {
+      return `${label}: ${chalk.cyan(counter.value)}`;
+    }
+    return `${label}: ${counter.value}`;
+  }
+
   const headerElements = [
     h(Text, {key: 'hdr-banner'}, chalk.bold.cyan(`kcmt :: provider ${provider} :: repo ${repo}`)),
     h(Text, {key: 'hdr-provider'}, `Provider: ${provider}`),
     h(Text, {key: 'hdr-model'}, `Model: ${model}`),
     h(Text, {key: 'hdr-endpoint'}, `Endpoint: ${endpoint}`),
     h(Text, {key: 'hdr-retries'}, `Max retries: ${maxRetries}`),
-    h(Text, {key: 'hdr-hint', dimColor: true}, viewMode === 'files' ? 'j/k, PgUp/PgDn to scroll • m to toggle messages • ESC to exit' : 'm to toggle files • ESC to exit'),
-    h(Text, {key: 'hdr-gap'}, ''),
+    h(
+      Text,
+      {key: 'hdr-phase'},
+      `${chalk.bold('Phase')}: ${chalk.yellow(viewModel.currentPhaseLabel)} │ ${chalk.bold('Elapsed')}: ${viewModel.totalElapsedLabel}`,
+    ),
+    ...chunkItems(viewModel.stageCounters, 3).map((group, index) =>
+      h(
+        Text,
+        {key: `hdr-counters-${index}`, wrap: 'truncate'},
+        group.map(formatStageCounter).join(' │ '),
+      ),
+    ),
   ];
-  // Build file list view
-  const filesArray = useMemo(() => {
-    const map = fileStates || {};
-    const paths = Object.keys(map);
-    paths.sort((a, b) => a.localeCompare(b));
-    return paths.map(p => ({
-      path: p,
-      state: map[p] || {},
-    }));
-  }, [fileStates]);
 
-  function computeProgress(entry) {
-    const s = entry?.state || {};
-    let pct = 0;
-    if (s.diff === 'yes') pct = Math.max(pct, 20);
-    if (s.req === 'sent') pct = Math.max(pct, 40);
-    if (s.res === 'ok') pct = Math.max(pct, 60);
-    if (s.batch === 'completed') pct = Math.max(pct, 80);
-    if (s.commit === 'running') pct = Math.max(pct, 85);
-    if (s.commit === 'ok') pct = 100;
-    if (s.commit === 'err') pct = 100;
-    return pct;
+  if (viewModel.activeNow) {
+    headerElements.push(
+      h(Text, {key: 'hdr-active', wrap: 'truncate'}, chalk.cyan(viewModel.activeNow)),
+    );
   }
-
-  function computeStatus(entry) {
-    const s = entry?.state || {};
-    const meta = fileMeta[entry.path] || {};
-    
-    // Detailed workflow states - show each step clearly
-    if (meta.error) return chalk.red('error');
-    if (s.commit === 'err') return chalk.red('commit failed');
-    if (s.commit === 'ok') return chalk.green('committed');
-    if (s.commit === 'running') return chalk.yellow('committing');
-    if (meta.subject) return chalk.cyan('ready to commit');
-    if (s.res === 'ok' && s.req === 'sent') return chalk.cyan('generating message');
-    if (s.res === 'ok') return chalk.cyan('response received');
-    if (s.req === 'sent') return chalk.magenta('awaiting response');
-    if (s.diff === 'yes') return chalk.blue('diff collected');
-    return chalk.dim('pending');
+  if (viewModel.slowAlert) {
+    headerElements.push(
+      h(Text, {key: 'hdr-slow', wrap: 'truncate'}, chalk.yellow(viewModel.slowAlert)),
+    );
   }
+  const orientationParts = [];
+  if (viewModel.viewportSummary) {
+    orientationParts.push(viewModel.viewportSummary);
+  }
+  if (viewModel.notStartedCount > 0) {
+    orientationParts.push(`${viewModel.notStartedCount} not started`);
+  }
+  if (orientationParts.length) {
+    headerElements.push(
+      h(Text, {key: 'hdr-orientation', wrap: 'truncate'}, chalk.dim(orientationParts.join(' │ '))),
+    );
+  }
+  headerElements.push(
+    h(
+      Text,
+      {key: 'hdr-hint', dimColor: true},
+      viewMode === 'files'
+        ? 'j/k, PgUp/PgDn to scroll • m to toggle messages • ESC to exit'
+        : 'm to toggle files • ESC to exit',
+    ),
+  );
+  headerElements.push(h(Text, {key: 'hdr-gap'}, ''));
 
   function renderBar(pct, width) {
     const w = Math.max(10, Math.min(30, width || 20));
@@ -419,19 +405,17 @@ export default function WorkflowView({onBack} = {}) {
     return `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
   }
 
-  const viewportFiles = getFileViewportCount();
+  const filesArray = viewModel.orderedFiles;
   const start = Math.max(0, Math.min(scroll, Math.max(0, filesArray.length - viewportFiles)));
   const end = Math.min(filesArray.length, start + viewportFiles);
   const visibleFiles = filesArray.slice(start, end);
 
   const fileElements = visibleFiles.length
     ? visibleFiles.flatMap((item, idx) => {
-        const pct = computeProgress(item);
+        const pct = item.progressPercent;
         const bar = renderBar(pct, 20);
-        const statusLabel = computeStatus(item);
         const pathMax = Math.max(10, (lineWidth || 80) - 40);
         const shownPath = ellipsize(item.path, pathMax);
-        const meta = fileMeta[item.path] || {};
         const lines = [];
         lines.push(
           h(
@@ -440,30 +424,42 @@ export default function WorkflowView({onBack} = {}) {
             `${shownPath.padEnd(pathMax)}  ${bar} ${String(pct).padStart(3)}%`,
           ),
         );
-        if (meta.subject) {
+        if (item.subject) {
           const subMax = Math.max(10, (lineWidth || 80) - 4);
           lines.push(
             h(
               Text,
               {key: `file-${start + idx}-row2`, wrap: 'truncate'},
-              chalk.greenBright(ellipsize(meta.subject, subMax)),
+              chalk.greenBright(ellipsize(item.subject, subMax)),
             ),
           );
-        } else if (meta.error) {
+        } else if (item.error) {
           const errMax = Math.max(10, (lineWidth || 80) - 4);
           lines.push(
             h(
               Text,
               {key: `file-${start + idx}-row2-err`, wrap: 'truncate'},
-              chalk.red(ellipsize(meta.error, errMax)),
+              chalk.red(ellipsize(item.error, errMax)),
             ),
           );
         } else {
+          let statusColor = chalk.dim;
+          if (item.stage === 'done') {
+            statusColor = chalk.green;
+          } else if (item.stage === 'failed') {
+            statusColor = chalk.red;
+          } else if (item.stage === 'commit') {
+            statusColor = chalk.yellow;
+          } else if (item.stage === 'llm_wait' || item.stage === 'prepared') {
+            statusColor = chalk.cyan;
+          } else if (item.stage === 'diff') {
+            statusColor = chalk.blue;
+          }
           lines.push(
             h(
               Text,
               {key: `file-${start + idx}-status`, wrap: 'truncate'},
-              chalk.dim(statusLabel),
+              statusColor(item.statusText),
             ),
           );
         }
@@ -479,116 +475,20 @@ export default function WorkflowView({onBack} = {}) {
     messageElements.push(h(Text, {key: 'msg-placeholder', dimColor: true}, 'Waiting for workflow activity…'));
   }
 
-  function buildAggregateParts() {
-    const snapshot = normaliseStats(statsRef.current || stats);
-    const totalFromFiles = Object.keys(fileStates || {}).length;
-    const total = Math.max(snapshot.total_files || 0, totalFromFiles);
-
-    let diffed = 0;
-    let req = 0;
-    let res = 0;
-    let batchValidating = 0;
-    let batchInProgress = 0;
-    let batchFinalizing = 0;
-    let batchCompleted = 0;
-    let committing = 0;
-    let committed = 0;
-    let commitErr = 0;
-    let metaErr = 0;
-    const meta = fileMeta || {};
-    const fmap = fileStates || {};
-    for (const p of Object.keys(fmap)) {
-      const s = fmap[p] || {};
-      if (s.diff === 'yes') diffed += 1;
-      if (s.req === 'sent') req += 1;
-      if (s.res === 'ok') res += 1;
-      if (s.batch === 'validating' || s.batch === 'queued') batchValidating += 1;
-      if (s.batch === 'in_progress' || s.batch === 'running' || s.batch === 'in-progress') batchInProgress += 1;
-      if (s.batch === 'finalizing') batchFinalizing += 1;
-      if (s.batch === 'completed') batchCompleted += 1;
-      if (s.commit === 'running') committing += 1;
-      if (s.commit === 'ok') committed += 1;
-      if (s.commit === 'err') commitErr += 1;
-      if (meta[p]?.error) metaErr += 1;
-    }
-    const errors = commitErr + metaErr;
-    const hasBatchActivity = batchValidating + batchInProgress + batchFinalizing + batchCompleted > 0;
-
-    const leftParts = [
-      `${chalk.bold('files')} ${String(total).padStart(3)}`,
-      `${chalk.dim('Δ')} ${String(diffed).padStart(3)}`,
-      `${chalk.cyan('req')} ${String(req).padStart(3)}`,
-      `${chalk.cyan('res')} ${String(res).padStart(3)}`,
-    ];
-
-    // Only show batch stats if there's actual batch activity
-    if (hasBatchActivity) {
-      leftParts.push(
-        `${chalk.magenta('batch')} ${String(batchValidating + batchInProgress + batchFinalizing).padStart(2)}/${String(batchCompleted).padStart(2)}`
-      );
-    }
-
-    const rightParts = [
-      `${chalk.yellow('committing')} ${String(committing).padStart(3)}`,
-      `${chalk.green('✓')} ${String(committed).padStart(3)}`,
-      `${chalk.red('✗')} ${String(errors).padStart(3)}`
-    ];
-
-    return {
-      left: leftParts.join(' │ '),
-      right: rightParts.join(' │ '),
-    };
-  }
-
   function buildOverallProgressParts() {
-    const snapshot = normaliseStats(statsRef.current || stats);
-    const total = Math.max(snapshot.total_files || 0, Object.keys(fileStates || {}).length);
-    
+    const total = Number(viewModel.stageCounters[0]?.value || 0);
     if (total === 0) {
       return '';
     }
-
-    // Calculate overall progress: diff → prepare → commit → push
-    // Weight each stage: diff 20%, prepare 40%, commit 35%, push 5%
-    const committed = snapshot.successes || 0;
-    const prepared = snapshot.prepared || 0;
-    const diffed = snapshot.diffs_built || 0;
-    
-    let progressPct = 0;
-    progressPct += (diffed / total) * 20;      // Diff stage: 20%
-    progressPct += (prepared / total) * 40;    // Prepare stage: 40%
-    progressPct += (committed / total) * 35;   // Commit stage: 35%
-    
-    // Push adds final 5%
-    if (pushState === 'pushing') {
-      progressPct += 2.5; // Half of push
-    } else if (pushState === 'done') {
-      progressPct += 5;   // Full push
-    } else if (status === 'completed' && committed === total) {
-      progressPct += 5;   // Assume push done if all committed and completed
-    }
-
-    if (status === 'completed' && pushState !== 'pushing') {
-      progressPct = 100;
-    }
-    
-    progressPct = Math.min(100, Math.max(0, progressPct));
-    
+    const progressPct = Math.min(100, Math.max(0, viewModel.overallProgressPct));
     const pctStr = String(Math.round(progressPct)).padStart(3);
-    
-    let statusLabel = 'In progress';
-    if (pushState === 'pushing') {
-      statusLabel = 'Pushing';
-    } else if (pushState === 'done' || (status === 'completed' && progressPct >= 100)) {
-      statusLabel = 'Complete';
-    } else if (committed > 0 && committed === total) {
-      statusLabel = 'Committing complete';
-    }
 
+    const statusLabel =
+      status === 'completed' && pushState !== 'pushing'
+        ? 'Complete'
+        : viewModel.currentPhaseLabel;
     const rightPlain = `${pctStr}% ${statusLabel}`;
     const right = `${pctStr}% ${chalk.dim(statusLabel)}`;
-
-    // Fill the remaining terminal width with the bar itself.
     const barWidth = Math.max(10, (lineWidth || 80) - rightPlain.length - 1);
     const filled = Math.round((progressPct / 100) * barWidth);
     const empty = Math.max(0, barWidth - filled);
@@ -598,51 +498,20 @@ export default function WorkflowView({onBack} = {}) {
   }
 
   const footerElements = [];
-  if (status === 'running') {
-    const overall = buildOverallProgressParts();
-    if (overall) {
-      footerElements.push(
-        h(
-          Box,
-          {key: 'overall-progress', width: '100%'},
-          h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, overall.bar)),
-          h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, ` ${overall.right}`)),
-        ),
-      );
-    }
-
-    const agg = buildAggregateParts();
+  const overall = buildOverallProgressParts();
+  if (overall) {
     footerElements.push(
       h(
         Box,
-        {key: 'aggregate-live', width: '100%'},
-        h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, agg.left)),
-        h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, agg.right)),
+        {key: 'overall-progress', width: '100%'},
+        h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, overall.bar)),
+        h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, ` ${overall.right}`)),
       ),
     );
   }
-
-  if (status !== 'running') {
-    const overall = buildOverallProgressParts();
-    if (overall) {
-      footerElements.push(
-        h(
-          Box,
-          {key: 'overall-progress-done', width: '100%'},
-          h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, overall.bar)),
-          h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, ` ${overall.right}`)),
-        ),
-      );
-    }
-
-    const agg = buildAggregateParts();
+  if (viewModel.footerStatus) {
     footerElements.push(
-      h(
-        Box,
-        {key: 'aggregate-done', width: '100%'},
-        h(Box, {flexGrow: 1, flexShrink: 1}, h(Text, {wrap: 'truncate'}, agg.left)),
-        h(Box, {flexShrink: 0}, h(Text, {wrap: 'truncate'}, agg.right)),
-      ),
+      h(Text, {key: 'footer-status', wrap: 'truncate'}, chalk.dim(viewModel.footerStatus)),
     );
   }
 

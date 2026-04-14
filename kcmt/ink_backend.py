@@ -273,7 +273,7 @@ class InkWorkflow(KlingonCMTWorkflow):
         self._emitter = emitter
         # Maintain a compact per-file state map for the Ink UI without printing
         # to stdout. Keys mirror the legacy renderer but avoid terminal output.
-        self._file_states: dict[str, dict[str, str]] = {}
+        self._file_states: dict[str, dict[str, Any]] = {}
 
     def _clear_progress_line(self) -> None:  # pragma: no cover - disabled
         return
@@ -324,24 +324,78 @@ class InkWorkflow(KlingonCMTWorkflow):
             self._emitter("log", {"message": leftover})
         return result
 
+    def _ensure_file_state(
+        self, file_path: str, *, now: float | None = None
+    ) -> dict[str, Any]:
+        current_now = time.time() if now is None else now
+        return self._file_states.setdefault(
+            file_path,
+            {
+                "diff": "-",
+                "req": "-",
+                "res": "-",
+                "batch": "-",
+                "commit": "-",
+                "current_stage": "pending",
+                "active_label": "pending",
+                "stage_started_at": current_now,
+                "last_update_at": current_now,
+            },
+        )
+
+    def _mark_file_stage(
+        self,
+        file_path: str,
+        *,
+        stage: str | None = None,
+        label: str | None = None,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        current_now = time.time() if now is None else now
+        entry = self._ensure_file_state(file_path, now=current_now)
+        if stage is not None and entry.get("current_stage") != stage:
+            entry["stage_started_at"] = current_now
+        if stage is not None:
+            entry["current_stage"] = stage
+        if label is not None:
+            entry["active_label"] = label
+        entry["last_update_at"] = current_now
+        return entry
+
     def _progress_event(self, kind: str, **info: object) -> None:
         # Update our in-memory file state map without writing to stdout.
         file_path = str(info.get("file") or "")
         if file_path:
-            entry = self._file_states.setdefault(
-                file_path,
-                {"diff": "-", "req": "-", "res": "-", "batch": "-", "commit": "-"},
-            )
+            event_now = time.time()
+            entry = self._ensure_file_state(file_path, now=event_now)
             if kind == "diff-ready":
                 entry["diff"] = "yes"
+                self._mark_file_stage(
+                    file_path,
+                    stage="diff",
+                    label="collecting diff",
+                    now=event_now,
+                )
             elif kind == "request-sent":
                 entry["req"] = "sent"
                 entry["batch"] = "validating"
+                self._mark_file_stage(
+                    file_path,
+                    stage="llm_wait",
+                    label="waiting for LLM response",
+                    now=event_now,
+                )
             elif kind == "response":
                 entry["res"] = "ok"
                 # For non-batch flows, response implies ready
                 if entry.get("batch", "-") == "-":
                     entry["batch"] = "completed"
+                self._mark_file_stage(
+                    file_path,
+                    stage="prepared",
+                    label="message prepared",
+                    now=event_now,
+                )
             elif kind == "llm" and info.get("detail"):
                 detail = str(info.get("detail") or "").strip().lower()
                 label = detail
@@ -358,12 +412,44 @@ class InkWorkflow(KlingonCMTWorkflow):
                     entry["batch"] = "completed"
                 elif label:
                     entry["batch"] = label[:12]
+                if label == "completed":
+                    self._mark_file_stage(
+                        file_path,
+                        stage="prepared",
+                        label="message prepared",
+                        now=event_now,
+                    )
+                else:
+                    self._mark_file_stage(
+                        file_path,
+                        stage="llm_wait",
+                        label="waiting for LLM response",
+                        now=event_now,
+                    )
             elif kind == "commit-start":
                 entry["commit"] = "running"
+                self._mark_file_stage(
+                    file_path,
+                    stage="commit",
+                    label="writing commit",
+                    now=event_now,
+                )
             elif kind == "commit-done":
                 entry["commit"] = "ok"
+                self._mark_file_stage(
+                    file_path,
+                    stage="done",
+                    label="commit complete",
+                    now=event_now,
+                )
             elif kind == "commit-error":
                 entry["commit"] = "err"
+                self._mark_file_stage(
+                    file_path,
+                    stage="failed",
+                    label="commit failed",
+                    now=event_now,
+                )
 
         message = self._format_progress_message(kind, info)
         if not message:
@@ -371,7 +457,7 @@ class InkWorkflow(KlingonCMTWorkflow):
         payload = {"message": message, "stage": kind, **info}
         self._emitter("status", payload)
 
-    def file_states_snapshot(self) -> dict[str, dict[str, str]]:
+    def file_states_snapshot(self) -> dict[str, dict[str, Any]]:
         # Return a shallow copy safe for JSON serialisation
         return {k: dict(v) for k, v in self._file_states.items()}
 
@@ -756,11 +842,15 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         workers_value = None
 
-    stage_tracker = {"value": "prepare"}
+    stage_tracker = {"value": "diff"}
 
     def _emitter(event: str, info: Dict[str, Any]) -> None:
         if event == "progress" and isinstance(info, dict):
             stage_tracker["value"] = str(info.get("stage", stage_tracker["value"]))
+        elif event == "status" and isinstance(info, dict):
+            event_stage = str(info.get("stage", "")).lower()
+            if event_stage == "push-start":
+                stage_tracker["value"] = "push"
         _emit(event, info)
 
     workflow = InkWorkflow(
