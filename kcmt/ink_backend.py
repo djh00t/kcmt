@@ -883,7 +883,7 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
     while thread.is_alive():
         snapshot = workflow.stats_snapshot()
         if snapshot != last_sent:
-            files_snapshot: dict[str, dict[str, str]] = {}
+            files_snapshot: dict[str, dict[str, Any]] = {}
             try:
                 files_snapshot = workflow.file_states_snapshot()
             except Exception:  # pragma: no cover - best-effort UI telemetry
@@ -912,7 +912,7 @@ def _action_workflow(repo_path: str, payload: dict[str, Any]) -> int:
             metrics_summary = str(metrics_obj.summary())
         except Exception:  # pragma: no cover - defensive
             metrics_summary = None
-    files: dict[str, dict[str, str]] = {}
+    files: dict[str, dict[str, Any]] = {}
     try:
         files = workflow.file_states_snapshot()
     except Exception:  # pragma: no cover - defensive

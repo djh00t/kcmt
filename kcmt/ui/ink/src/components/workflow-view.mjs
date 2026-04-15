@@ -87,16 +87,9 @@ export default function WorkflowView({onBack} = {}) {
   const stdoutCols = stdout && stdout.columns ? Number(stdout.columns) : undefined;
   const lineWidth = stdoutCols ? Math.max(40, stdoutCols - 2) : undefined;
 
-  const HEADER_ROWS = 13;
-  const FOOTER_ROWS = 3;
+  const BASE_HEADER_ROWS = 6;
   const FILE_ROWS = 2;
   const COMPLETION_EXIT_DELAY_MS = 1000;
-
-  function getFileViewportCount() {
-    const rows = stdoutRows || 30;
-    const bodyRows = Math.max(0, rows - HEADER_ROWS - FOOTER_ROWS);
-    return Math.max(1, Math.floor(bodyRows / FILE_ROWS));
-  }
 
   const [stage, setStage] = useState('prepare');
   const [stats, setStats] = useState(normaliseStats());
@@ -215,6 +208,7 @@ export default function WorkflowView({onBack} = {}) {
         const doneStats = normaliseStats(data?.stats || statsRef.current);
         stageRef.current = 'done';
         statsRef.current = doneStats;
+        setStats(doneStats);
         setStage('done');
       }
       if (event === 'error') {
@@ -236,44 +230,6 @@ export default function WorkflowView({onBack} = {}) {
       emitter.cancel?.();
     };
   }, [appendMessages, backend, bootstrap, overrides, argv]);
-
-  useInput((input, key) => {
-    const char = (input || '').toLowerCase();
-    if (key.escape || (key.ctrl && char === 'c') || char === 'q') {
-      if (emitterRef.current && typeof emitterRef.current.cancel === 'function') {
-        emitterRef.current.cancel();
-      }
-      emitterRef.current = null;
-      if (status !== 'running') {
-        const exitCode = status === 'error' ? 1 : 0;
-        process.exit(exitCode);
-        return;
-      }
-      onBack();
-    }
-    // Toggle file/messages view
-    if (char === 'm') {
-      setViewMode(prev => (prev === 'files' ? 'messages' : 'files'));
-    }
-    // Scrolling controls for file list view
-    if (viewMode === 'files') {
-      const fileCount = Object.keys(fileStates || {}).length;
-      const viewport = getFileViewportCount();
-      if (key.downArrow || char === 'j') {
-        setScroll(prev => Math.min(Math.max(0, fileCount - viewport), prev + 1));
-      } else if (key.upArrow || char === 'k') {
-        setScroll(prev => Math.max(0, prev - 1));
-      } else if (key.pageDown) {
-        setScroll(prev => Math.min(Math.max(0, fileCount - viewport), prev + viewport));
-      } else if (key.pageUp) {
-        setScroll(prev => Math.max(0, prev - viewport));
-      } else if (char === 'g' && !key.shift) {
-        setScroll(0);
-      } else if (char === 'g' && key.shift) {
-        setScroll(Math.max(0, fileCount - viewport));
-      }
-    }
-  });
 
   useEffect(() => {
     if (status === 'running') {
@@ -300,7 +256,40 @@ export default function WorkflowView({onBack} = {}) {
   const endpoint = ellipsize(bootstrap?.config?.llm_endpoint || '', lineWidth ? lineWidth - 12 : undefined);
   const maxRetries = argv['max-retries'] || bootstrap?.config?.max_retries || 3;
 
-  const viewportFiles = getFileViewportCount();
+  const provisionalViewModel = useMemo(
+    () =>
+      buildWorkflowViewModel({
+        stage,
+        status,
+        stats,
+        fileStates,
+        fileMeta,
+        now: Date.now() / 1000,
+        viewportCount: 0,
+        pushState,
+      }),
+    [stage, status, stats, fileStates, fileMeta, pushState],
+  );
+
+  const viewportFiles = useMemo(() => {
+    const rows = stdoutRows || 30;
+    const stageCounterRows = Math.max(
+      1,
+      Math.ceil(provisionalViewModel.stageCounters.length / 3),
+    );
+    const extraHeaderRows =
+      (provisionalViewModel.activeNow ? 1 : 0) +
+      (provisionalViewModel.slowAlert ? 1 : 0) +
+      (provisionalViewModel.viewportSummary || provisionalViewModel.notStartedCount > 0 ? 1 : 0) +
+      2;
+    const headerRows = BASE_HEADER_ROWS + stageCounterRows + extraHeaderRows;
+    const footerRows =
+      (provisionalViewModel.overallProgressPct > 0 ? 1 : 0) +
+      (provisionalViewModel.footerStatus ? 1 : 0);
+    const bodyRows = Math.max(0, rows - headerRows - footerRows);
+    return Math.max(1, Math.floor(bodyRows / FILE_ROWS));
+  }, [stdoutRows, provisionalViewModel]);
+
   const viewModel = useMemo(
     () =>
       buildWorkflowViewModel({
@@ -315,6 +304,53 @@ export default function WorkflowView({onBack} = {}) {
       }),
     [stage, status, stats, fileStates, fileMeta, viewportFiles, pushState],
   );
+
+  const filesArray = viewModel.orderedFiles;
+  const maxScroll = Math.max(0, filesArray.length - viewportFiles);
+
+  useEffect(() => {
+    setScroll(prev => Math.min(prev, maxScroll));
+  }, [maxScroll]);
+
+  useInput((input, key) => {
+    const char = (input || '').toLowerCase();
+    if (key.escape || (key.ctrl && char === 'c') || char === 'q') {
+      if (emitterRef.current && typeof emitterRef.current.cancel === 'function') {
+        emitterRef.current.cancel();
+      }
+      emitterRef.current = null;
+      if (status !== 'running') {
+        const exitCode = status === 'error' ? 1 : 0;
+        process.exit(exitCode);
+        return;
+      }
+      onBack();
+      return;
+    }
+
+    if (char === 'm') {
+      setViewMode(prev => (prev === 'files' ? 'messages' : 'files'));
+      return;
+    }
+
+    if (viewMode !== 'files') {
+      return;
+    }
+
+    if (key.downArrow || char === 'j') {
+      setScroll(prev => Math.min(maxScroll, prev + 1));
+    } else if (key.upArrow || char === 'k') {
+      setScroll(prev => Math.max(0, prev - 1));
+    } else if (key.pageDown) {
+      setScroll(prev => Math.min(maxScroll, prev + viewportFiles));
+    } else if (key.pageUp) {
+      setScroll(prev => Math.max(0, prev - viewportFiles));
+    } else if (char === 'g' && !key.shift) {
+      setScroll(0);
+    } else if (char === 'g' && key.shift) {
+      setScroll(maxScroll);
+    }
+  });
 
   function formatStageCounter(counter) {
     const label = chalk.bold(counter.label);
@@ -405,8 +441,8 @@ export default function WorkflowView({onBack} = {}) {
     return `${chalk.green('█'.repeat(filled))}${chalk.dim('░'.repeat(empty))}`;
   }
 
-  const filesArray = viewModel.orderedFiles;
-  const start = Math.max(0, Math.min(scroll, Math.max(0, filesArray.length - viewportFiles)));
+  const clampedScroll = Math.max(0, Math.min(scroll, maxScroll));
+  const start = clampedScroll;
   const end = Math.min(filesArray.length, start + viewportFiles);
   const visibleFiles = filesArray.slice(start, end);
 

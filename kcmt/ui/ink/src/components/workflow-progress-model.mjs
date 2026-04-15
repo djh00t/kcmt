@@ -268,8 +268,9 @@ function buildFooterStatus({
     }
     return 'Run complete';
   }
-  if (currentPhaseLabel === 'PREPARE' && stats.requests > 0) {
-    return `Waiting on ${stats.requests} LLM requests`;
+  const pendingRequests = Math.max(0, stats.requests - stats.responses);
+  if (currentPhaseLabel === 'PREPARE' && pendingRequests > 0) {
+    return `Waiting on ${pendingRequests} LLM requests`;
   }
   if (currentPhaseLabel === 'COMMIT' && commitsInProgress > 0) {
     return `Writing ${commitsInProgress} commits`;

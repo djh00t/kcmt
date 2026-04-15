@@ -189,5 +189,5 @@ test('buildWorkflowViewModel emits a clear footer sentence for in-flight work', 
     pushState: 'idle',
   });
 
-  assert.match(model.footerStatus, /waiting on 18 LLM requests/i);
+  assert.match(model.footerStatus, /waiting on 7 LLM requests/i);
 });
