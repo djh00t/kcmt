@@ -4,6 +4,9 @@
   "type": "module",
   "version": "0.1.0",
   "description": "Ink-based interactive UI for kcmt",
+  "scripts": {
+    "test": "node --test src/components/workflow-progress-model.test.mjs"
+  },
   "dependencies": {
     "chalk": "^5.3.0",
     "gradient-string": "^2.0.2",

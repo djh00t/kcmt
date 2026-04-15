@@ -1,4 +1,4 @@
-.PHONY: help install install-dev format ruff-fix lint test test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
+.PHONY: help install install-dev format ruff-fix lint test test-ink test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
@@ -68,6 +68,9 @@ ruff-fix:
 test:
 	$(PYTEST) -q
 
+test-ink:
+	npm --prefix kcmt/ui/ink test
+
 test-verbose:
 	$(PYTEST) -v
 
@@ -83,7 +86,7 @@ typecheck:
 	$(UV) run mypy ./$(PACKAGE_NAME)
 
 # All checks
-check: ruff-fix format lint typecheck test-strict
+check: ruff-fix format lint typecheck test-strict test-ink
 	@echo "All checks passed!"
 
 # Cleaning

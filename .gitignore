@@ -99,6 +99,7 @@ venv.bak/
 
 # Project specific
 .serena/
+.worktrees/
 test-
 .kcmt/last_run.json
 
