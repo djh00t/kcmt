@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::config::persisted::load_persisted_config;
 use crate::config::workflow_config::validate_config;
 use crate::error::Result;
-use crate::model::WorkflowConfig;
+use crate::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigSource {
@@ -37,6 +37,10 @@ pub struct ConfigOverrides {
     pub api_key_env: Option<String>,
     pub repo_path: Option<PathBuf>,
     pub max_commit_length: Option<usize>,
+    pub auto_push: Option<bool>,
+    pub use_batch: Option<bool>,
+    pub batch_model: Option<String>,
+    pub batch_timeout_seconds: Option<u64>,
 }
 
 impl ConfigLoader {
@@ -100,6 +104,9 @@ const PROVIDER_HINTS: &[(&str, &[&str])] = &[
     ("github", &["GITHUB_TOKEN", "GH_TOKEN", "GH_MODELS"]),
 ];
 
+const DEFAULT_BATCH_TIMEOUT_SECONDS: u64 = 300;
+const BATCH_TIMEOUT_MIN_SECONDS: u64 = 900;
+
 pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<WorkflowConfig> {
     let persisted = persisted_config_for(repo_root);
     let detected = detect_available_providers();
@@ -130,8 +137,16 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
     let git_repo_path = overrides
         .repo_path
         .clone()
-        .or_else(|| env::var("KLINGON_CMT_GIT_REPO_PATH").ok().map(PathBuf::from))
-        .or_else(|| persisted.as_ref().map(|cfg| PathBuf::from(&cfg.git_repo_path)))
+        .or_else(|| {
+            env::var("KLINGON_CMT_GIT_REPO_PATH")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            persisted
+                .as_ref()
+                .map(|cfg| PathBuf::from(&cfg.git_repo_path))
+        })
         .unwrap_or_else(|| repo_root.to_path_buf());
     let git_repo_path = normalize_repo_path(repo_root, &git_repo_path);
     let max_commit_length = overrides
@@ -143,7 +158,56 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
         })
         .or_else(|| persisted.as_ref().map(|cfg| cfg.max_commit_length))
         .unwrap_or(72);
-    let auto_push = persisted.as_ref().map(|cfg| cfg.auto_push).unwrap_or(true);
+    let auto_push = overrides
+        .auto_push
+        .or_else(|| persisted.as_ref().map(|cfg| cfg.auto_push))
+        .or_else(|| {
+            env::var("KLINGON_CMT_AUTO_PUSH")
+                .ok()
+                .map(|value| is_truthy(&value))
+        })
+        .unwrap_or(true);
+    let mut use_batch = overrides
+        .use_batch
+        .or_else(|| persisted.as_ref().map(|cfg| cfg.use_batch))
+        .or_else(|| {
+            env::var("KCMT_USE_BATCH")
+                .ok()
+                .map(|value| is_truthy(&value))
+        })
+        .unwrap_or(false);
+    if provider != "openai" {
+        use_batch = false;
+    }
+    let batch_model = overrides
+        .batch_model
+        .clone()
+        .or_else(|| env::var("KCMT_BATCH_MODEL").ok())
+        .or_else(|| persisted.as_ref().and_then(|cfg| cfg.batch_model.clone()))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| provider_defaults("openai").map(|defaults| defaults.model.to_string()));
+    let batch_timeout_seconds = overrides
+        .batch_timeout_seconds
+        .or_else(|| {
+            env::var("KCMT_BATCH_TIMEOUT")
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .map(|value| value as u64)
+        })
+        .or_else(|| persisted.as_ref().map(|cfg| cfg.batch_timeout_seconds))
+        .unwrap_or(DEFAULT_BATCH_TIMEOUT_SECONDS)
+        .max(BATCH_TIMEOUT_MIN_SECONDS);
+    let providers = merged_provider_entries(persisted.as_ref());
+    let model_priority = persisted
+        .as_ref()
+        .map(|cfg| cfg.model_priority.clone())
+        .filter(|priority| !priority.is_empty())
+        .unwrap_or_else(|| {
+            vec![ModelPreference {
+                provider: provider.clone(),
+                model: model.clone(),
+            }]
+        });
 
     let config = WorkflowConfig {
         provider,
@@ -153,9 +217,53 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
         git_repo_path: git_repo_path.to_string_lossy().to_string(),
         max_commit_length,
         auto_push,
+        use_batch,
+        batch_model,
+        batch_timeout_seconds,
+        providers,
+        model_priority,
     };
     validate_config(&config)?;
     Ok(config)
+}
+
+fn merged_provider_entries(
+    persisted: Option<&WorkflowConfig>,
+) -> HashMap<String, ProviderConfigEntry> {
+    let mut providers = HashMap::new();
+    for defaults in PROVIDER_DEFAULTS {
+        providers.insert(
+            defaults.provider.to_string(),
+            ProviderConfigEntry {
+                name: None,
+                endpoint: Some(defaults.endpoint.to_string()),
+                api_key_env: Some(defaults.api_key_env.to_string()),
+                preferred_model: Some(defaults.model.to_string()),
+            },
+        );
+    }
+    if let Some(config) = persisted {
+        for (provider, entry) in &config.providers {
+            providers
+                .entry(provider.clone())
+                .and_modify(|existing| {
+                    if entry.name.is_some() {
+                        existing.name = entry.name.clone();
+                    }
+                    if entry.endpoint.is_some() {
+                        existing.endpoint = entry.endpoint.clone();
+                    }
+                    if entry.api_key_env.is_some() {
+                        existing.api_key_env = entry.api_key_env.clone();
+                    }
+                    if entry.preferred_model.is_some() {
+                        existing.preferred_model = entry.preferred_model.clone();
+                    }
+                })
+                .or_insert_with(|| entry.clone());
+        }
+    }
+    providers
 }
 
 fn persisted_config_for(repo_root: &Path) -> Option<WorkflowConfig> {
@@ -225,7 +333,10 @@ fn detect_available_providers() -> HashMap<String, Vec<String>> {
         if env_values.iter().any(|value| value == defaults.api_key_env) {
             matches.push(defaults.api_key_env.to_string());
         }
-        if let Some((_, hints)) = PROVIDER_HINTS.iter().find(|(provider, _)| *provider == defaults.provider) {
+        if let Some((_, hints)) = PROVIDER_HINTS
+            .iter()
+            .find(|(provider, _)| *provider == defaults.provider)
+        {
             for key in &env_values {
                 if hints.iter().any(|hint| key.contains(hint)) && !matches.contains(key) {
                     matches.push(key.clone());
@@ -257,10 +368,7 @@ fn selected_provider(
     }
 }
 
-fn selected_api_key_env<'a>(
-    provider: &str,
-    detected: &'a HashMap<String, Vec<String>>,
-) -> &'a str {
+fn selected_api_key_env<'a>(provider: &str, detected: &'a HashMap<String, Vec<String>>) -> &'a str {
     let defaults = provider_defaults(provider).unwrap_or(PROVIDER_DEFAULTS[0]);
     detected
         .get(provider)
@@ -285,6 +393,13 @@ fn auto_select_provider(detected: &HashMap<String, Vec<String>>) -> String {
     }
 
     "openai".to_string()
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 #[cfg(test)]
@@ -391,6 +506,7 @@ mod tests {
             api_key_env: Some("XAI_SECRET".to_string()),
             repo_path: Some(repo.join("nested")),
             max_commit_length: Some(80),
+            ..ConfigOverrides::default()
         };
 
         let cfg = load_config(&repo, &overrides).expect("config");
