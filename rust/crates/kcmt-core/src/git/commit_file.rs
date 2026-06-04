@@ -11,7 +11,6 @@ use std::time::Instant;
 
 use crate::error::{KcmtError, Result};
 use gix::bstr::ByteSlice;
-use gix::objs::Write;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitFileOutcome {
@@ -375,11 +374,7 @@ fn update_path_in_index(
             "tracked path is not a regular file: {file_path}"
         )));
     }
-    let mut file = fs::File::open(&worktree_path)?;
-    let blob_id = repo
-        .objects
-        .write_stream(gix::objs::Kind::Blob, metadata.len(), &mut file)
-        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?;
+    let blob_id = write_commit_blob(repo, &worktree_path, metadata.len())?;
     let stat = gix::index::entry::Stat::from_fs(&metadata)
         .map_err(|err| KcmtError::Message(format!("gix stat conversion failed: {err}")))?;
     if entry_exists {
@@ -410,6 +405,31 @@ fn update_path_in_index(
     }
     index.remove_tree();
     Ok(())
+}
+
+fn write_commit_blob(
+    repo: &gix::Repository,
+    worktree_path: &Path,
+    size: u64,
+) -> Result<gix::hash::ObjectId> {
+    let mut file = fs::File::open(worktree_path)?;
+    if size >= direct_blob_stream_threshold() {
+        use gix::objs::Write;
+        return repo
+            .objects
+            .write_stream(gix::objs::Kind::Blob, size, &mut file)
+            .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")));
+    }
+    repo.write_blob_stream(&mut file)
+        .map(|id| id.detach())
+        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))
+}
+
+fn direct_blob_stream_threshold() -> u64 {
+    env::var("KCMT_GIT_DIRECT_BLOB_STREAM_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1024 * 1024)
 }
 
 #[derive(Default)]
@@ -1021,6 +1041,28 @@ mod tests {
             git_output(&repo, &["show", "HEAD:src/other.py"]),
             "print('other')"
         );
+    }
+
+    #[test]
+    fn gix_commit_backend_streams_large_tracked_blob() {
+        let repo = unique_temp_dir("gix-commit-large-stream");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("large.txt"), "seed line\n".repeat(140_000)).expect("large seed");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("large.txt"), "changed line\n".repeat(140_000)).expect("large change");
+
+        let outcome = commit_file_with_gix(
+            &repo,
+            "large.txt",
+            "chore(repo): update large",
+            CommitStaging::DirectPath,
+        )
+        .expect("large streamed commit should succeed");
+
+        assert!(!outcome.stage_path_invoked);
+        assert!(outcome.commit_hash.is_some());
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
     }
 
     #[test]
