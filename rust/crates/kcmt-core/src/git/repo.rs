@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use crate::error::{KcmtError, Result};
 use crate::git::runner::{CommandRunner, GitCliRunner};
@@ -139,7 +140,7 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
         if index_oid.is_none() {
             "?"
         } else {
-            let blob_oid = write_worktree_blob(&repo, &worktree_path)?;
+            let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
             if Some(blob_oid) == index_oid {
                 " "
             } else {
@@ -177,11 +178,23 @@ fn head_tree_entry_oid(
     Ok(entry.map(|entry| entry.object_id()))
 }
 
-fn write_worktree_blob(repo: &gix::Repository, path: &Path) -> Result<gix::hash::ObjectId> {
+fn hash_worktree_blob(
+    repo: &gix::Repository,
+    path: &Path,
+    size: u64,
+) -> Result<gix::hash::ObjectId> {
     let mut file = fs::File::open(path)?;
-    repo.write_blob_stream(&mut file)
-        .map(|id| id.detach())
-        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))
+    let mut progress = gix::progress::Discard;
+    let interrupt = AtomicBool::new(false);
+    gix::objs::compute_stream_hash(
+        repo.object_hash(),
+        gix::objs::Kind::Blob,
+        &mut file,
+        size,
+        &mut progress,
+        &interrupt,
+    )
+    .map_err(|err| KcmtError::Message(format!("gix hash blob failed: {err}")))
 }
 
 fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> Result<String> {
