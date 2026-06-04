@@ -119,17 +119,9 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
         .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
     let path = file_path.as_bytes().as_bstr();
     let index_entry = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted);
-    let head_oid = head_tree_entry_oid(&repo, file_path)?;
     let worktree_path = repo_path.join(file_path);
 
     let index_oid = index_entry.map(|entry| entry.id);
-    let staged_code = match (head_oid, index_oid) {
-        (None, Some(_)) => "A",
-        (Some(_), None) => "D",
-        (Some(head), Some(index)) if head != index => "M",
-        _ => " ",
-    };
-
     let worktree_code = if worktree_path.exists() {
         let metadata = fs::metadata(&worktree_path)?;
         if !metadata.is_file() {
@@ -137,15 +129,14 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
                 "path status requires fallback for non-file: {file_path}"
             )));
         }
-        if index_oid.is_none() {
-            "?"
+        let Some(index_oid) = index_oid else {
+            return Ok(format!("?? {file_path}\n"));
+        };
+        let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
+        if blob_oid != index_oid {
+            "M"
         } else {
-            let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
-            if Some(blob_oid) == index_oid {
-                " "
-            } else {
-                "M"
-            }
+            " "
         }
     } else if index_oid.is_some() {
         "D"
@@ -153,11 +144,16 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
         " "
     };
 
+    let head_oid = head_tree_entry_oid(&repo, file_path)?;
+    let staged_code = match (head_oid, index_oid) {
+        (None, Some(_)) => "A",
+        (Some(_), None) => "D",
+        (Some(head), Some(index)) if head != index => "M",
+        _ => " ",
+    };
+
     if staged_code == " " && worktree_code == " " {
         return Ok(String::new());
-    }
-    if staged_code == " " && worktree_code == "?" {
-        return Ok(format!("?? {file_path}\n"));
     }
     Ok(format!("{staged_code}{worktree_code} {file_path}\n"))
 }
@@ -528,5 +524,22 @@ mod tests {
             .expect("fast path status should render");
 
         assert_eq!(status, "M  tracked.py\n");
+    }
+
+    #[test]
+    fn fast_path_status_detects_staged_and_unstaged_file() {
+        let repo = unique_temp_dir("gix-path-status-mixed");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('staged')\n").expect("staged change");
+        git(&repo, &["add", "tracked.py"]);
+        fs::write(repo.join("tracked.py"), "print('unstaged')\n").expect("unstaged change");
+
+        let status = status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, "MM tracked.py\n");
     }
 }
