@@ -26,6 +26,10 @@ pub enum CommitStaging {
     DirectPath,
 }
 
+pub fn gix_commit_backend_enabled() -> bool {
+    env::var("KCMT_GIT_COMMIT_BACKEND").as_deref() == Ok("gix")
+}
+
 fn commit_env() -> HashMap<String, String> {
     let mut values: HashMap<String, String> = env::vars().collect();
 
@@ -81,7 +85,7 @@ pub fn commit_file_with_staging(
         return Ok(CommitFileOutcome::default());
     }
 
-    if env::var("KCMT_GIT_COMMIT_BACKEND").as_deref() == Ok("gix") {
+    if gix_commit_backend_enabled() {
         return commit_file_with_gix(repo_path, file_path, message, staging);
     }
 
@@ -122,6 +126,80 @@ pub fn commit_file_with_staging(
         Err(KcmtError::Message(format!(
             "git commit failed for pathspec {file_path}"
         )))
+    }
+}
+
+pub struct GixCommitSession {
+    repo_path: PathBuf,
+    repo: gix::Repository,
+    index: gix::index::File,
+    parent: Option<gix::hash::ObjectId>,
+    signature: gix::actor::Signature,
+}
+
+impl GixCommitSession {
+    pub fn open(repo_path: &Path) -> Result<Self> {
+        let repo = gix::open(repo_path)
+            .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
+        let index = repo
+            .open_index()
+            .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
+        let parent = recent_commit_hash(repo_path)?
+            .and_then(|hash| gix::hash::ObjectId::from_hex(hash.as_bytes()).ok());
+        let signature = gix_signature();
+        Ok(Self {
+            repo_path: repo_path.to_path_buf(),
+            repo,
+            index,
+            parent,
+            signature,
+        })
+    }
+
+    pub fn commit_path(
+        &mut self,
+        file_path: &str,
+        message: &str,
+        staging: CommitStaging,
+    ) -> Result<CommitFileOutcome> {
+        let commit_start = Instant::now();
+        let (stage_path_ms, stage_path_invoked) = prepare_index_for_gix_commit(
+            &self.repo,
+            &mut self.index,
+            &self.repo_path,
+            file_path,
+            staging,
+        )?;
+        let tree_id = write_commit_tree(&self.repo, &self.index, file_path)?;
+        let parents = self.parent.into_iter().collect::<Vec<_>>();
+        let commit_id = {
+            let mut time_buf = gix::actor::date::parse::TimeBuf::default();
+            let signature_ref = self.signature.to_ref(&mut time_buf);
+            self.repo
+                .commit_as(
+                    signature_ref,
+                    signature_ref,
+                    "HEAD",
+                    message,
+                    tree_id,
+                    parents,
+                )
+                .map_err(|err| KcmtError::Message(format!("gix commit failed: {err}")))?
+        };
+        let create_commit_ms = commit_start.elapsed().as_secs_f64() * 1000.0;
+        if commit_id.is_null() {
+            return Err(KcmtError::Message(
+                "gix commit produced a null commit id".to_string(),
+            ));
+        }
+        let commit_id = commit_id.detach();
+        self.parent = Some(commit_id);
+        Ok(CommitFileOutcome {
+            stage_path_ms,
+            stage_path_invoked,
+            create_commit_ms,
+            commit_hash: Some(commit_id.to_string()),
+        })
     }
 }
 
@@ -617,7 +695,7 @@ fn valid_hash(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_file_with_gix, recent_commit_hash, CommitStaging};
+    use super::{commit_file_with_gix, recent_commit_hash, CommitStaging, GixCommitSession};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -807,6 +885,47 @@ mod tests {
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
             "chore(repo): add new file"
+        );
+    }
+
+    #[test]
+    fn gix_commit_session_chains_multiple_file_commits() {
+        let repo = unique_temp_dir("gix-session-multiple");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("one.py"), "print('one')\n").expect("one seed");
+        fs::write(repo.join("two.py"), "print('two')\n").expect("two seed");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("one.py"), "print('one changed')\n").expect("one change");
+        fs::write(repo.join("two.py"), "print('two changed')\n").expect("two change");
+
+        let mut session = GixCommitSession::open(&repo).expect("session should open");
+        let first = session
+            .commit_path(
+                "one.py",
+                "chore(repo): update one",
+                CommitStaging::DirectPath,
+            )
+            .expect("first commit");
+        let second = session
+            .commit_path(
+                "two.py",
+                "chore(repo): update two",
+                CommitStaging::DirectPath,
+            )
+            .expect("second commit");
+
+        assert!(first.commit_hash.is_some());
+        assert!(second.commit_hash.is_some());
+        assert_ne!(first.commit_hash, second.commit_hash);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["log", "--pretty=%s", "-2"]),
+            "chore(repo): update two\nchore(repo): update one"
+        );
+        assert_eq!(
+            git_output(&repo, &["rev-parse", "HEAD^"]),
+            first.commit_hash.expect("first hash")
         );
     }
 
