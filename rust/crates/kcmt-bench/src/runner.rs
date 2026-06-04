@@ -25,6 +25,7 @@ struct CorpusMetadata {
     id: Option<String>,
     default_file_target: Option<String>,
     file_targets: Option<Vec<RuntimeFileTarget>>,
+    generated_tracked_files: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -484,6 +485,7 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
             id: None,
             default_file_target: None,
             file_targets: None,
+            generated_tracked_files: None,
         },
     )?;
     Ok(CorpusMetadata {
@@ -496,6 +498,7 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
         ),
         default_file_target: Some(default_file_target),
         file_targets: None,
+        generated_tracked_files: None,
     })
 }
 
@@ -645,6 +648,18 @@ fn prepare_realistic_runtime_corpus(
 }
 
 fn seed_generated_runtime_targets(repo_path: &Path, metadata: &CorpusMetadata) -> Result<()> {
+    if let Some(count) = metadata.generated_tracked_files.filter(|count| *count > 0) {
+        let generated_root = repo_path.join("generated");
+        for index in 0..count {
+            let dir = generated_root.join(format!("pkg_{:03}", index / 100));
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join(format!("file_{index:05}.txt")),
+                format!("generated runtime benchmark fixture {index}\n"),
+            )?;
+        }
+    }
+
     let Some(file_targets) = metadata.file_targets.as_ref() else {
         return Ok(());
     };
@@ -764,6 +779,10 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
         ("KCMT_NO_SPINNER".to_string(), "1".to_string()),
         ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ("PYTHONUTF8".to_string(), "1".to_string()),
+        (
+            "PYTEST_CURRENT_TEST".to_string(),
+            "kcmt-runtime-benchmark".to_string(),
+        ),
         (
             "OPENAI_API_KEY".to_string(),
             "kcmt-runtime-benchmark".to_string(),
@@ -1025,6 +1044,19 @@ mod tests {
         assert_eq!(
             python_from_virtual_env_root(&root).as_deref(),
             Some(unix_python.as_path())
+        );
+    }
+
+    #[test]
+    fn runtime_benchmark_env_forces_noninteractive_python() {
+        let config_home = unique_temp_dir("runtime-env");
+        let envs = runtime_benchmark_env(&config_home, RuntimeKind::Python);
+
+        assert_eq!(
+            envs.iter()
+                .find(|(key, _)| key == "PYTEST_CURRENT_TEST")
+                .map(|(_, value)| value.as_str()),
+            Some("kcmt-runtime-benchmark")
         );
     }
 }
