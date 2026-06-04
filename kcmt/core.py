@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import re
 import shutil
@@ -207,6 +208,9 @@ class KlingonCMTWorkflow:
         self._status_table_height = 0
         self._footer_width = 0
         self._status_rows_count = 0
+        self._telemetry_origin = time.perf_counter()
+        self._telemetry_stages: list[dict[str, object]] = []
+        self._llm_wait_started_at: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Progress rendering helpers
@@ -266,8 +270,51 @@ class KlingonCMTWorkflow:
         details = f" {extra}" if extra else ""
         print(f"[kcmt-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}")
 
+    def _telemetry_ms(self, value: float) -> float:
+        return (value - self._telemetry_origin) * 1000.0
+
+    def _record_stage(
+        self,
+        stage: str,
+        start: float,
+        end: float,
+        *,
+        file_path: str | None = None,
+        outcome: str = "completed",
+        error: str | None = None,
+    ) -> None:
+        row: dict[str, object] = {
+            "stage": stage,
+            "start_ms": self._telemetry_ms(start),
+            "end_ms": self._telemetry_ms(end),
+            "duration_ms": max(0.0, (end - start) * 1000.0),
+            "outcome": outcome,
+        }
+        if file_path:
+            row["file_path"] = file_path
+        if error:
+            row["error"] = error
+        self._telemetry_stages.append(row)
+
+    def _export_runtime_telemetry(self) -> None:
+        path = os.environ.get("KCMT_RUNTIME_TELEMETRY_PATH", "").strip()
+        if not path:
+            return
+        payload = {
+            "schema_version": 1,
+            "runtime": "python",
+            "corpus_id": "workflow",
+            "stages": self._telemetry_stages,
+        }
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload), encoding="utf-8")
+
     def execute_workflow(self) -> Dict[str, Any]:
         """Execute the complete kcmt workflow."""
+        self._telemetry_origin = time.perf_counter()
+        self._telemetry_stages = []
+        self._llm_wait_started_at = {}
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
         results: Dict[str, Any] = {
@@ -284,6 +331,7 @@ class KlingonCMTWorkflow:
         try:
             status_start = time.perf_counter()
             status_entries = self.git_repo.scan_status()
+            self._record_stage("status_scan", status_start, time.perf_counter())
             self._profile(
                 "git-status",
                 time.perf_counter() - status_start,
@@ -319,14 +367,26 @@ class KlingonCMTWorkflow:
             r.success for r in results.get("deletions_committed", [])
         )
         if any_success and getattr(self._config, "auto_push", False):
+            push_start = time.perf_counter()
             try:
                 self._progress_event("push-start")
                 self.git_repo.push()
                 results["pushed"] = True
                 self._progress_event("push-done")
+                self._record_stage("push", push_start, time.perf_counter())
             except GitError as e:  # pragma: no cover - network dependent
                 results.setdefault("errors", []).append(f"Auto-push failed: {e}")
                 self._progress_event("push-error", detail=str(e))
+                self._record_stage(
+                    "push",
+                    push_start,
+                    time.perf_counter(),
+                    outcome="failed",
+                    error=str(e),
+                )
+        else:
+            push_start = time.perf_counter()
+            self._record_stage("push", push_start, push_start)
 
         total_elapsed = time.perf_counter() - workflow_start
         self._profile(
@@ -340,6 +400,10 @@ class KlingonCMTWorkflow:
             ),
         )
 
+        snapshot_start = time.perf_counter()
+        self._export_runtime_telemetry()
+        self._record_stage("snapshot", snapshot_start, time.perf_counter())
+        self._export_runtime_telemetry()
         return results
 
     def _process_deletions_first(
@@ -534,6 +598,7 @@ class KlingonCMTWorkflow:
                 )
             ),
         )
+        self._record_stage("diff_preparation", collect_start, time.perf_counter())
 
         if not file_changes:
             return results
@@ -912,7 +977,14 @@ class KlingonCMTWorkflow:
             if sig and "progress_callback" in sig.parameters:
                 call_kwargs["progress_callback"] = _llm_progress
             commit_message = suggest_fn(change.diff_content, **call_kwargs)  # type: ignore[arg-type]
+            validation_start = time.perf_counter()
             validated = generator.validate_and_fix_commit_message(commit_message)
+            self._record_stage(
+                "response_validation",
+                validation_start,
+                time.perf_counter(),
+                file_path=change.file_path,
+            )
             if self.debug:
                 print(
                     "DEBUG: prepare.success path={} header='{}'".format(
@@ -995,7 +1067,14 @@ class KlingonCMTWorkflow:
                 request_timeout=request_timeout,
                 progress_callback=_llm_progress,
             )
+            validation_start = time.perf_counter()
             validated = generator.validate_and_fix_commit_message(commit_message)
+            self._record_stage(
+                "response_validation",
+                validation_start,
+                time.perf_counter(),
+                file_path=change.file_path,
+            )
             if self.debug:
                 print(
                     "DEBUG: prepare.success path={} header='{}'".format(
@@ -1244,6 +1323,24 @@ class KlingonCMTWorkflow:
         if not message:
             return
         file_path = str(info.get("file") or "")
+        event_time = time.perf_counter()
+        if kind == "request-sent":
+            self._record_stage(
+                "llm_enqueue",
+                event_time,
+                event_time,
+                file_path=file_path or None,
+            )
+            if file_path:
+                self._llm_wait_started_at[file_path] = event_time
+        elif kind == "response":
+            wait_start = self._llm_wait_started_at.pop(file_path, event_time)
+            self._record_stage(
+                "llm_wait",
+                wait_start,
+                event_time,
+                file_path=file_path or None,
+            )
         if getattr(self, "_show_progress", False):
             if file_path:
                 status_entry = self._file_status.setdefault(
@@ -1411,6 +1508,14 @@ class KlingonCMTWorkflow:
             file_path=change.file_path,
         )
         self._metrics.record_commit(time.perf_counter() - commit_start)
+        self._record_stage(
+            "commit",
+            commit_start,
+            time.perf_counter(),
+            file_path=change.file_path,
+            outcome="completed" if result.success else "failed",
+            error=result.error,
+        )
         if result.success:
             self._progress_event("commit-done", file=change.file_path)
         else:
