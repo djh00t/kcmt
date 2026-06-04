@@ -206,6 +206,7 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
     assert len(payload["results"]) == 3
     assert {item["runtime"] for item in payload["results"]} == {"python"}
     assert all(item["status"] == "passed" for item in payload["results"])
+    assert all(isinstance(item["stage_timings"], list) for item in payload["results"])
     required_result_fields = set(schema["properties"]["results"]["items"]["required"])
     assert all(required_result_fields.issubset(item) for item in payload["results"])
     assert payload["summary"]["python"]["passed"] == 3
