@@ -57,6 +57,34 @@ fn init_repo() -> PathBuf {
     repo
 }
 
+fn raw_status_snapshot(repo: &Path, config_home: &Path) -> serde_json::Value {
+    let status_output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", config_home)
+        .args(["status", "--raw", "--repo-path"])
+        .arg(repo)
+        .output()
+        .expect("kcmt status should run");
+    assert!(
+        status_output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&status_output.stdout),
+        String::from_utf8_lossy(&status_output.stderr)
+    );
+    serde_json::from_slice(&status_output.stdout).expect("raw status is json")
+}
+
+fn telemetry_stage_items(snapshot: &serde_json::Value, stage_name: &str) -> u64 {
+    snapshot["telemetry"]["stages"]
+        .as_array()
+        .expect("telemetry stages")
+        .iter()
+        .find(|stage| stage["stage"] == stage_name)
+        .unwrap_or_else(|| panic!("missing telemetry stage {stage_name}"))
+        .get("items")
+        .and_then(serde_json::Value::as_u64)
+        .expect("stage items should be an integer")
+}
+
 fn init_bare_remote() -> PathBuf {
     let remote = unique_temp_dir("remote");
     git(&remote, &["init", "--bare", "-q"]);
@@ -669,6 +697,85 @@ fn file_mode_persists_snapshot_for_status_view() {
     let stdout = String::from_utf8_lossy(&status_output.stdout);
     assert!(stdout.contains("Commit status"));
     assert!(stdout.contains("Success: 1"));
+}
+
+#[test]
+fn tracked_modified_file_commit_skips_staging_subprocess() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--file", "tracked.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 0);
+}
+
+#[test]
+fn tracked_deleted_file_commit_skips_staging_subprocess() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("delete_me.txt"), "bye\n").expect("seed file");
+    git(&repo, &["add", "delete_me.txt"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::remove_file(repo.join("delete_me.txt")).expect("delete file");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--file", "delete_me.txt", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(snapshot["counts"]["deletions_success"], 1);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 0);
+}
+
+#[test]
+fn untracked_file_commit_still_stages_path() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("new_file.py"), "print('new')\n").expect("new file");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--file", "new_file.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 1);
 }
 
 #[test]
