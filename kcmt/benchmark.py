@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
@@ -1066,6 +1066,13 @@ RUNTIME_BENCHMARK_ENV = "KCMT_RUNTIME_BENCHMARK"
 
 
 @dataclass
+class RuntimeStageTiming:
+    stage: str
+    duration_ms: float
+    items: int
+
+
+@dataclass
 class RuntimeBenchmarkResult:
     scenario_id: str
     workflow_contract_id: str
@@ -1079,6 +1086,7 @@ class RuntimeBenchmarkResult:
     peak_rss_bytes: int | None = None
     exit_code: int | None = None
     failure_reason: str | None = None
+    stage_timings: list[RuntimeStageTiming] = field(default_factory=list)
 
 
 @dataclass
@@ -1091,6 +1099,19 @@ class RuntimeBenchmarkSummary:
 
 
 @dataclass
+class RuntimeOptimizationIteration:
+    iteration: int
+    label: str
+    baseline: bool
+    measurement_status: str
+    median_wall_time_ms: float | None
+    throughput_commits_per_sec: float | None
+    quality_score: float | None
+    failures: int | None
+    next_bottleneck: str
+
+
+@dataclass
 class RuntimeBenchmarkRun:
     schema_version: str
     timestamp: str
@@ -1098,6 +1119,9 @@ class RuntimeBenchmarkRun:
     corpora: list[str]
     results: list[RuntimeBenchmarkResult]
     summary: dict[str, RuntimeBenchmarkSummary]
+    optimization_iterations: list[RuntimeOptimizationIteration] = field(
+        default_factory=list
+    )
 
 
 @dataclass(frozen=True)
@@ -1355,6 +1379,65 @@ def _prepare_status_snapshot(
     return None
 
 
+def _scenario_records_snapshot_telemetry(
+    scenario: _RuntimeBenchmarkScenario,
+) -> bool:
+    return scenario.workflow_contract_id in {"oneshot-repo-path", "file-repo-path"}
+
+
+def _load_snapshot_stage_timings(repo_path: Path) -> list[RuntimeStageTiming]:
+    snapshot_path = state_dir(repo_path) / "last_run.json"
+    try:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    stages = payload.get("telemetry", {}).get("stages", [])
+    if not isinstance(stages, list):
+        return []
+    timings: list[RuntimeStageTiming] = []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        stage_name = stage.get("stage")
+        duration_ms = stage.get("duration_ms")
+        items = stage.get("items", 0)
+        if not isinstance(stage_name, str) or not isinstance(duration_ms, int | float):
+            continue
+        timings.append(
+            RuntimeStageTiming(
+                stage=stage_name,
+                duration_ms=float(duration_ms),
+                items=int(items) if isinstance(items, int | float) else 0,
+            )
+        )
+    return timings
+
+
+def _aggregate_runtime_stage_timings(
+    samples: list[list[RuntimeStageTiming]],
+) -> list[RuntimeStageTiming]:
+    stage_order: list[str] = []
+    durations_by_stage: dict[str, list[float]] = {}
+    items_by_stage: dict[str, list[float]] = {}
+    for sample in samples:
+        for timing in sample:
+            if timing.stage not in durations_by_stage:
+                stage_order.append(timing.stage)
+                durations_by_stage[timing.stage] = []
+                items_by_stage[timing.stage] = []
+            durations_by_stage[timing.stage].append(timing.duration_ms)
+            items_by_stage[timing.stage].append(float(timing.items))
+
+    return [
+        RuntimeStageTiming(
+            stage=stage,
+            duration_ms=float(median(durations_by_stage[stage])),
+            items=int(round(float(median(items_by_stage[stage])))),
+        )
+        for stage in stage_order
+    ]
+
+
 def _run_runtime_scenario(
     runtime: str,
     source_repo: Path,
@@ -1386,6 +1469,7 @@ def _run_runtime_scenario(
             )
 
     durations: list[float] = []
+    stage_samples: list[list[RuntimeStageTiming]] = []
     last_exit_code = 0
     failure_reason: str | None = None
 
@@ -1428,6 +1512,8 @@ def _run_runtime_scenario(
                 )
                 last_exit_code = 1
                 break
+            if _scenario_records_snapshot_telemetry(scenario):
+                stage_samples.append(_load_snapshot_stage_timings(repo_path))
         finally:
             shutil.rmtree(repo_path.parent, ignore_errors=True)
 
@@ -1445,6 +1531,7 @@ def _run_runtime_scenario(
         peak_rss_bytes=None,
         exit_code=last_exit_code if durations or failure_reason else None,
         failure_reason=failure_reason,
+        stage_timings=_aggregate_runtime_stage_timings(stage_samples),
     )
 
 
@@ -1474,6 +1561,50 @@ def _build_runtime_summary(
         excluded=sum(1 for item in relevant if item.status == "excluded"),
         median_wall_time_ms=median_wall_time_ms,
     )
+
+
+def _build_runtime_optimization_iterations(
+    results: list[RuntimeBenchmarkResult],
+    summary: dict[str, RuntimeBenchmarkSummary],
+) -> list[RuntimeOptimizationIteration]:
+    baseline_time = (
+        summary["rust"].median_wall_time_ms
+        if summary["rust"].median_wall_time_ms is not None
+        else summary["python"].median_wall_time_ms
+    )
+    passed = sum(1 for item in results if item.status == "passed")
+    failures = sum(1 for item in results if item.status == "failed")
+    quality_score = (passed / len(results) * 100.0) if results else 0.0
+    labels = [
+        ("baseline", True, "git subprocess count"),
+        ("reduce git subprocesses", False, "diff preparation fan-out"),
+        ("parallelize diff preparation", False, "provider batch enqueue"),
+        ("optimize batch enqueue", False, "post-LLM commit serialization"),
+        ("minimize commit overhead", False, "snapshot and status rendering"),
+        ("tighten snapshot overhead", False, "residual provider latency"),
+    ]
+    rows: list[RuntimeOptimizationIteration] = []
+    for index, (label, is_baseline, bottleneck) in enumerate(labels):
+        median_time = baseline_time if is_baseline else None
+        throughput = (
+            1000.0 / median_time
+            if median_time is not None and median_time > 0
+            else None
+        )
+        rows.append(
+            RuntimeOptimizationIteration(
+                iteration=index,
+                label=label,
+                baseline=is_baseline,
+                measurement_status="measured" if is_baseline else "planned",
+                median_wall_time_ms=median_time,
+                throughput_commits_per_sec=throughput,
+                quality_score=quality_score if is_baseline else None,
+                failures=failures if is_baseline else None,
+                next_bottleneck=bottleneck,
+            )
+        )
+    return rows
 
 
 def runtime_benchmark_report_to_dict(report: RuntimeBenchmarkRun) -> dict[str, Any]:
@@ -1516,16 +1647,20 @@ def run_runtime_benchmark(
                 )
             )
 
+    summary = {
+        "python": _build_runtime_summary(results, "python"),
+        "rust": _build_runtime_summary(results, "rust"),
+    }
     return RuntimeBenchmarkRun(
         schema_version=RUNTIME_BENCHMARK_SCHEMA_VERSION,
         timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         command_set="local-workflows-v1",
         corpora=[str(metadata["id"])],
         results=results,
-        summary={
-            "python": _build_runtime_summary(results, "python"),
-            "rust": _build_runtime_summary(results, "rust"),
-        },
+        summary=summary,
+        optimization_iterations=_build_runtime_optimization_iterations(
+            results, summary
+        ),
     )
 
 
@@ -1550,6 +1685,45 @@ def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
         lines.append(
             f"| {runtime_name} | {summary.scenario_count} | {summary.passed} | "
             f"{summary.failed} | {summary.excluded} | {median_text} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "| Iteration | Label | Status | Median wall time (ms) | Throughput | Quality | Failures | Next bottleneck |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for iteration in report.optimization_iterations:
+        median_text = (
+            f"{iteration.median_wall_time_ms:.2f}"
+            if iteration.median_wall_time_ms is not None
+            else "-"
+        )
+        throughput_text = (
+            f"{iteration.throughput_commits_per_sec:.3f}"
+            if iteration.throughput_commits_per_sec is not None
+            else "-"
+        )
+        quality_text = (
+            f"{iteration.quality_score:.1f}"
+            if iteration.quality_score is not None
+            else "-"
+        )
+        failures_text = (
+            str(iteration.failures) if iteration.failures is not None else "-"
+        )
+        lines.append(
+            "| {iteration} | {label} | {status} | {median} | {throughput} | {quality} | {failures} | {bottleneck} |".format(
+                iteration=iteration.iteration,
+                label=_escape_md(iteration.label),
+                status=iteration.measurement_status,
+                median=median_text,
+                throughput=throughput_text,
+                quality=quality_text,
+                failures=failures_text,
+                bottleneck=_escape_md(iteration.next_bottleneck),
+            )
         )
 
     lines.extend(
