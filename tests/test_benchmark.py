@@ -203,13 +203,17 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
     assert set(schema["required"]).issubset(payload)
     assert "optimization_iterations" in schema["properties"]
     assert payload["corpora"] == ["pytest-runtime-corpus"]
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 4
+    assert any(
+        item["workflow_contract_id"] == "default-repo-path"
+        for item in payload["results"]
+    )
     assert {item["runtime"] for item in payload["results"]} == {"python"}
     assert all(item["status"] == "passed" for item in payload["results"])
     assert all(isinstance(item["stage_timings"], list) for item in payload["results"])
     required_result_fields = set(schema["properties"]["results"]["items"]["required"])
     assert all(required_result_fields.issubset(item) for item in payload["results"])
-    assert payload["summary"]["python"]["passed"] == 3
+    assert payload["summary"]["python"]["passed"] == 4
     assert payload["summary"]["rust"]["scenario_count"] == 0
     iterations = payload["optimization_iterations"]
     assert len(iterations) == 6
@@ -238,13 +242,17 @@ def test_run_runtime_benchmark_records_missing_rust_binary_as_excluded(tmp_path)
     )
     payload = bench.runtime_benchmark_report_to_dict(report)
 
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 4
+    assert any(
+        item["workflow_contract_id"] == "default-repo-path"
+        for item in payload["results"]
+    )
     assert all(item["status"] == "excluded" for item in payload["results"])
     assert all(
         "Rust binary not available" in (item["failure_reason"] or "")
         for item in payload["results"]
     )
-    assert payload["summary"]["rust"]["excluded"] == 3
+    assert payload["summary"]["rust"]["excluded"] == 4
 
 
 def test_render_benchmark_markdown_report_remains_provider_focused() -> None:
