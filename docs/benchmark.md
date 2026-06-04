@@ -58,18 +58,21 @@ The runtime report includes:
 - `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
   and `--file <target> --repo-path`; workflow results include `stage_timings`
   when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
-  `repo_discovery`, `dispatch`, `config_load`, `status_scan`,
+  `arg_parse`, `repo_discovery`, `dispatch`, `config_load`, `status_scan`,
   `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
   `commit_stage_path`, `commit_create`, `commit_read_hash`, `commit`, `push`,
-  `snapshot`, and `workflow_total` rows so scoreboards can compare stable stage
-  columns across short and skipped paths. Single-file workflows keep prepare
-  workers at one and use path-limited status. `commit_stage_path` item counts
-  record actual staging subprocesses, so tracked direct-path commits can report
-  zero staged items. Rust status scanning uses the gix backend by default; set
-  `KCMT_GIT_STATUS_BACKEND=cli` only for parity/debug comparisons. Set
-  `KCMT_GIT_COMMIT_BACKEND=gix` to compare the opt-in Rust commit backend,
-  which writes tracked-file updates and regular untracked-file index entries,
-  streams blob writes, writes the commit tree, and updates `HEAD` with gix.
+  `snapshot`, `workflow_total`, and `process_overhead` rows so scoreboards can
+  compare stable stage columns across short and skipped paths. Runtime
+  benchmark reports calculate `process_overhead` from the command median after
+  subtracting `arg_parse`, `repo_discovery`, `dispatch`, and `workflow_total`.
+  Single-file workflows keep prepare workers at one and use path-limited status.
+  `commit_stage_path` item counts record actual staging subprocesses, so tracked
+  direct-path commits can report zero staged items. Rust status scanning uses
+  the gix backend by default; set `KCMT_GIT_STATUS_BACKEND=cli` only for
+  parity/debug comparisons. Set `KCMT_GIT_COMMIT_BACKEND=gix` to compare the
+  opt-in Rust commit backend, which writes tracked-file updates and regular
+  untracked-file index entries, streams blob writes, writes the commit tree, and
+  updates `HEAD` with gix.
   `KCMT_GIT_TREE_BACKEND=full|path|auto` controls commit-tree construction:
   small indexes use the full-index writer by default, while large indexes use a
   path-local tree rewrite. Keep the Git CLI commit backend when hook, signing,
