@@ -34,6 +34,10 @@ impl StatusEntry {
         self.code.contains('D')
     }
 
+    fn is_untracked(&self) -> bool {
+        self.code == "??"
+    }
+
     fn commit_staging(&self) -> CommitStaging {
         if self.requires_staging_before_commit() {
             CommitStaging::StagePath
@@ -1071,6 +1075,10 @@ fn invoke_provider_candidate(
 }
 
 fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
+    if entry.is_untracked() {
+        return file_content_diff(repo_path, entry);
+    }
+
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["diff", "--", &entry.path])
@@ -1082,6 +1090,10 @@ fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
         }
     }
 
+    file_content_diff(repo_path, entry)
+}
+
+fn file_content_diff(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
     let path = repo_path.join(&entry.path);
     match fs::read_to_string(&path) {
         Ok(content) => Ok(format!(
@@ -1609,9 +1621,9 @@ fn write_run_snapshot(repo_path: &Path, snapshot: &serde_json::Value) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        deletion_commit_message, git_common_config_path, git_config_has_include, git_config_value,
-        heuristic_commit_message, local_origin_remote_probe, parse_status_entries,
-        select_prepare_workers, OriginRemoteProbe, StatusEntry,
+        deletion_commit_message, diff_for_entry, git_common_config_path, git_config_has_include,
+        git_config_value, heuristic_commit_message, local_origin_remote_probe,
+        parse_status_entries, select_prepare_workers, OriginRemoteProbe, StatusEntry,
     };
     use kcmt_core::git::commit_file::CommitStaging;
     use std::fs;
@@ -1654,6 +1666,20 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn diff_for_untracked_entry_reads_file_without_git_diff() {
+        let repo = unique_temp_dir("untracked-diff");
+        fs::write(repo.join("new.md"), "# New file\n").expect("untracked file");
+        let entry = StatusEntry {
+            code: "??".to_string(),
+            path: "new.md".to_string(),
+        };
+
+        let diff = diff_for_entry(&repo, &entry).expect("untracked diff");
+
+        assert_eq!(diff, "New or changed file: new.md\n\n# New file\n");
     }
 
     #[test]
