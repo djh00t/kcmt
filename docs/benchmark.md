@@ -62,8 +62,10 @@ The runtime report includes:
   `response_validation`, `commit_stage_path`, `commit_create`,
   `commit_read_hash`, `commit`, `push`, and `snapshot` rows so scoreboards can
   compare stable stage columns across short and skipped paths. Single-file
-  workflows keep prepare workers at one, and no-origin auto-push records a
-  skipped push stage instead of running a failing push.
+  workflows keep prepare workers at one. `commit_stage_path` item counts record
+  actual staging subprocesses, so tracked direct-path commits can report zero
+  staged items. No-origin auto-push records a skipped push stage instead of
+  running a failing push.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
 - `optimization_iterations`: one baseline row plus five optimization rows with
   median timing, throughput, quality score, failure count, and the next
