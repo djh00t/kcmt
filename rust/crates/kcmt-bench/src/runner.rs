@@ -477,16 +477,22 @@ fn append_process_overhead_stage(
     let Some(median_time_ms) = median_time_ms else {
         return;
     };
-    let Some(workflow_total_ms) = stages
-        .iter()
-        .find(|stage| stage.stage == "workflow_total")
-        .map(|stage| stage.duration_ms)
-    else {
+    if !stages.iter().any(|stage| stage.stage == "workflow_total") {
         return;
-    };
+    }
+    let accounted_ms = stages
+        .iter()
+        .filter(|stage| {
+            matches!(
+                stage.stage.as_str(),
+                "arg_parse" | "repo_discovery" | "dispatch" | "workflow_total"
+            )
+        })
+        .map(|stage| stage.duration_ms)
+        .sum::<f64>();
     stages.push(RuntimeStageTiming {
         stage: "process_overhead".to_string(),
-        duration_ms: (median_time_ms - workflow_total_ms).max(0.0),
+        duration_ms: (median_time_ms - accounted_ms).max(0.0),
         items: 1,
     });
 }
