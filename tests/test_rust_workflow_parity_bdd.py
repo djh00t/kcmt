@@ -253,6 +253,18 @@ def empty_runtime_configuration_home(tmp_path: Path) -> dict[str, Any]:
     return {"repo": repo, "config_home": config_home}
 
 
+@given("a checked-in runtime benchmark corpus", target_fixture="workflow_context")
+def checked_in_runtime_benchmark_corpus(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "repo": REPO_ROOT
+        / "tests"
+        / "fixtures"
+        / "runtime_corpus"
+        / "mini_realistic_repo",
+        "config_home": tmp_path / "config-home",
+    }
+
+
 @given(
     "a git repository with one changed tracked file and a pushable origin",
     target_fixture="workflow_context",
@@ -498,6 +510,34 @@ def rust_kcmt_benchmarks_provider_with_structured_outputs(
             "--benchmark-csv",
             "--repo-path",
             str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust kcmt runtime benchmark runs against the corpus")
+def rust_kcmt_runtime_benchmark_runs_against_the_corpus(
+    workflow_context: dict[str, Any],
+) -> None:
+    rust_bin = _rust_bin("kcmt")
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_PROVIDER_RESPONSE"] = "chore(repo): benchmark fake response"
+    output = _run(
+        [
+            str(rust_bin),
+            "benchmark",
+            "runtime",
+            "--repo-path",
+            str(workflow_context["repo"]),
+            "--runtime",
+            "rust",
+            "--iterations",
+            "1",
+            "--rust-bin",
+            str(rust_bin),
+            "--json",
         ],
         REPO_ROOT,
         env=env,
@@ -918,3 +958,22 @@ def provider_benchmark_snapshot_is_persisted(
     assert payload["schema_version"] == 1
     assert payload["results"][0]["provider"] == "openai"
     assert payload["results"][0]["model"] == "gpt-bdd"
+
+
+@then("the benchmark report includes Rust workflow stage timings")
+def benchmark_report_includes_rust_workflow_stage_timings(
+    workflow_context: dict[str, Any],
+) -> None:
+    payload = json.loads(workflow_context["output"])
+    file_result = next(
+        item
+        for item in payload["results"]
+        if item["runtime"] == "rust" and item["workflow_contract_id"] == "file-repo-path"
+    )
+    stages = file_result["stage_timings"]
+    stage_names = {stage["stage"] for stage in stages}
+    assert {"status_scan", "llm_wait", "commit", "push", "snapshot"}.issubset(
+        stage_names
+    )
+    assert all(isinstance(stage["duration_ms"], int | float) for stage in stages)
+    assert all(isinstance(stage["items"], int) for stage in stages)
