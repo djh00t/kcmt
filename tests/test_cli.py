@@ -342,7 +342,11 @@ def test_cli_runtime_benchmark_json(tmp_path, capsys):
     assert payload["schema_version"] == "1.0.0"
     assert payload["command_set"] == "local-workflows-v1"
     assert payload["corpora"] == ["pytest-cli-runtime-corpus"]
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 4
+    assert any(
+        item["workflow_contract_id"] == "default-repo-path"
+        for item in payload["results"]
+    )
     assert all(item["runtime"] == "python" for item in payload["results"])
     assert all(isinstance(item["stage_timings"], list) for item in payload["results"])
     assert len(payload["optimization_iterations"]) == 6
