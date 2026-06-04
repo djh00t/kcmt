@@ -215,7 +215,9 @@ kcmt benchmark runtime --repo-path /path/to/generated/repo --runtime both --json
 ```
 
 That command compares the Python and Rust CLIs on the same repo corpus without
-mixing runtime timing into the provider-quality leaderboard.
+mixing runtime timing into the provider-quality leaderboard. The runtime JSON
+includes one baseline row and five optimization rows with timings, throughput,
+quality scores, failures, and the next bottleneck label for each iteration.
 
 ## Quick start (CLI)
 
