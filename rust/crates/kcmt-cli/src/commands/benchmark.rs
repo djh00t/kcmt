@@ -90,6 +90,8 @@ pub fn run_provider_benchmark(repo_path: PathBuf, args: &CliArgs) -> i32 {
         batch_model: args.batch_model.clone(),
         batch_timeout_seconds: args.batch_timeout_seconds,
         file_limit: args.limit,
+        max_retries: args.max_retries,
+        prepare_workers: args.workers,
     };
 
     let config = match load_config(&repo_path, &overrides) {
@@ -271,7 +273,13 @@ fn invoke_benchmark_provider(
     prompt: &str,
     timeout: Option<f64>,
 ) -> anyhow::Result<String> {
-    if let Ok(raw_response) = env::var("KCMT_PROVIDER_RESPONSE") {
+    if (env_truthy("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE") || env_truthy("KCMT_RUNTIME_BENCHMARK"))
+        && env::var("KCMT_PROVIDER_RESPONSE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .is_some()
+    {
+        let raw_response = env::var("KCMT_PROVIDER_RESPONSE").expect("checked above");
         return Ok(raw_response);
     }
 
@@ -348,6 +356,17 @@ fn invoke_benchmark_provider(
             other => anyhow::bail!("unsupported provider: {other}"),
         }
     })
+}
+
+fn env_truthy(key: &str) -> bool {
+    env::var(key)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn score_message(message: &str) -> f64 {
