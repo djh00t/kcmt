@@ -152,7 +152,11 @@ pub fn run_provider_benchmark(repo_path: PathBuf, args: &CliArgs) -> i32 {
 pub fn run_benchmark_command(repo_path: PathBuf, benchmark: BenchmarkArgs) -> i32 {
     match benchmark.command {
         Some(BenchmarkCommand::Runtime(runtime)) => run_runtime_benchmark_command(
-            repo_path,
+            runtime
+                .repo_path
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or(repo_path),
             runtime.runtime,
             runtime.iterations,
             runtime.json,
