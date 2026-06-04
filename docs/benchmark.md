@@ -56,8 +56,12 @@ The runtime report includes:
 - `command_set`: currently `local-workflows-v1`
 - `corpora`: the stable corpus identifiers included in the run
 - `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
-  and `--file <target> --repo-path`
+  and `--file <target> --repo-path`; workflow results include `stage_timings`
+  when the runtime wrote snapshot telemetry
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
+- `optimization_iterations`: one baseline row plus five optimization rows with
+  median timing, throughput, quality score, failure count, and the next
+  bottleneck label for each iteration.
 
 Missing runtimes are recorded explicitly as `excluded` results. For example, if
 the Rust binary is unavailable, the report still emits Python results and
