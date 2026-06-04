@@ -225,7 +225,7 @@ fn run_runtime_scenario(
     metadata: &CorpusMetadata,
     scenario: &RuntimeScenario,
     iterations: u32,
-    python_command: Option<&str>,
+    python_command: Option<&[String]>,
     rust_bin: Option<&Path>,
 ) -> Result<RuntimeBenchmarkResult> {
     if runtime == RuntimeKind::Rust {
@@ -612,27 +612,37 @@ fn prepare_realistic_runtime_corpus(
     Ok(metadata.clone())
 }
 
-fn resolve_python_command() -> Option<String> {
+fn resolve_python_command() -> Option<Vec<String>> {
     if let Ok(configured) = env::var("KCMT_PYTHON_BIN") {
         if !configured.trim().is_empty() {
-            return Some(configured);
+            let command = vec![configured];
+            if python_command_has_runtime_deps(&command) {
+                return Some(command);
+            }
         }
     }
     if let Ok(virtual_env) = env::var("VIRTUAL_ENV") {
         if let Some(candidate) = python_from_virtual_env_root(Path::new(&virtual_env)) {
-            if python_command_runs(candidate.as_path()) {
-                return Some(candidate.display().to_string());
+            let command = vec![candidate.display().to_string()];
+            if python_command_has_runtime_deps(&command) {
+                return Some(command);
             }
         }
     }
     if let Some(candidate) = python_from_virtual_env_root(&workspace_root().join(".venv")) {
-        if python_command_runs(candidate.as_path()) {
-            return Some(candidate.display().to_string());
+        let command = vec![candidate.display().to_string()];
+        if python_command_has_runtime_deps(&command) {
+            return Some(command);
         }
     }
+    let uv_command = vec!["uv".to_string(), "run".to_string(), "python".to_string()];
+    if python_command_has_runtime_deps(&uv_command) {
+        return Some(uv_command);
+    }
     for candidate in ["python3", "python"] {
-        if python_command_runs(Path::new(candidate)) {
-            return Some(candidate.to_string());
+        let command = vec![candidate.to_string()];
+        if python_command_has_runtime_deps(&command) {
+            return Some(command);
         }
     }
     None
@@ -648,9 +658,11 @@ fn python_from_virtual_env_root(root: &Path) -> Option<PathBuf> {
     .find(|candidate| candidate.exists())
 }
 
-fn python_command_runs(candidate: &Path) -> bool {
-    Command::new(candidate)
-        .arg("--version")
+fn python_command_has_runtime_deps(command: &[String]) -> bool {
+    Command::new(&command[0])
+        .args(&command[1..])
+        .args(["-c", "import httpx"])
+        .current_dir(workspace_root())
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
@@ -709,7 +721,7 @@ fn prepare_status_snapshot(
     runtime: RuntimeKind,
     repo_path: &Path,
     metadata: &CorpusMetadata,
-    python_command: Option<&str>,
+    python_command: Option<&[String]>,
     rust_bin: Option<&Path>,
     envs: &[(String, String)],
 ) -> Result<Option<String>> {
@@ -740,17 +752,17 @@ fn scenario_command(
     repo_path: &Path,
     scenario: &RuntimeScenario,
     metadata: &CorpusMetadata,
-    python_command: Option<&str>,
+    python_command: Option<&[String]>,
     rust_bin: Option<&Path>,
 ) -> Result<Vec<String>> {
     let mut command = match runtime {
-        RuntimeKind::Python => vec![
-            python_command
+        RuntimeKind::Python => {
+            let mut command = python_command
                 .ok_or_else(|| anyhow::anyhow!("Python runtime executable is unavailable"))?
-                .to_string(),
-            "-m".to_string(),
-            "kcmt.main".to_string(),
-        ],
+                .to_vec();
+            command.extend(["-m".to_string(), "kcmt.main".to_string()]);
+            command
+        }
         RuntimeKind::Rust => vec![rust_bin
             .ok_or_else(|| anyhow::anyhow!("Rust binary is not configured"))?
             .display()
