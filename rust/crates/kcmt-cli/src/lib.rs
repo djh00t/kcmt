@@ -23,8 +23,10 @@ struct RepoDiscovery {
 
 /// Executes a named entrypoint.
 pub fn run_entrypoint(name: &str) -> i32 {
+    let parse_start = Instant::now();
     let args = CliArgs::parse();
-    dispatch(name, args)
+    let arg_parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
+    dispatch(name, args, arg_parse_ms)
 }
 
 fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
@@ -54,7 +56,7 @@ fn output_options(args: &CliArgs) -> WorkflowOutputOptions {
     }
 }
 
-fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
+fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
     let dispatch_start = Instant::now();
     if let Some(token) = args
         .github_token
@@ -114,7 +116,12 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
-                add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
+                add_dispatch_telemetry(
+                    &mut output_options,
+                    &repo_discovery,
+                    dispatch_start,
+                    arg_parse_ms,
+                );
                 return match commands::workflow::run_file_workflow(
                     repo_path,
                     &path,
@@ -144,7 +151,12 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
-                add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
+                add_dispatch_telemetry(
+                    &mut output_options,
+                    &repo_discovery,
+                    dispatch_start,
+                    arg_parse_ms,
+                );
                 return match commands::workflow::run_oneshot_workflow(
                     repo_path,
                     overrides,
@@ -172,7 +184,12 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
             };
             let overrides = config_overrides(&args, repo_path.clone());
             let mut output_options = output_options(&args);
-            add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
+            add_dispatch_telemetry(
+                &mut output_options,
+                &repo_discovery,
+                dispatch_start,
+                arg_parse_ms,
+            );
             match commands::workflow::run_default_workflow(repo_path, overrides, output_options) {
                 Ok(output) => {
                     print!("{output}");
@@ -207,15 +224,15 @@ fn add_dispatch_telemetry(
     output_options: &mut WorkflowOutputOptions,
     repo_discovery: &RepoDiscovery,
     dispatch_start: Instant,
+    arg_parse_ms: f64,
 ) {
+    output_options.record_startup_stage("arg_parse", arg_parse_ms, 1);
     output_options.record_startup_stage(
         "repo_discovery",
         repo_discovery.duration_ms,
         usize::from(repo_discovery.found_repo_path.is_some()),
     );
-    output_options.record_startup_stage(
-        "dispatch",
-        dispatch_start.elapsed().as_secs_f64() * 1000.0,
-        1,
-    );
+    let dispatch_ms =
+        (dispatch_start.elapsed().as_secs_f64() * 1000.0 - repo_discovery.duration_ms).max(0.0);
+    output_options.record_startup_stage("dispatch", dispatch_ms, 1);
 }
