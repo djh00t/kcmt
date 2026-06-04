@@ -34,7 +34,7 @@
 | FR-007 | Runtime benchmark evidence below shows Rust release binary faster than Python on both checked-in realistic and synthetic 1,000-file corpora for the three scenario set. | PASS for current deterministic corpora |
 | FR-008 | `make check` and `make quality-gates` pass with strict Python, Rust, and Ink coverage. | PASS (current local) |
 | FR-009 | BDD and contract tests validate parser errors, status raw JSON, runtime trace, missing runtime exclusion, and wrapper fallback/selection behavior. | PASS (current local) |
-| NFR-005 | Historical CI matrix passed on `ubuntu-latest`, `windows-latest`, and `macos-latest` (`https://github.com/djh00t/kcmt/actions/runs/22627603656`); `.github/workflows/rust-parity-matrix.yml` now runs Rust workspace tests plus Python wrapper/BDD parity tests across the same OS matrix. Current local evidence is macOS only until CI runs this branch. | PARTIAL current / CI-ready |
+| NFR-005 | PR34 head `bcb997817ac2e1af450e8efac3a490da3dcff888` passed `.github/workflows/rust-parity-matrix.yml` on `ubuntu-latest`, `macos-latest`, and `windows-latest` in GitHub Actions run `26971474093`. The matrix runs Rust workspace tests plus Python wrapper/BDD parity tests across all three OSes. | PASS (fresh branch CI) |
 
 ## Runtime Benchmark Evidence
 
@@ -137,7 +137,7 @@ Results:
 
 ## Notes
 
-- Current local validation supersedes the older March 2026 DNS-blocked Rust probe. Historical CI matrix evidence remains listed for cross-platform context, and the parity matrix workflow now runs Rust workspace plus BDD parity tests across Linux, macOS, and Windows; it still needs a fresh branch CI run.
+- Current local validation supersedes the older March 2026 DNS-blocked Rust probe. PR34 head `bcb997817ac2e1af450e8efac3a490da3dcff888` passed the fresh cross-platform Rust parity matrix across Linux, macOS, and Windows in GitHub Actions run `26971474093`.
 - Live Anthropic benchmark attempts with `claude-3-5-haiku-latest` returned 404 in both Python and Rust and were not used for quality-delta evidence.
 - Runtime benchmark artifacts in `/tmp` are generated evidence and are not committed.
 - `KCMT_PROVIDER_RESPONSE` is fixture-only in Rust production workflow paths unless
