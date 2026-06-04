@@ -247,8 +247,8 @@ Exit codes
 - `--repo-path PATH` – target repository (defaults to current working directory).
 - `--max-commit-length INT` – validate (not hard truncate) the subject line length (default 72 for legacy compatibility; body is preserved).
 - `--auto-push` / `--no-auto-push` – enable/disable automatic push (default: enabled; can also set `KLINGON_CMT_AUTO_PUSH`).
-- `--max-retries INT` – retries when Git rejects (default 3).
-- `--oneshot` – stage all changes, pick one file, and commit it once.
+- `--max-retries INT` – provider request retries before fallback or failure (default 3).
+- `--oneshot` – pick one changed file, stage it, and commit it once.
 - `--file PATH` – stage & commit an explicit file.
 - `--no-progress` – disable the live stats bar.
 - `--verbose`, `-v` – emit detailed logs and per-file results.
