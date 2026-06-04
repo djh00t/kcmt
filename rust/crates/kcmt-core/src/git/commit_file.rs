@@ -136,10 +136,18 @@ pub struct GixCommitSession {
     parent: Option<gix::hash::ObjectId>,
     signature: gix::actor::Signature,
     index_dirty: bool,
+    defer_index_writes: bool,
 }
 
 impl GixCommitSession {
     pub fn open(repo_path: &Path) -> Result<Self> {
+        Self::open_with_deferred_index_writes(repo_path, false)
+    }
+
+    pub fn open_with_deferred_index_writes(
+        repo_path: &Path,
+        defer_index_writes: bool,
+    ) -> Result<Self> {
         let repo = gix::open(repo_path)
             .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
         let index = repo
@@ -155,6 +163,7 @@ impl GixCommitSession {
             parent,
             signature,
             index_dirty: false,
+            defer_index_writes,
         })
     }
 
@@ -171,7 +180,7 @@ impl GixCommitSession {
             &self.repo_path,
             file_path,
             staging,
-            false,
+            !self.defer_index_writes,
         )?;
         self.index_dirty |= index_dirty;
         let tree_id = write_commit_tree(&self.repo, &self.index, file_path)?;
@@ -918,7 +927,8 @@ mod tests {
         fs::write(repo.join("one.py"), "print('one changed')\n").expect("one change");
         fs::write(repo.join("two.py"), "print('two changed')\n").expect("two change");
 
-        let mut session = GixCommitSession::open(&repo).expect("session should open");
+        let mut session = GixCommitSession::open_with_deferred_index_writes(&repo, true)
+            .expect("session should open");
         let first = session
             .commit_path(
                 "one.py",
@@ -949,6 +959,28 @@ mod tests {
             git_output(&repo, &["rev-parse", "HEAD^"]),
             first.commit_hash.expect("first hash")
         );
+    }
+
+    #[test]
+    fn gix_commit_session_open_writes_single_file_index_immediately() {
+        let repo = unique_temp_dir("gix-session-single-flush");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("one.py"), "print('one')\n").expect("one seed");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("one.py"), "print('one changed')\n").expect("one change");
+
+        let mut session = GixCommitSession::open(&repo).expect("session should open");
+        session
+            .commit_path(
+                "one.py",
+                "chore(repo): update one",
+                CommitStaging::DirectPath,
+            )
+            .expect("commit");
+
+        assert_eq!(session.flush_index().expect("flush"), 0.0);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
     }
 
     #[test]
