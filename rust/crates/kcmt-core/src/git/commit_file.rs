@@ -374,7 +374,7 @@ fn update_path_in_index(
             "tracked path is not a regular file: {file_path}"
         )));
     }
-    let blob_id = write_commit_blob(repo, &worktree_path, metadata.len())?;
+    let blob_id = write_commit_blob(repo, &worktree_path)?;
     let stat = gix::index::entry::Stat::from_fs(&metadata)
         .map_err(|err| KcmtError::Message(format!("gix stat conversion failed: {err}")))?;
     if entry_exists {
@@ -407,11 +407,7 @@ fn update_path_in_index(
     Ok(())
 }
 
-fn write_commit_blob(
-    repo: &gix::Repository,
-    worktree_path: &Path,
-    _size: u64,
-) -> Result<gix::hash::ObjectId> {
+fn write_commit_blob(repo: &gix::Repository, worktree_path: &Path) -> Result<gix::hash::ObjectId> {
     let mut file = fs::File::open(worktree_path)?;
     repo.write_blob_stream(&mut file)
         .map(|id| id.detach())
