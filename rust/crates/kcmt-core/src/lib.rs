@@ -3,6 +3,7 @@
 pub mod config;
 pub mod error;
 pub mod git;
+pub mod message;
 pub mod metrics;
 pub mod model;
 pub mod workflow;
