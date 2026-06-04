@@ -13,7 +13,14 @@ use crate::error::{KcmtError, Result};
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommitFileOutcome {
     pub stage_path_ms: f64,
+    pub stage_path_invoked: bool,
     pub create_commit_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitStaging {
+    StagePath,
+    DirectPath,
 }
 
 fn commit_env() -> HashMap<String, String> {
@@ -51,21 +58,43 @@ pub fn commit_file(
     message: &str,
     dry_run: bool,
 ) -> Result<CommitFileOutcome> {
+    commit_file_with_staging(
+        repo_path,
+        file_path,
+        message,
+        dry_run,
+        CommitStaging::StagePath,
+    )
+}
+
+pub fn commit_file_with_staging(
+    repo_path: &Path,
+    file_path: &str,
+    message: &str,
+    dry_run: bool,
+    staging: CommitStaging,
+) -> Result<CommitFileOutcome> {
     if dry_run {
         return Ok(CommitFileOutcome::default());
     }
 
-    let stage_start = Instant::now();
-    let add_status = Command::new("git")
-        .current_dir(repo_path)
-        .args(["add", "-A", "--", file_path])
-        .status()?;
-    let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
-    if !add_status.success() {
-        return Err(KcmtError::Message(format!(
-            "failed to stage path for commit: {file_path}"
-        )));
-    }
+    let (stage_path_ms, stage_path_invoked) = match staging {
+        CommitStaging::StagePath => {
+            let stage_start = Instant::now();
+            let add_status = Command::new("git")
+                .current_dir(repo_path)
+                .args(["add", "-A", "--", file_path])
+                .status()?;
+            let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
+            if !add_status.success() {
+                return Err(KcmtError::Message(format!(
+                    "failed to stage path for commit: {file_path}"
+                )));
+            }
+            (stage_path_ms, true)
+        }
+        CommitStaging::DirectPath => (0.0, false),
+    };
 
     let commit_start = Instant::now();
     let commit_status = Command::new("git")
@@ -78,6 +107,7 @@ pub fn commit_file(
     if commit_status.success() {
         Ok(CommitFileOutcome {
             stage_path_ms,
+            stage_path_invoked,
             create_commit_ms,
         })
     } else {
