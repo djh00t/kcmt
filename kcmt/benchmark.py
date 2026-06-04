@@ -1181,7 +1181,7 @@ def _runtime_benchmark_scenarios(
     repo_path: Path, metadata: dict[str, Any]
 ) -> list[_RuntimeBenchmarkScenario]:
     target = _runtime_benchmark_target_file(repo_path, metadata)
-    return [
+    scenarios = [
         _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:status-repo-path",
             workflow_contract_id="status-repo-path",
@@ -1195,18 +1195,34 @@ def _runtime_benchmark_scenarios(
             expected_stdout_fragment="✓ ",
         ),
         _RuntimeBenchmarkScenario(
-            scenario_id=f"{metadata['id']}:default-repo-path",
-            workflow_contract_id="default-repo-path",
-            command_label="kcmt --repo-path <repo>",
-            expected_stdout_fragment="✓ ",
-        ),
-        _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:file-repo-path",
             workflow_contract_id="file-repo-path",
             command_label=f"kcmt --file {target} --repo-path <repo>",
             expected_stdout_fragment="✓ ",
         ),
     ]
+    if not _is_large_untracked_runtime_corpus(metadata):
+        scenarios.insert(
+            2,
+            _RuntimeBenchmarkScenario(
+                scenario_id=f"{metadata['id']}:default-repo-path",
+                workflow_contract_id="default-repo-path",
+                command_label="kcmt --repo-path <repo>",
+                expected_stdout_fragment="✓ ",
+            ),
+        )
+    return scenarios
+
+
+def _is_large_untracked_runtime_corpus(metadata: dict[str, Any]) -> bool:
+    change_shape = metadata.get("change_shape")
+    return (
+        metadata.get("kind") == "synthetic"
+        and metadata.get("git_history_state") == "no-commits"
+        and int(metadata.get("file_count") or 0) >= 1000
+        and isinstance(change_shape, list)
+        and "untracked" in change_shape
+    )
 
 
 def _copy_runtime_corpus(source: Path, destination: Path) -> None:
