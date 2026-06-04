@@ -24,6 +24,13 @@ const RUNTIME_BENCHMARK_ENV: &str = "KCMT_RUNTIME_BENCHMARK";
 struct CorpusMetadata {
     id: Option<String>,
     default_file_target: Option<String>,
+    file_targets: Option<Vec<RuntimeFileTarget>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeFileTarget {
+    id: String,
+    path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +39,7 @@ struct RuntimeScenario {
     workflow_contract_id: &'static str,
     command_label: String,
     expected_stdout_fragment: &'static str,
+    file_target: Option<String>,
 }
 
 pub fn run_runtime_benchmark(
@@ -475,6 +483,7 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
         &CorpusMetadata {
             id: None,
             default_file_target: None,
+            file_targets: None,
         },
     )?;
     Ok(CorpusMetadata {
@@ -486,6 +495,7 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
                 .to_string(),
         ),
         default_file_target: Some(default_file_target),
+        file_targets: None,
     })
 }
 
@@ -498,26 +508,41 @@ fn runtime_benchmark_scenarios(
         .id
         .clone()
         .unwrap_or_else(|| "runtime-corpus".to_string());
-    Ok(vec![
+    let mut scenarios = vec![
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:status-repo-path"),
             workflow_contract_id: "status-repo-path",
             command_label: "kcmt status --repo-path <repo>".to_string(),
             expected_stdout_fragment: "Commit status",
+            file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:oneshot-repo-path"),
             workflow_contract_id: "oneshot-repo-path",
             command_label: "kcmt --oneshot --repo-path <repo>".to_string(),
             expected_stdout_fragment: "✓ ",
+            file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:file-repo-path"),
             workflow_contract_id: "file-repo-path",
             command_label: format!("kcmt --file {target} --repo-path <repo>"),
             expected_stdout_fragment: "✓ ",
+            file_target: Some(target),
         },
-    ])
+    ];
+    if let Some(file_targets) = metadata.file_targets.clone() {
+        for file_target in file_targets {
+            scenarios.push(RuntimeScenario {
+                scenario_id: format!("{corpus_id}:file-{}", file_target.id),
+                workflow_contract_id: "file-repo-path",
+                command_label: format!("kcmt --file {} --repo-path <repo>", file_target.path),
+                expected_stdout_fragment: "✓ ",
+                file_target: Some(file_target.path),
+            });
+        }
+    }
+    Ok(scenarios)
 }
 
 fn runtime_benchmark_target_file(repo_path: &Path, metadata: &CorpusMetadata) -> Result<String> {
@@ -567,6 +592,7 @@ fn prepare_realistic_runtime_corpus(
     repo_path: &Path,
     metadata: &CorpusMetadata,
 ) -> Result<CorpusMetadata> {
+    seed_generated_runtime_targets(repo_path, metadata)?;
     git_init_main(repo_path)?;
     git(&repo_path, &["config", "user.name", "kcmt-benchmark"])?;
     git(
@@ -579,12 +605,18 @@ fn prepare_realistic_runtime_corpus(
     let target = runtime_benchmark_target_file(repo_path, metadata)?;
     let target_path = repo_path.join(target);
     if target_path.exists() {
-        let mut content = fs::read_to_string(&target_path)?;
-        if !content.ends_with('\n') {
-            content.push('\n');
+        append_runtime_mutation(&target_path)?;
+    }
+
+    if let Some(file_targets) = metadata.file_targets.as_ref() {
+        for file_target in file_targets {
+            if file_target.id.contains("modified") {
+                let target_path = repo_path.join(&file_target.path);
+                if target_path.exists() {
+                    append_runtime_mutation(&target_path)?;
+                }
+            }
         }
-        content.push_str("\n# runtime benchmark mutation\n");
-        fs::write(&target_path, content)?;
     }
 
     let deleted_path = repo_path.join("docs").join("notes.md");
@@ -610,6 +642,45 @@ fn prepare_realistic_runtime_corpus(
     )?;
 
     Ok(metadata.clone())
+}
+
+fn seed_generated_runtime_targets(repo_path: &Path, metadata: &CorpusMetadata) -> Result<()> {
+    let Some(file_targets) = metadata.file_targets.as_ref() else {
+        return Ok(());
+    };
+    for file_target in file_targets {
+        if file_target.id.contains("large") || file_target.id.contains("nested") {
+            let target_path = repo_path.join(&file_target.path);
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if !target_path.exists() {
+                let content = if file_target.id.contains("large") {
+                    let mut content = String::with_capacity(256 * 1024);
+                    for index in 0..4096 {
+                        content.push_str("runtime benchmark large fixture line ");
+                        content.push_str(&index.to_string());
+                        content.push('\n');
+                    }
+                    content
+                } else {
+                    "print('nested runtime benchmark')\n".to_string()
+                };
+                fs::write(target_path, content)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn append_runtime_mutation(target_path: &Path) -> Result<()> {
+    let mut content = fs::read_to_string(target_path)?;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str("\n# runtime benchmark mutation\n");
+    fs::write(target_path, content)?;
+    Ok(())
 }
 
 fn resolve_python_command() -> Option<Vec<String>> {
@@ -691,6 +762,8 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
         ),
         (RUNTIME_BENCHMARK_ENV.to_string(), "1".to_string()),
         ("KCMT_NO_SPINNER".to_string(), "1".to_string()),
+        ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
+        ("PYTHONUTF8".to_string(), "1".to_string()),
         (
             "OPENAI_API_KEY".to_string(),
             "kcmt-runtime-benchmark".to_string(),
@@ -731,6 +804,7 @@ fn prepare_status_snapshot(
         workflow_contract_id: "file-repo-path",
         command_label: format!("kcmt --file {target} --repo-path <repo>"),
         expected_stdout_fragment: "✓ ",
+        file_target: Some(target),
     };
     let command = scenario_command(
         runtime,
@@ -785,7 +859,11 @@ fn scenario_command(
             ]);
         }
         _ => {
-            let target = runtime_benchmark_target_file(repo_path, metadata)?;
+            let target = scenario
+                .file_target
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| runtime_benchmark_target_file(repo_path, metadata))?;
             command.extend([
                 "--file".to_string(),
                 target,
