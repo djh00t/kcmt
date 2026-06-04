@@ -131,6 +131,26 @@ fn list_models_prints_supported_provider_defaults() {
 }
 
 #[test]
+fn list_models_debug_prints_structured_provider_json() {
+    let output = kcmt_command()
+        .args(["--debug", "--list-models"])
+        .output()
+        .expect("kcmt list-models debug should run");
+
+    assert!(output.status.success());
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("debug model list is json");
+    let providers = payload.as_array().expect("provider array");
+    assert_eq!(providers.len(), 4);
+    assert!(providers.iter().any(|provider| {
+        provider["provider"] == "openai" && provider["models"][0]["id"] == "gpt-5-mini-2025-08-07"
+    }));
+    assert!(providers.iter().any(|provider| {
+        provider["provider"] == "github" && provider["models"][0]["api_key_env"] == "GITHUB_TOKEN"
+    }));
+}
+
+#[test]
 fn verify_keys_prints_provider_env_presence() {
     let output = kcmt_command()
         .env("OPENAI_API_KEY", "test-key")
