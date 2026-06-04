@@ -13,10 +13,10 @@
 - Require canary probe evidence and parity evidence before widening rollout.
 - Use `KCMT_RUNTIME_TRACE=1` during canary investigations for machine-readable routing diagnostics.
 - Restrict optional TUI behavior to TTY sessions.
-- Covered default Rust commands currently include `--oneshot`, `--file`,
-  `status`, non-interactive `--configure`/`--configure-all` invocations with
-  explicit override flags, `--list-models`, `--verify-keys`, `--benchmark`, and
-  `benchmark runtime`.
+- Covered default Rust commands currently include non-TTY default workflow
+  invocations, `--oneshot`, `--file`, `status`, non-interactive
+  `--configure`/`--configure-all` invocations with explicit override flags,
+  `--list-models`, `--verify-keys`, `--benchmark`, and `benchmark runtime`.
 
 ## Operator Commands
 
