@@ -34,8 +34,8 @@ impl StatusEntry {
         self.code.contains('D')
     }
 
-    fn is_untracked(&self) -> bool {
-        self.code == "??"
+    fn is_new_file(&self) -> bool {
+        self.code == "??" || self.code.contains('A')
     }
 
     fn commit_staging(&self) -> CommitStaging {
@@ -1075,7 +1075,7 @@ fn invoke_provider_candidate(
 }
 
 fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
-    if entry.is_untracked() {
+    if entry.is_new_file() {
         return file_content_diff(repo_path, entry);
     }
 
@@ -1669,17 +1669,19 @@ mod tests {
     }
 
     #[test]
-    fn diff_for_untracked_entry_reads_file_without_git_diff() {
-        let repo = unique_temp_dir("untracked-diff");
+    fn diff_for_new_file_entry_reads_file_without_git_diff() {
+        let repo = unique_temp_dir("new-file-diff");
         fs::write(repo.join("new.md"), "# New file\n").expect("untracked file");
-        let entry = StatusEntry {
-            code: "??".to_string(),
-            path: "new.md".to_string(),
-        };
 
-        let diff = diff_for_entry(&repo, &entry).expect("untracked diff");
+        for code in ["??", "A ", "AM"] {
+            let entry = StatusEntry {
+                code: code.to_string(),
+                path: "new.md".to_string(),
+            };
+            let diff = diff_for_entry(&repo, &entry).expect("new file diff");
 
-        assert_eq!(diff, "New or changed file: new.md\n\n# New file\n");
+            assert_eq!(diff, "New or changed file: new.md\n\n# New file\n");
+        }
     }
 
     #[test]
