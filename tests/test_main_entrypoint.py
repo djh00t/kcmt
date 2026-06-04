@@ -6,6 +6,14 @@ import pathlib
 from kcmt import main as main_mod
 
 
+class _StdoutStub:
+    def __init__(self, is_tty: bool) -> None:
+        self._is_tty = is_tty
+
+    def isatty(self) -> bool:
+        return self._is_tty
+
+
 def test_should_use_rust_runtime_explicit_rust(monkeypatch):
     monkeypatch.setenv("KCMT_RUNTIME", "rust")
     monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
@@ -14,18 +22,28 @@ def test_should_use_rust_runtime_explicit_rust(monkeypatch):
 
 def test_should_use_rust_runtime_auto_requires_canary(monkeypatch):
     monkeypatch.setenv("KCMT_RUNTIME", "auto")
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(True))
     monkeypatch.setenv("KCMT_RUST_CANARY", "yes")
-    assert main_mod._should_use_rust_runtime() is True
+    assert main_mod._should_use_rust_runtime([]) is True
 
     monkeypatch.setenv("KCMT_RUST_CANARY", "0")
-    assert main_mod._should_use_rust_runtime() is False
+    assert main_mod._should_use_rust_runtime([]) is False
 
 
 def test_should_use_rust_runtime_defaults_to_python(monkeypatch):
     monkeypatch.delenv("KCMT_RUNTIME", raising=False)
     monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(True))
     assert main_mod._should_use_rust_runtime(["--oneshot"]) is True
     assert main_mod._should_use_rust_runtime([]) is False
+
+
+def test_should_use_rust_runtime_defaults_no_arg_non_tty_to_rust(monkeypatch):
+    monkeypatch.delenv("KCMT_RUNTIME", raising=False)
+    monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(False))
+
+    assert main_mod._should_use_rust_runtime([]) is True
 
 
 def test_should_use_rust_runtime_python_escape_hatch(monkeypatch):
@@ -33,8 +51,18 @@ def test_should_use_rust_runtime_python_escape_hatch(monkeypatch):
     assert main_mod._should_use_rust_runtime(["--oneshot"]) is False
 
 
-def test_covered_rust_runtime_invocations():
+def test_covered_rust_runtime_invocations(monkeypatch):
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(False))
+    assert main_mod._is_rust_covered_invocation([]) is True
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(True))
+    assert main_mod._is_rust_covered_invocation([]) is False
     assert main_mod._is_rust_covered_invocation(["--oneshot"]) is True
+    assert (
+        main_mod._is_rust_covered_invocation(
+            ["--no-auto-push", "--repo-path", "/tmp/repo"]
+        )
+        is True
+    )
     assert main_mod._is_rust_covered_invocation(["--file", "tracked.py"]) is True
     assert main_mod._is_rust_covered_invocation(["status", "--raw"]) is True
     assert main_mod._is_rust_covered_invocation(["benchmark", "runtime"]) is True
@@ -76,7 +104,7 @@ def test_build_runtime_decision_invalid_runtime_value(monkeypatch):
     monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
 
-    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust")
+    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust", [])
 
     assert decision["selected_runtime"] == "python"
     assert decision["decision_reason"] == "invalid_runtime_value"
@@ -86,9 +114,10 @@ def test_build_runtime_decision_invalid_runtime_value(monkeypatch):
 def test_build_runtime_decision_auto_canary_disabled(monkeypatch):
     monkeypatch.setenv("KCMT_RUNTIME", "auto")
     monkeypatch.setenv("KCMT_RUST_CANARY", "0")
+    monkeypatch.setattr(main_mod.sys, "stdout", _StdoutStub(True))
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
 
-    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust")
+    decision = main_mod._build_runtime_decision("/tmp/kcmt-rust", [])
 
     assert decision["selected_runtime"] == "python"
     assert decision["decision_reason"] == "auto_unsupported_invocation"
