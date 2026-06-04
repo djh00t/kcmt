@@ -246,20 +246,36 @@ fn python_bin() -> PathBuf {
         }
     }
     if let Ok(virtual_env) = std::env::var("VIRTUAL_ENV") {
-        let executable = if cfg!(windows) {
-            Path::new(&virtual_env).join("Scripts").join("python.exe")
-        } else {
-            Path::new(&virtual_env).join("bin").join("python")
-        };
-        if executable.exists() {
+        if let Some(executable) = python_from_venv_root(Path::new(&virtual_env)) {
             return executable;
         }
+    }
+    if let Some(executable) = python_from_venv_root(&workspace_root().join(".venv")) {
+        return executable;
     }
     PathBuf::from(if cfg!(windows) {
         "python.exe"
     } else {
         "python3"
     })
+}
+
+fn python_from_venv_root(root: &Path) -> Option<PathBuf> {
+    [
+        root.join("bin").join("python"),
+        root.join("Scripts").join("python.exe"),
+        root.join("Scripts").join("python"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.exists())
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("workspace root")
+        .to_path_buf()
 }
 
 fn git(repo: &Path, args: &[&str]) {
