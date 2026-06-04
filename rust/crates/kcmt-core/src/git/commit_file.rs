@@ -10,6 +10,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::error::{KcmtError, Result};
+use gix::bstr::ByteSlice;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommitFileOutcome {
@@ -80,7 +81,7 @@ pub fn commit_file_with_staging(
     }
 
     if env::var("KCMT_GIT_COMMIT_BACKEND").as_deref() == Ok("gix") {
-        return commit_file_with_gix(repo_path, file_path, message);
+        return commit_file_with_gix(repo_path, file_path, message, staging);
     }
 
     let (stage_path_ms, stage_path_invoked) = match staging {
@@ -126,25 +127,30 @@ fn commit_file_with_gix(
     repo_path: &Path,
     file_path: &str,
     message: &str,
+    staging: CommitStaging,
 ) -> Result<CommitFileOutcome> {
-    let stage_start = Instant::now();
-    let add_status = Command::new("git")
-        .current_dir(repo_path)
-        .args(["add", "-A", "--", file_path])
-        .status()?;
-    let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
-    if !add_status.success() {
-        return Err(KcmtError::Message(format!(
-            "failed to stage path for commit: {file_path}"
-        )));
-    }
-
     let commit_start = Instant::now();
     let repo = gix::open(repo_path)
         .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
-    let index = repo
-        .open_index()
-        .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
+    let mut stage_path_ms = 0.0;
+    let mut stage_path_invoked = false;
+    let mut index = match repo.open_index() {
+        Ok(index) => index,
+        Err(err) if staging == CommitStaging::StagePath => {
+            let stage_result = stage_path_with_git(repo_path, file_path)?;
+            stage_path_ms += stage_result;
+            stage_path_invoked = true;
+            repo.open_index()
+                .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?
+        }
+        Err(err) => return Err(KcmtError::Message(format!("gix open index failed: {err}"))),
+    };
+    if !stage_path_invoked {
+        let (prepare_stage_ms, prepare_stage_invoked) =
+            prepare_index_for_gix_commit(&repo, &mut index, repo_path, file_path, staging)?;
+        stage_path_ms += prepare_stage_ms;
+        stage_path_invoked = prepare_stage_invoked;
+    }
     let tree_id = write_index_tree(&repo, &index)?;
     let parents = recent_commit_hash(repo_path)?
         .and_then(|hash| gix::hash::ObjectId::from_hex(hash.as_bytes()).ok())
@@ -172,9 +178,98 @@ fn commit_file_with_gix(
     }
     Ok(CommitFileOutcome {
         stage_path_ms,
-        stage_path_invoked: true,
+        stage_path_invoked,
         create_commit_ms,
     })
+}
+
+fn prepare_index_for_gix_commit(
+    repo: &gix::Repository,
+    index: &mut gix::index::File,
+    repo_path: &Path,
+    file_path: &str,
+    staging: CommitStaging,
+) -> Result<(f64, bool)> {
+    if staging == CommitStaging::DirectPath
+        && update_tracked_path_in_index(repo, index, repo_path, file_path).is_ok()
+    {
+        index
+            .write(gix::index::write::Options::default())
+            .map_err(|err| KcmtError::Message(format!("gix index write failed: {err}")))?;
+        return Ok((0.0, false));
+    }
+
+    let stage_path_ms = stage_path_with_git(repo_path, file_path)?;
+    *index = repo
+        .open_index()
+        .map_err(|err| KcmtError::Message(format!("gix reopen index failed: {err}")))?;
+    Ok((stage_path_ms, true))
+}
+
+fn stage_path_with_git(repo_path: &Path, file_path: &str) -> Result<f64> {
+    let stage_start = Instant::now();
+    let add_status = Command::new("git")
+        .current_dir(repo_path)
+        .args(["add", "-A", "--", file_path])
+        .status()?;
+    let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
+    if !add_status.success() {
+        return Err(KcmtError::Message(format!(
+            "failed to stage path for commit: {file_path}"
+        )));
+    }
+    Ok(stage_path_ms)
+}
+
+fn update_tracked_path_in_index(
+    repo: &gix::Repository,
+    index: &mut gix::index::File,
+    repo_path: &Path,
+    file_path: &str,
+) -> Result<()> {
+    let worktree_path = repo_path.join(file_path);
+    let path = file_path.as_bytes().as_bstr();
+    if !worktree_path.exists() {
+        let mut removed = false;
+        index.remove_entries(|_, entry_path, entry| {
+            let remove =
+                entry_path == path && entry.stage() == gix::index::entry::Stage::Unconflicted;
+            removed |= remove;
+            remove
+        });
+        if !removed {
+            return Err(KcmtError::Message(format!(
+                "tracked path not found in index: {file_path}"
+            )));
+        }
+        index.remove_tree();
+        return Ok(());
+    }
+
+    let metadata = gix::index::fs::Metadata::from_path_no_follow(&worktree_path)?;
+    if !metadata.is_file() {
+        return Err(KcmtError::Message(format!(
+            "tracked path is not a regular file: {file_path}"
+        )));
+    }
+    let bytes = fs::read(&worktree_path)?;
+    let blob_id = repo
+        .write_blob(bytes)
+        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?
+        .detach();
+    let entry = index
+        .entry_mut_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+        .ok_or_else(|| {
+            KcmtError::Message(format!("tracked path not found in index: {file_path}"))
+        })?;
+    entry.id = blob_id;
+    entry.stat = gix::index::entry::Stat::from_fs(&metadata)
+        .map_err(|err| KcmtError::Message(format!("gix stat conversion failed: {err}")))?;
+    if let Some(change) = entry.mode.change_to_match_fs(&metadata, true, true) {
+        entry.mode = change.apply(entry.mode);
+    }
+    index.remove_tree();
+    Ok(())
 }
 
 #[derive(Default)]
@@ -340,7 +435,7 @@ fn valid_hash(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_file_with_gix, recent_commit_hash};
+    use super::{commit_file_with_gix, recent_commit_hash, CommitStaging};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -426,15 +521,47 @@ mod tests {
         git(&repo, &["commit", "-m", "chore(repo): seed"]);
         fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
 
-        let outcome = commit_file_with_gix(&repo, "tracked.py", "chore(repo): update tracked")
-            .expect("gix commit");
+        let outcome = commit_file_with_gix(
+            &repo,
+            "tracked.py",
+            "chore(repo): update tracked",
+            CommitStaging::DirectPath,
+        )
+        .expect("gix commit");
 
-        assert!(outcome.stage_path_invoked);
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(outcome.stage_path_ms, 0.0);
         assert!(outcome.create_commit_ms >= 0.0);
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
             "chore(repo): update tracked"
+        );
+    }
+
+    #[test]
+    fn gix_commit_backend_commits_tracked_delete_without_staging() {
+        let repo = unique_temp_dir("gix-commit-delete");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::remove_file(repo.join("tracked.py")).expect("delete tracked file");
+
+        let outcome = commit_file_with_gix(
+            &repo,
+            "tracked.py",
+            "chore(repo): remove tracked",
+            CommitStaging::DirectPath,
+        )
+        .expect("gix commit");
+
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(outcome.stage_path_ms, 0.0);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["log", "-1", "--pretty=%s"]),
+            "chore(repo): remove tracked"
         );
     }
 
@@ -447,13 +574,41 @@ mod tests {
         git(&repo, &["commit", "-m", "chore(repo): seed"]);
         fs::write(repo.join("new_file.py"), "print('new')\n").expect("new file");
 
-        commit_file_with_gix(&repo, "new_file.py", "chore(repo): add new file")
-            .expect("gix commit");
+        let outcome = commit_file_with_gix(
+            &repo,
+            "new_file.py",
+            "chore(repo): add new file",
+            CommitStaging::StagePath,
+        )
+        .expect("gix commit");
 
+        assert!(outcome.stage_path_invoked);
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
             "chore(repo): add new file"
+        );
+    }
+
+    #[test]
+    fn gix_commit_backend_commits_first_untracked_file() {
+        let repo = unique_temp_dir("gix-commit-first-untracked");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("first.py"), "print('first')\n").expect("new file");
+
+        let outcome = commit_file_with_gix(
+            &repo,
+            "first.py",
+            "chore(repo): add first file",
+            CommitStaging::StagePath,
+        )
+        .expect("gix commit");
+
+        assert!(outcome.stage_path_invoked);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["log", "-1", "--pretty=%s"]),
+            "chore(repo): add first file"
         );
     }
 }
