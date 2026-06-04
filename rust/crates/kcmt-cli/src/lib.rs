@@ -17,9 +17,8 @@ pub fn run_entrypoint(name: &str) -> i32 {
 }
 
 fn require_git_repo(requested_repo_path: &PathBuf) -> Result<PathBuf, String> {
-    find_git_repo_root(requested_repo_path).ok_or_else(|| {
-        format!("Not a Git repository: {}", requested_repo_path.display())
-    })
+    find_git_repo_root(requested_repo_path)
+        .ok_or_else(|| format!("Not a Git repository: {}", requested_repo_path.display()))
 }
 
 fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
@@ -28,8 +27,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
     }
 
     let requested_repo_path = PathBuf::from(&args.repo_path);
-    let repo_path = find_git_repo_root(&requested_repo_path)
-        .unwrap_or_else(|| requested_repo_path.clone());
+    let repo_path =
+        find_git_repo_root(&requested_repo_path).unwrap_or_else(|| requested_repo_path.clone());
 
     match args.command {
         Some(CliCommand::Status(StatusArgs { raw })) => {
@@ -86,13 +85,23 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                     }
                 };
             }
-            eprintln!(
-                "{}",
-                kcmt_core::error::KcmtError::Message(
-                    "Rust runtime default workflow is not implemented yet.".to_string()
-                )
-            );
-            1
+            let repo_path = match require_git_repo(&requested_repo_path) {
+                Ok(repo_path) => repo_path,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            };
+            match commands::workflow::run_batch_workflow(repo_path) {
+                Ok(output) => {
+                    print!("{output}");
+                    0
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            }
         }
     }
 }
