@@ -23,6 +23,10 @@ const RUNTIME_BENCHMARK_ENV: &str = "KCMT_RUNTIME_BENCHMARK";
 #[derive(Debug, Clone, Deserialize)]
 struct CorpusMetadata {
     id: Option<String>,
+    kind: Option<String>,
+    file_count: Option<usize>,
+    git_history_state: Option<String>,
+    change_shape: Option<Vec<String>>,
     default_file_target: Option<String>,
     file_targets: Option<Vec<RuntimeFileTarget>>,
     generated_tracked_files: Option<usize>,
@@ -514,6 +518,10 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
         repo_path,
         &CorpusMetadata {
             id: None,
+            kind: None,
+            file_count: None,
+            git_history_state: None,
+            change_shape: None,
             default_file_target: None,
             file_targets: None,
             generated_tracked_files: None,
@@ -527,6 +535,10 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
                 .to_string_lossy()
                 .to_string(),
         ),
+        kind: None,
+        file_count: None,
+        git_history_state: None,
+        change_shape: None,
         default_file_target: Some(default_file_target),
         file_targets: None,
         generated_tracked_files: None,
@@ -558,13 +570,6 @@ fn runtime_benchmark_scenarios(
             file_target: None,
         },
         RuntimeScenario {
-            scenario_id: format!("{corpus_id}:default-repo-path"),
-            workflow_contract_id: "default-repo-path",
-            command_label: "kcmt --repo-path <repo>".to_string(),
-            expected_stdout_fragment: "✓ ",
-            file_target: None,
-        },
-        RuntimeScenario {
             scenario_id: format!("{corpus_id}:file-repo-path"),
             workflow_contract_id: "file-repo-path",
             command_label: format!("kcmt --file {target} --repo-path <repo>"),
@@ -572,6 +577,18 @@ fn runtime_benchmark_scenarios(
             file_target: Some(target),
         },
     ];
+    if !is_large_untracked_runtime_corpus(metadata) {
+        scenarios.insert(
+            2,
+            RuntimeScenario {
+                scenario_id: format!("{corpus_id}:default-repo-path"),
+                workflow_contract_id: "default-repo-path",
+                command_label: "kcmt --repo-path <repo>".to_string(),
+                expected_stdout_fragment: "✓ ",
+                file_target: None,
+            },
+        );
+    }
     if let Some(file_targets) = metadata.file_targets.clone() {
         for file_target in file_targets {
             scenarios.push(RuntimeScenario {
@@ -584,6 +601,16 @@ fn runtime_benchmark_scenarios(
         }
     }
     Ok(scenarios)
+}
+
+fn is_large_untracked_runtime_corpus(metadata: &CorpusMetadata) -> bool {
+    metadata.kind.as_deref() == Some("synthetic")
+        && metadata.git_history_state.as_deref() == Some("no-commits")
+        && metadata.file_count.unwrap_or_default() >= 1000
+        && metadata
+            .change_shape
+            .as_ref()
+            .is_some_and(|shape| shape.iter().any(|item| item == "untracked"))
 }
 
 fn runtime_benchmark_target_file(repo_path: &Path, metadata: &CorpusMetadata) -> Result<String> {
@@ -841,6 +868,11 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
             "kcmt-benchmark@example.com".to_string(),
         ),
     ];
+    for key in ["KCMT_USE_BATCH", "KCMT_BATCH_MODEL", "KCMT_BATCH_TIMEOUT"] {
+        if let Ok(value) = std::env::var(key) {
+            envs.push((key.to_string(), value));
+        }
+    }
     if runtime == RuntimeKind::Python {
         envs.push(("KCMT_RUNTIME".to_string(), "python".to_string()));
     } else {
@@ -1119,6 +1151,49 @@ mod tests {
                 .find(|(key, _)| key == "KCMT_GIT_COMMIT_BACKEND")
                 .map(|(_, value)| value.as_str()),
             Some("gix")
+        );
+    }
+
+    #[test]
+    fn runtime_benchmark_env_preserves_batch_mode_override() {
+        std::env::set_var("KCMT_USE_BATCH", "1");
+        let config_home = unique_temp_dir("runtime-batch-env");
+        let envs = runtime_benchmark_env(&config_home, RuntimeKind::Rust);
+        std::env::remove_var("KCMT_USE_BATCH");
+
+        assert_eq!(
+            envs.iter()
+                .find(|(key, _)| key == "KCMT_USE_BATCH")
+                .map(|(_, value)| value.as_str()),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn large_synthetic_runtime_corpus_excludes_default_workflow() {
+        let repo = unique_temp_dir("large-synthetic-runtime");
+        let target = repo.join("pkg_000").join("file_00000.py");
+        fs::create_dir_all(target.parent().expect("target parent")).expect("target parent dir");
+        fs::write(&target, "print('runtime')\n").expect("target file");
+        let metadata = CorpusMetadata {
+            id: Some("synthetic-untracked-1000".to_string()),
+            kind: Some("synthetic".to_string()),
+            file_count: Some(1000),
+            git_history_state: Some("no-commits".to_string()),
+            change_shape: Some(vec!["untracked".to_string(), "nested-paths".to_string()]),
+            default_file_target: Some("pkg_000/file_00000.py".to_string()),
+            file_targets: None,
+            generated_tracked_files: None,
+        };
+
+        let scenarios = runtime_benchmark_scenarios(&repo, &metadata).expect("scenarios");
+
+        assert_eq!(
+            scenarios
+                .iter()
+                .map(|scenario| scenario.workflow_contract_id)
+                .collect::<Vec<_>>(),
+            vec!["status-repo-path", "oneshot-repo-path", "file-repo-path"]
         );
     }
 }
