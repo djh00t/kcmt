@@ -2162,9 +2162,52 @@ Examples:
             )
 
     def _execute_single_file(self, args: argparse.Namespace, config: Config) -> int:
+        telemetry_origin = time.perf_counter()
+        telemetry_stages: list[dict[str, object]] = []
+
+        def _ms(value: float) -> float:
+            return (value - telemetry_origin) * 1000.0
+
+        def _record_stage(
+            stage: str,
+            start: float,
+            end: float,
+            *,
+            file_path_value: str | None = None,
+            outcome: str = "completed",
+            error: str | None = None,
+        ) -> None:
+            row: dict[str, object] = {
+                "stage": stage,
+                "start_ms": _ms(start),
+                "end_ms": _ms(end),
+                "duration_ms": max(0.0, (end - start) * 1000.0),
+                "outcome": outcome,
+            }
+            if file_path_value:
+                row["file_path"] = file_path_value
+            if error:
+                row["error"] = error
+            telemetry_stages.append(row)
+
+        def _export_telemetry() -> None:
+            telemetry_path = os.environ.get("KCMT_RUNTIME_TELEMETRY_PATH", "").strip()
+            if not telemetry_path:
+                return
+            payload = {
+                "schema_version": 1,
+                "runtime": "python",
+                "corpus_id": "workflow",
+                "stages": telemetry_stages,
+            }
+            output_path = Path(telemetry_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(payload), encoding="utf-8")
+
         file_path = args.single_file
         repo = GitRepo(config.git_repo_path, config)
 
+        diff_start = time.perf_counter()
         repo.stage_file(file_path)
         diff = repo.get_file_diff(file_path, staged=True)
         if not diff.strip():
@@ -2174,7 +2217,21 @@ Examples:
                 self._print_info("No changes detected in the specified file.")
                 return 0
             diff = wdiff
+        _record_stage(
+            "diff_preparation",
+            diff_start,
+            time.perf_counter(),
+            file_path_value=file_path,
+        )
 
+        enqueue_time = time.perf_counter()
+        _record_stage(
+            "llm_enqueue",
+            enqueue_time,
+            enqueue_time,
+            file_path_value=file_path,
+        )
+        llm_start = time.perf_counter()
         if self._runtime_benchmark_mode_enabled():
             msg = self._runtime_benchmark_commit_message(
                 file_path,
@@ -2187,12 +2244,50 @@ Examples:
                 context=f"File: {file_path}",
                 style="conventional",
             )
+            _record_stage(
+                "llm_wait",
+                llm_start,
+                time.perf_counter(),
+                file_path_value=file_path,
+            )
+            validation_start = time.perf_counter()
             msg = gen.validate_and_fix_commit_message(msg)
+            _record_stage(
+                "response_validation",
+                validation_start,
+                time.perf_counter(),
+                file_path_value=file_path,
+            )
+        if self._runtime_benchmark_mode_enabled():
+            _record_stage(
+                "llm_wait",
+                llm_start,
+                time.perf_counter(),
+                file_path_value=file_path,
+            )
+            validation_time = time.perf_counter()
+            _record_stage(
+                "response_validation",
+                validation_time,
+                validation_time,
+                file_path_value=file_path,
+            )
 
+        commit_start = time.perf_counter()
         repo.commit(msg)
+        _record_stage(
+            "commit",
+            commit_start,
+            time.perf_counter(),
+            file_path_value=file_path,
+        )
         recent = repo.get_recent_commits(1)
         commit_hash = recent[0].split()[0] if recent else None
 
+        push_time = time.perf_counter()
+        _record_stage("push", push_time, push_time)
+
+        snapshot_start = time.perf_counter()
         snapshot = self._build_single_file_snapshot(
             args=args,
             config=config,
@@ -2201,6 +2296,8 @@ Examples:
             commit_hash=commit_hash,
         )
         self._persist_run_snapshot(snapshot)
+        _record_stage("snapshot", snapshot_start, time.perf_counter())
+        _export_telemetry()
 
         # Simple success message for oneshot/single file mode
         self._print_success(f"✓ {file_path}")
