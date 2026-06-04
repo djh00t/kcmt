@@ -12,11 +12,12 @@ use std::time::Instant;
 use crate::error::{KcmtError, Result};
 use gix::bstr::ByteSlice;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CommitFileOutcome {
     pub stage_path_ms: f64,
     pub stage_path_invoked: bool,
     pub create_commit_ms: f64,
+    pub commit_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,7 @@ pub fn commit_file_with_staging(
             stage_path_ms,
             stage_path_invoked,
             create_commit_ms,
+            commit_hash: None,
         })
     } else {
         Err(KcmtError::Message(format!(
@@ -180,6 +182,7 @@ fn commit_file_with_gix(
         stage_path_ms,
         stage_path_invoked,
         create_commit_ms,
+        commit_hash: Some(commit_id.to_string()),
     })
 }
 
@@ -252,9 +255,9 @@ fn update_tracked_path_in_index(
             "tracked path is not a regular file: {file_path}"
         )));
     }
-    let bytes = fs::read(&worktree_path)?;
+    let mut file = fs::File::open(&worktree_path)?;
     let blob_id = repo
-        .write_blob(bytes)
+        .write_blob_stream(&mut file)
         .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?
         .detach();
     let entry = index
@@ -597,6 +600,7 @@ mod tests {
 
         assert!(!outcome.stage_path_invoked);
         assert_eq!(outcome.stage_path_ms, 0.0);
+        assert!(outcome.commit_hash.is_some());
         assert!(outcome.create_commit_ms >= 0.0);
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
@@ -624,6 +628,7 @@ mod tests {
 
         assert!(!outcome.stage_path_invoked);
         assert_eq!(outcome.stage_path_ms, 0.0);
+        assert!(outcome.commit_hash.is_some());
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
@@ -649,6 +654,7 @@ mod tests {
         .expect("gix commit");
 
         assert!(outcome.stage_path_invoked);
+        assert!(outcome.commit_hash.is_some());
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
@@ -671,6 +677,7 @@ mod tests {
         .expect("gix commit");
 
         assert!(outcome.stage_path_invoked);
+        assert!(outcome.commit_hash.is_some());
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
