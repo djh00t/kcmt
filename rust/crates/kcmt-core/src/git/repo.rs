@@ -129,10 +129,11 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
                 "path status requires fallback for non-file: {file_path}"
             )));
         }
-        let Some(index_oid) = index_oid else {
+        let Some(index_entry) = index_entry else {
             return Ok(format!("?? {file_path}\n"));
         };
-        if metadata.len() != u64::from(index_entry.expect("index oid came from entry").stat.size) {
+        let index_oid = index_entry.id;
+        if metadata.len() != u64::from(index_entry.stat.size) {
             "M"
         } else {
             let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
