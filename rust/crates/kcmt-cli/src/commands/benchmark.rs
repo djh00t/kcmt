@@ -89,6 +89,7 @@ pub fn run_provider_benchmark(repo_path: PathBuf, args: &CliArgs) -> i32 {
         use_batch: args.use_batch_override(),
         batch_model: args.batch_model.clone(),
         batch_timeout_seconds: args.batch_timeout_seconds,
+        file_limit: args.limit,
     };
 
     let config = match load_config(&repo_path, &overrides) {
