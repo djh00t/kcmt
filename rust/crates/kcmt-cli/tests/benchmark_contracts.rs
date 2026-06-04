@@ -173,6 +173,66 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
 }
 
 #[test]
+fn runtime_benchmark_fast_snapshot_keeps_python_compatible_keys() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("runtime-config-home");
+    seed_runtime_corpus(&repo, "pytest-runtime-rust-snapshot");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_RUNTIME_BENCHMARK", "1")
+        .env("KCMT_PROVIDER_RESPONSE", "chore(repo): benchmark response")
+        .args(["--file", "src/app.py", "--repo-path"])
+        .arg(&repo)
+        .args(["--no-auto-push"])
+        .output()
+        .expect("kcmt file workflow should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let snapshots = run_snapshots(&config_home);
+    assert_eq!(snapshots.len(), 1);
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(&snapshots[0]).expect("snapshot file"))
+            .expect("snapshot json");
+    for expected_key in [
+        "schema_version",
+        "repo_path",
+        "provider",
+        "model",
+        "endpoint",
+        "config",
+        "batch",
+        "duration_seconds",
+        "rate_commits_per_sec",
+        "counts",
+        "pushed",
+        "auto_push_state",
+        "summary",
+        "errors",
+        "commits",
+        "deletions",
+        "subjects",
+        "stats",
+        "telemetry",
+    ] {
+        assert!(
+            snapshot.get(expected_key).is_some(),
+            "runtime snapshot missing compatibility key {expected_key}: {snapshot:?}"
+        );
+    }
+    assert!(snapshot["commits"].as_array().is_some());
+    assert!(snapshot["deletions"].as_array().is_some());
+    assert!(snapshot["subjects"].as_array().is_some());
+}
+
+#[test]
 fn provider_benchmark_emits_json_csv_and_persists_snapshot() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
@@ -345,5 +405,21 @@ fn benchmark_snapshots(config_home: &Path) -> Vec<PathBuf> {
                 .unwrap_or(false)
         }));
     }
+    snapshots
+}
+
+fn run_snapshots(config_home: &Path) -> Vec<PathBuf> {
+    let repos = config_home.join("repos");
+    let mut snapshots = Vec::new();
+    let Ok(repo_entries) = fs::read_dir(repos) else {
+        return snapshots;
+    };
+    for repo_entry in repo_entries.flatten() {
+        let snapshot = repo_entry.path().join("last_run.json");
+        if snapshot.exists() {
+            snapshots.push(snapshot);
+        }
+    }
+    snapshots.sort();
     snapshots
 }
