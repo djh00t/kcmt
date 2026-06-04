@@ -58,19 +58,23 @@ The runtime report includes:
 - `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
   and `--file <target> --repo-path`; workflow results include `stage_timings`
   when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
-  `status_scan`, `diff_preparation`, `llm_enqueue`, `llm_wait`,
-  `response_validation`, `commit_stage_path`, `commit_create`,
-  `commit_read_hash`, `commit`, `push`, and `snapshot` rows so scoreboards can
-  compare stable stage columns across short and skipped paths. Single-file
-  workflows keep prepare workers at one. `commit_stage_path` item counts record
-  actual staging subprocesses, so tracked direct-path commits can report zero
-  staged items. Rust status scanning uses the gix backend by default; set
+  `repo_discovery`, `dispatch`, `config_load`, `status_scan`,
+  `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
+  `commit_stage_path`, `commit_create`, `commit_read_hash`, `commit`, `push`,
+  `snapshot`, and `workflow_total` rows so scoreboards can compare stable stage
+  columns across short and skipped paths. Single-file workflows keep prepare
+  workers at one and use path-limited status. `commit_stage_path` item counts
+  record actual staging subprocesses, so tracked direct-path commits can report
+  zero staged items. Rust status scanning uses the gix backend by default; set
   `KCMT_GIT_STATUS_BACKEND=cli` only for parity/debug comparisons. Set
   `KCMT_GIT_COMMIT_BACKEND=gix` to compare the opt-in Rust commit backend,
-  which writes the index tree and updates `HEAD` with gix after staging the
-  selected path. Keep the Git CLI commit backend when hook, signing, or other
-  native `git commit` behavior must be preserved. No-origin auto-push records a
-  skipped push stage instead of running a failing push.
+  which writes tracked-file index updates, streams blob writes, writes the index
+  tree, and updates `HEAD` with gix. Keep the Git CLI commit backend when hook,
+  signing, or other native `git commit` behavior must be preserved. No-origin
+  auto-push records a skipped push stage instead of running a failing push.
+  Corpus metadata can include named `file_targets` so scoreboards compare
+  tracked modified, tracked deleted, untracked, nested, and generated large-file
+  workflows side by side.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
 - `optimization_iterations`: one baseline row plus five optimization rows with
   median timing, throughput, quality score, failure count, and the next
