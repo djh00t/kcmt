@@ -1343,6 +1343,70 @@ fn persist_run_snapshot(
         deletions_success,
         deletions_failure,
     );
+    if runtime_benchmark_enabled() {
+        telemetry.record_since("snapshot", snapshot_start, 1);
+        telemetry.record_since("workflow_total", workflow_start, total_entries);
+        let snapshot = json!({
+            "schema_version": 1,
+            "timestamp": "",
+            "repo_path": repo_path.display().to_string(),
+            "provider": config.provider,
+            "model": config.model,
+            "endpoint": config.llm_endpoint,
+            "config": {
+                "provider": config.provider,
+                "model": config.model,
+                "endpoint": config.llm_endpoint,
+                "api_key_env": config.api_key_env,
+                "git_repo_path": config.git_repo_path,
+                "max_commit_length": config.max_commit_length,
+                "auto_push": config.auto_push,
+                "use_batch": config.use_batch,
+                "batch_model": config.batch_model,
+                "batch_timeout_seconds": config.batch_timeout_seconds
+            },
+            "batch": {
+                "use_batch": config.use_batch,
+                "batch_model": config.batch_model,
+                "batch_timeout_seconds": config.batch_timeout_seconds
+            },
+            "duration_seconds": 0.0,
+            "rate_commits_per_sec": 0.0,
+            "summary": summary,
+            "counts": {
+                "files_total": total_entries,
+                "prepared_total": prepared_count,
+                "processed_total": commits.len() + failures.len(),
+                "prepared_failures": prepared_failures,
+                "commit_success": commit_success,
+                "commit_failure": commit_failure,
+                "deletions_total": deletions.len() + deletion_failure_records.len(),
+                "deletions_success": deletions_success,
+                "deletions_failure": deletions_failure,
+                "overall_success": overall_success,
+                "overall_failure": overall_failure,
+                "errors": push_outcome.errors.len()
+            },
+            "pushed": push_outcome.pushed,
+            "auto_push_state": push_outcome.state,
+            "errors": &push_outcome.errors,
+            "commits": [],
+            "deletions": [],
+            "subjects": subjects,
+            "stats": {},
+            "telemetry": {
+                "schema_version": 1,
+                "prepare_workers": telemetry.prepare_workers,
+                "stages": telemetry.stages.iter().map(|stage| json!({
+                    "stage": stage.stage,
+                    "duration_ms": stage.duration_ms,
+                    "items": stage.items
+                })).collect::<Vec<_>>()
+            }
+        });
+        return write_run_snapshot(repo_path, &snapshot);
+    }
+
     let mut commit_records = Vec::new();
     for commit in &file_commits {
         commit_records.push(json!({
@@ -1444,12 +1508,16 @@ fn persist_run_snapshot(
         }
     });
 
+    write_run_snapshot(repo_path, &snapshot)
+}
+
+fn write_run_snapshot(repo_path: &Path, snapshot: &serde_json::Value) -> Result<()> {
     let path = snapshot_path(repo_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let rendered =
-        serde_json::to_string(&snapshot).map_err(|err| KcmtError::Message(err.to_string()))?;
+        serde_json::to_string(snapshot).map_err(|err| KcmtError::Message(err.to_string()))?;
     fs::write(path, rendered)?;
     Ok(())
 }
