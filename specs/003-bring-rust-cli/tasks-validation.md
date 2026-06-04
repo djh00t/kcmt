@@ -38,16 +38,16 @@ Result:
 
 ### Cross-Platform PR Matrix
 
-PR34 head `bcb997817ac2e1af450e8efac3a490da3dcff888` passed all required
+PR34 head `680134f71248635cbc928459a3c9cac30f466c53` passed all required
 GitHub checks after the Rust parity updates:
 
-- CI / Python 3.12: passed in Actions run `26971474089`.
-- CI / Python 3.13: passed in Actions run `26971474089`.
-- Rust Canary Smoke / ubuntu: passed in Actions run `26971474090`.
-- Keystone Assimilation Watcher: passed in Actions run `26971474102`.
-- Rust Parity Matrix / ubuntu-latest: passed in Actions run `26971474093`.
-- Rust Parity Matrix / macos-latest: passed in Actions run `26971474093`.
-- Rust Parity Matrix / windows-latest: passed in Actions run `26971474093`.
+- CI / Python 3.12: passed in Actions run `26976496257`.
+- CI / Python 3.13: passed in Actions run `26976496257`.
+- Rust Canary Smoke / ubuntu: passed in Actions run `26976496346`.
+- Keystone Assimilation Watcher: passed in Actions run `26976496261`.
+- Rust Parity Matrix / ubuntu-latest: passed in Actions run `26976496281`.
+- Rust Parity Matrix / macos-latest: passed in Actions run `26976496281`.
+- Rust Parity Matrix / windows-latest: passed in Actions run `26976496281`.
 
 ### Focused Rust and Runtime Parity
 
