@@ -402,12 +402,22 @@ fn run_entries_workflow(
             is_deletion,
         });
     }
+    let commit_index_flush_ms = if let Some(session) = gix_session.as_mut() {
+        session.flush_index()?
+    } else {
+        0.0
+    };
     telemetry.record_duration(
         "commit_stage_path",
         commit_stage_path_ms,
         commit_stage_path_invocations,
     );
     telemetry.record_duration("commit_create", commit_create_ms, commits.len());
+    telemetry.record_duration(
+        "commit_index_flush",
+        commit_index_flush_ms,
+        usize::from(commit_index_flush_ms > 0.0),
+    );
     telemetry.record_duration("commit_read_hash", commit_read_hash_ms, commit_hash_reads);
     telemetry.record_since("commit", commit_start, commits.len());
 
