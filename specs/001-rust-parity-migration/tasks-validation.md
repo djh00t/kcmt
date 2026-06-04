@@ -55,11 +55,13 @@ uv run kcmt benchmark runtime \
   --json
 ```
 
-Result artifact: `/tmp/kcmt-runtime-release-normalized-after-perf.json`
+Result artifact: `/tmp/kcmt-runtime-current-mini-fixed.json`
 
 - Corpus: `mini-realistic-fixture`
-- Python summary: `3 passed / 0 failed / 0 excluded`, median `893.902875 ms`
-- Rust summary: `3 passed / 0 failed / 0 excluded`, median `473.459208 ms`
+- Command set: `status-repo-path`, `oneshot-repo-path`, `default-repo-path`, and `file-repo-path`
+- Python summary: `4 passed / 0 failed / 0 excluded`, median `863.963104 ms`
+- Rust summary: `4 passed / 0 failed / 0 excluded`, median `200.194584 ms`
+- Speedup: `76.83%`
 - Rust workflow stage rows include `status_scan`, `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`, `commit`, `push`, and `snapshot`.
 
 ### Synthetic 1,000-File Corpus
@@ -80,11 +82,13 @@ uv run kcmt benchmark runtime \
   --json
 ```
 
-Result artifact: `/tmp/kcmt-runtime-release-synthetic-1000-after-perf.json`
+Result artifact: `/tmp/kcmt-runtime-current-synthetic-1000-fixed.json`
 
 - Corpus: `synthetic-untracked-1000`
-- Python summary: `3 passed / 0 failed / 0 excluded`, median `888.375709 ms`
-- Rust summary: `3 passed / 0 failed / 0 excluded`, median `482.19425 ms`
+- Command set: `status-repo-path`, `oneshot-repo-path`, and `file-repo-path`; the documented large synthetic corpus intentionally excludes default multi-file commits so the benchmark measures startup, repo scanning, explicit repo-path handling, and file-scoped prompt preparation instead of committing all 1,000 untracked files.
+- Python summary: `3 passed / 0 failed / 0 excluded`, median `806.140583 ms`
+- Rust summary: `3 passed / 0 failed / 0 excluded`, median `227.613875 ms`
+- Speedup: `71.76%`
 
 ## Live Provider Quality Evidence
 
@@ -128,8 +132,8 @@ Results:
 
 | Criterion | Evidence | Status |
 |---|---|---|
-| SC-001 median speedup | Rust release medians are lower than Python on `mini-realistic-fixture` and `synthetic-untracked-1000`; current measured speedup is roughly 46%-51% across the three scenario set. | PASS for deterministic corpora, continue tracking for broader corpus expansion |
-| SC-002 <=2s preprocessing (95%) | Runtime benchmark scenarios completed under 2s wall time including CLI overhead in current local runs. | PASS for current deterministic corpora |
+| SC-001 median speedup | Rust release medians are `76.83%` faster than Python on `mini-realistic-fixture` and `71.76%` faster on `synthetic-untracked-1000`, exceeding the >=50% target on both deterministic corpora. | PASS for deterministic corpora |
+| SC-002 <=2s preprocessing (95%) | Runtime benchmark scenarios completed under 2s wall time including CLI overhead in current local runs; synthetic `status`, `oneshot`, and `file` scenarios and realistic `status`, `oneshot`, `default`, and `file` scenarios all passed. | PASS for current deterministic corpora |
 | SC-003 workflow parity | BDD parity suite covers high-usage workflows, including default multi-file recovery when one file fails preparation, and passed in current local gates. | PASS (current local) |
 | SC-004 config compatibility | Rust config contract tests and Python config tests passed in `make quality-gates`. | PASS (current local) |
 | SC-005 quality delta | Live GitHub Models provider-quality benchmark scored Python and Rust at `92.0` with `100%` success on the same five-sample benchmark set; deterministic sanitizer and fixture tests also preserve conventional commit validity. | PASS current local |
