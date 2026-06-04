@@ -138,7 +138,7 @@ def build_probe_scenarios(rust_bin: str) -> list[ProbeScenario]:
                 "KCMT_RUNTIME_TRACE": "1",
             },
             expected_runtime="rust",
-            expected_reason="auto_canary_enabled",
+            expected_reason="auto_covered_workflow",
         ),
         ProbeScenario(
             id="auto_canary_rust_commit_help",
@@ -150,7 +150,7 @@ def build_probe_scenarios(rust_bin: str) -> list[ProbeScenario]:
                 "KCMT_RUNTIME_TRACE": "1",
             },
             expected_runtime="rust",
-            expected_reason="auto_canary_enabled",
+            expected_reason="auto_covered_workflow",
         ),
         ProbeScenario(
             id="auto_canary_rust_kc_help",
@@ -162,7 +162,7 @@ def build_probe_scenarios(rust_bin: str) -> list[ProbeScenario]:
                 "KCMT_RUNTIME_TRACE": "1",
             },
             expected_runtime="rust",
-            expected_reason="auto_canary_enabled",
+            expected_reason="auto_covered_workflow",
         ),
         ProbeScenario(
             id="forced_python_rollback",
