@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::scoreboard::WorkflowComparisonScoreboard;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BenchmarkResult {
     pub provider: String,
@@ -35,6 +37,31 @@ pub enum RuntimeScenarioStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeStageTiming {
+    pub stage: String,
+    pub duration_ms: f64,
+    pub outcome: RuntimeScenarioStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+impl RuntimeStageTiming {
+    pub fn new(
+        stage: impl Into<String>,
+        duration_ms: f64,
+        outcome: RuntimeScenarioStatus,
+        notes: Option<String>,
+    ) -> Self {
+        Self {
+            stage: stage.into(),
+            duration_ms,
+            outcome,
+            notes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeBenchmarkResult {
     pub scenario_id: String,
     pub workflow_contract_id: String,
@@ -52,6 +79,8 @@ pub struct RuntimeBenchmarkResult {
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub stage_timings: Vec<RuntimeStageTiming>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -77,4 +106,5 @@ pub struct RuntimeBenchmarkRun {
     pub corpora: Vec<String>,
     pub results: Vec<RuntimeBenchmarkResult>,
     pub summary: RuntimeBenchmarkSummary,
+    pub scoreboard: WorkflowComparisonScoreboard,
 }
