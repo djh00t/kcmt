@@ -7,7 +7,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -376,16 +375,12 @@ fn scenario_records_snapshot_telemetry(scenario: &RuntimeScenario) -> bool {
 }
 
 fn load_snapshot_stage_timings(
-    repo_path: &Path,
+    _repo_path: &Path,
     config_home: &Path,
 ) -> Result<Vec<RuntimeStageTiming>> {
-    let snapshot_path = config_home
-        .join("repos")
-        .join(repo_namespace(repo_path))
-        .join("last_run.json");
-    if !snapshot_path.exists() {
+    let Some(snapshot_path) = latest_snapshot_path(config_home)? else {
         return Ok(Vec::new());
-    }
+    };
     let raw = fs::read_to_string(&snapshot_path)?;
     let payload: serde_json::Value = serde_json::from_str(&raw)?;
     let Some(stages) = payload
@@ -409,6 +404,22 @@ fn load_snapshot_stage_timings(
             })
         })
         .collect())
+}
+
+fn latest_snapshot_path(config_home: &Path) -> Result<Option<PathBuf>> {
+    let repos_dir = config_home.join("repos");
+    if !repos_dir.exists() {
+        return Ok(None);
+    }
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(repos_dir)? {
+        let path = entry?.path().join("last_run.json");
+        if path.exists() {
+            snapshots.push(path);
+        }
+    }
+    snapshots.sort();
+    Ok(snapshots.pop())
 }
 
 fn aggregate_stage_timings(samples: &[Vec<RuntimeStageTiming>]) -> Vec<RuntimeStageTiming> {
@@ -442,56 +453,6 @@ fn aggregate_stage_timings(samples: &[Vec<RuntimeStageTiming>]) -> Vec<RuntimeSt
                 duration_ms,
                 items,
             })
-        })
-        .collect()
-}
-
-fn repo_namespace(repo_path: &Path) -> String {
-    let normalized = git_repo_root(repo_path).unwrap_or_else(|| {
-        if repo_path.is_absolute() {
-            repo_path.to_path_buf()
-        } else {
-            env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(repo_path)
-        }
-    });
-    let digest = Sha256::digest(normalized.to_string_lossy().as_bytes());
-    let digest_hex = format!("{digest:x}");
-    let safe_tail = normalized
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(sanitize_tail)
-        .filter(|tail| !tail.is_empty())
-        .unwrap_or_else(|| "repo".to_string());
-    format!("{}-{}", safe_tail, &digest_hex[..8])
-}
-
-fn git_repo_root(repo_path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .current_dir(repo_path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if top.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(top))
-    }
-}
-
-fn sanitize_tail(raw: &str) -> String {
-    raw.chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
-                ch
-            } else {
-                '-'
-            }
         })
         .collect()
 }
