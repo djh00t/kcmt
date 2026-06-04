@@ -1147,6 +1147,7 @@ fn file_mode_falls_back_to_next_configured_provider_after_primary_failure() {
 #[test]
 fn default_openai_batch_queues_all_file_prompts_before_committing() {
     let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
     let (endpoint, request_rx) = spawn_openai_batch_response();
     fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
     fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta seed");
@@ -1156,6 +1157,7 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
     fs::write(repo.join("beta.py"), "print('beta changed')\n").expect("beta change");
 
     let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
         .env("OPENAI_TEST_KEY", "test-key")
         .args([
             "--provider",
@@ -1207,6 +1209,9 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
     assert!(subjects.contains(&"fix(beta): batch beta"));
     let status = git(&repo, &["status", "--short"]);
     assert!(status.is_empty(), "unexpected dirty status: {status}");
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(telemetry_stage_items(&snapshot, "diff_preparation"), 2);
+    assert_eq!(telemetry_stage_items(&snapshot, "llm_enqueue"), 2);
 }
 
 #[test]
