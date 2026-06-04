@@ -46,7 +46,7 @@ fn runtime_benchmark_rust_missing_binary_is_reported_as_excluded_json() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 4);
     assert!(results.iter().all(|item| item["status"] == "excluded"));
     assert!(results.iter().all(|item| item["failure_reason"]
         .as_str()
@@ -77,7 +77,10 @@ fn runtime_benchmark_python_emits_passing_results_json() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 4);
+    assert!(results
+        .iter()
+        .any(|item| item["workflow_contract_id"] == "default-repo-path"));
     let iterations = payload["optimization_iterations"]
         .as_array()
         .expect("optimization iterations");
@@ -136,6 +139,9 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
+    assert!(results
+        .iter()
+        .any(|item| item["workflow_contract_id"] == "default-repo-path"));
     let file_result = results
         .iter()
         .find(|item| item["workflow_contract_id"] == "file-repo-path")
