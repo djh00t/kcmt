@@ -618,14 +618,42 @@ fn resolve_python_command() -> Option<String> {
             return Some(configured);
         }
     }
-    for candidate in ["python3", "python"] {
-        if let Ok(output) = Command::new(candidate).arg("--version").output() {
-            if output.status.success() {
-                return Some(candidate.to_string());
+    if let Ok(virtual_env) = env::var("VIRTUAL_ENV") {
+        if let Some(candidate) = python_from_virtual_env_root(Path::new(&virtual_env)) {
+            if python_command_runs(candidate.as_path()) {
+                return Some(candidate.display().to_string());
             }
         }
     }
+    if let Some(candidate) = python_from_virtual_env_root(&workspace_root().join(".venv")) {
+        if python_command_runs(candidate.as_path()) {
+            return Some(candidate.display().to_string());
+        }
+    }
+    for candidate in ["python3", "python"] {
+        if python_command_runs(Path::new(candidate)) {
+            return Some(candidate.to_string());
+        }
+    }
     None
+}
+
+fn python_from_virtual_env_root(root: &Path) -> Option<PathBuf> {
+    [
+        root.join("bin").join("python"),
+        root.join("Scripts").join("python.exe"),
+        root.join("Scripts").join("python"),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.exists())
+}
+
+fn python_command_runs(candidate: &Path) -> bool {
+    Command::new(candidate)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 pub fn default_runtime_benchmark_rust_bin() -> PathBuf {
@@ -885,5 +913,28 @@ fn median(values: &[f64]) -> Option<f64> {
         Some((sorted[middle - 1] + sorted[middle]) / 2.0)
     } else {
         Some(sorted[middle])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn python_from_virtual_env_root_prefers_unix_bin_python() {
+        let root = unique_temp_dir("venv-python");
+        let bin = root.join("bin");
+        let scripts = root.join("Scripts");
+        fs::create_dir_all(&bin).expect("bin dir");
+        fs::create_dir_all(&scripts).expect("scripts dir");
+        let unix_python = bin.join("python");
+        let windows_python = scripts.join("python.exe");
+        fs::write(&unix_python, "").expect("unix python");
+        fs::write(&windows_python, "").expect("windows python");
+
+        assert_eq!(
+            python_from_virtual_env_root(&root).as_deref(),
+            Some(unix_python.as_path())
+        );
     }
 }
