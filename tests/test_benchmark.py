@@ -231,6 +231,30 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
     assert all(item["failures"] is None for item in iterations[1:])
 
 
+def test_runtime_benchmark_large_synthetic_excludes_default_workflow(tmp_path):
+    repo = tmp_path / "large-synthetic"
+    repo.mkdir()
+    target = repo / "pkg_000" / "file_00000.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("print('runtime')\n", encoding="utf-8")
+    metadata = {
+        "id": "synthetic-untracked-1000",
+        "kind": "synthetic",
+        "file_count": 1000,
+        "git_history_state": "no-commits",
+        "change_shape": ["untracked", "nested-paths"],
+        "default_file_target": "pkg_000/file_00000.py",
+    }
+
+    scenarios = bench._runtime_benchmark_scenarios(repo, metadata)
+
+    assert [item.workflow_contract_id for item in scenarios] == [
+        "status-repo-path",
+        "oneshot-repo-path",
+        "file-repo-path",
+    ]
+
+
 def test_run_runtime_benchmark_records_missing_rust_binary_as_excluded(tmp_path):
     repo = _create_runtime_corpus(tmp_path)
 
