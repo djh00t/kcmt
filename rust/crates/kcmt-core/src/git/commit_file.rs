@@ -359,10 +359,10 @@ fn gix_signature() -> gix::actor::Signature {
 }
 
 pub fn recent_commit_hash(repo_path: &Path) -> Result<Option<String>> {
-    let Some(git_dir) = git_dir_path(repo_path)? else {
+    let Some(git_dirs) = git_dirs(repo_path)? else {
         return Ok(None);
     };
-    let head_path = git_dir.join("HEAD");
+    let head_path = git_dirs.git_dir.join("HEAD");
     let head = match fs::read_to_string(&head_path) {
         Ok(head) => head,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -370,55 +370,87 @@ pub fn recent_commit_hash(repo_path: &Path) -> Result<Option<String>> {
     };
     let head = head.trim();
     if let Some(ref_name) = head.strip_prefix("ref:").map(str::trim) {
-        return read_ref_hash(&git_dir, ref_name);
+        return read_ref_hash(&git_dirs, ref_name);
     }
     Ok(valid_hash(head).map(ToOwned::to_owned))
 }
 
-fn git_dir_path(repo_path: &Path) -> Result<Option<PathBuf>> {
+#[derive(Debug)]
+struct GitDirs {
+    git_dir: PathBuf,
+    common_dir: PathBuf,
+}
+
+fn git_dirs(repo_path: &Path) -> Result<Option<GitDirs>> {
     let dot_git = repo_path.join(".git");
-    if dot_git.is_dir() {
-        return Ok(Some(dot_git));
-    }
-    if dot_git.is_file() {
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else if dot_git.is_file() {
         let content = fs::read_to_string(&dot_git)?;
         let Some(path) = content.trim().strip_prefix("gitdir:").map(str::trim) else {
             return Ok(None);
         };
         let git_dir = PathBuf::from(path);
-        return Ok(Some(if git_dir.is_absolute() {
+        if git_dir.is_absolute() {
             git_dir
         } else {
             repo_path.join(git_dir)
-        }));
-    }
-    Ok(None)
+        }
+    } else {
+        return Ok(None);
+    };
+    let common_dir = common_git_dir(&git_dir)?;
+    Ok(Some(GitDirs {
+        git_dir,
+        common_dir,
+    }))
 }
 
-fn read_ref_hash(git_dir: &Path, ref_name: &str) -> Result<Option<String>> {
-    let loose_ref = git_dir.join(ref_name);
-    match fs::read_to_string(&loose_ref) {
-        Ok(hash) => return Ok(valid_hash(hash.trim()).map(ToOwned::to_owned)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(err.into()),
-    }
-
-    let packed_refs = git_dir.join("packed-refs");
-    let packed = match fs::read_to_string(&packed_refs) {
-        Ok(packed) => packed,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+fn common_git_dir(git_dir: &Path) -> Result<PathBuf> {
+    let common_dir_path = git_dir.join("commondir");
+    let common_dir = match fs::read_to_string(&common_dir_path) {
+        Ok(value) => {
+            let path = PathBuf::from(value.trim());
+            if path.is_absolute() {
+                path
+            } else {
+                git_dir.join(path)
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => git_dir.to_path_buf(),
         Err(err) => return Err(err.into()),
     };
-    for line in packed.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('^') {
-            continue;
+    Ok(common_dir)
+}
+
+fn read_ref_hash(git_dirs: &GitDirs, ref_name: &str) -> Result<Option<String>> {
+    for dir in [&git_dirs.git_dir, &git_dirs.common_dir] {
+        let loose_ref = dir.join(ref_name);
+        match fs::read_to_string(&loose_ref) {
+            Ok(hash) => return Ok(valid_hash(hash.trim()).map(ToOwned::to_owned)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
         }
-        let Some((hash, name)) = line.split_once(' ') else {
-            continue;
+    }
+
+    for dir in [&git_dirs.git_dir, &git_dirs.common_dir] {
+        let packed_refs = dir.join("packed-refs");
+        let packed = match fs::read_to_string(&packed_refs) {
+            Ok(packed) => packed,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
         };
-        if name == ref_name {
-            return Ok(valid_hash(hash).map(ToOwned::to_owned));
+        for line in packed.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('^') {
+                continue;
+            }
+            let Some((hash, name)) = line.split_once(' ') else {
+                continue;
+            };
+            if name == ref_name {
+                return Ok(valid_hash(hash).map(ToOwned::to_owned));
+            }
         }
     }
     Ok(None)
@@ -508,6 +540,40 @@ mod tests {
         let expected = String::from_utf8_lossy(&expected.stdout).trim().to_string();
 
         let actual = recent_commit_hash(&repo).expect("hash should be read");
+
+        assert_eq!(actual.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn reads_recent_commit_hash_from_linked_worktree_common_dir() {
+        let repo = unique_temp_dir("recent-worktree-source");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        let worktree = unique_temp_dir("recent-worktree-linked");
+        fs::remove_dir_all(&worktree).expect("empty worktree path should be removable");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "kcmt-test-worktree",
+                worktree.to_str().expect("utf8 worktree path"),
+            ],
+        );
+
+        let expected = Command::new("git")
+            .current_dir(&worktree)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse should run");
+        assert!(expected.status.success());
+        let expected = String::from_utf8_lossy(&expected.stdout).trim().to_string();
+
+        let actual = recent_commit_hash(&worktree).expect("hash should be read");
 
         assert_eq!(actual.as_deref(), Some(expected.as_str()));
     }
