@@ -410,26 +410,12 @@ fn update_path_in_index(
 fn write_commit_blob(
     repo: &gix::Repository,
     worktree_path: &Path,
-    size: u64,
+    _size: u64,
 ) -> Result<gix::hash::ObjectId> {
     let mut file = fs::File::open(worktree_path)?;
-    if size >= direct_blob_stream_threshold() {
-        use gix::objs::Write;
-        return repo
-            .objects
-            .write_stream(gix::objs::Kind::Blob, size, &mut file)
-            .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")));
-    }
     repo.write_blob_stream(&mut file)
         .map(|id| id.detach())
         .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))
-}
-
-fn direct_blob_stream_threshold() -> u64 {
-    env::var("KCMT_GIT_DIRECT_BLOB_STREAM_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1024 * 1024)
 }
 
 #[derive(Default)]
@@ -1044,8 +1030,8 @@ mod tests {
     }
 
     #[test]
-    fn gix_commit_backend_streams_large_tracked_blob() {
-        let repo = unique_temp_dir("gix-commit-large-stream");
+    fn gix_commit_backend_commits_large_tracked_blob() {
+        let repo = unique_temp_dir("gix-commit-large");
         git(&repo, &["init", "-q"]);
         fs::write(repo.join("large.txt"), "seed line\n".repeat(140_000)).expect("large seed");
         git(&repo, &["add", "."]);
