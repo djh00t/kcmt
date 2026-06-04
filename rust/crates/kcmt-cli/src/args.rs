@@ -12,6 +12,30 @@ pub struct CliArgs {
     #[arg(long)]
     pub file: Option<String>,
 
+    #[arg(long = "no-progress")]
+    pub no_progress: bool,
+
+    #[arg(long)]
+    pub limit: Option<usize>,
+
+    #[arg(long)]
+    pub workers: Option<usize>,
+
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
+
+    #[arg(long = "profile-startup")]
+    pub profile_startup: bool,
+
+    #[arg(long = "max-retries")]
+    pub max_retries: Option<usize>,
+
+    #[arg(long = "github-token")]
+    pub github_token: Option<String>,
+
+    #[arg(long, alias = "summary")]
+    pub compact: bool,
+
     #[arg(long)]
     pub configure: bool,
 
@@ -259,6 +283,37 @@ mod tests {
         assert_eq!(args.batch_timeout_seconds, Some(1000));
         assert_eq!(args.auto_push_override(), Some(false));
         assert_eq!(args.max_commit_length, Some(68));
+    }
+
+    #[test]
+    fn parses_legacy_non_tui_control_flags() {
+        let args = CliArgs::parse_from([
+            "kcmt",
+            "--oneshot",
+            "--no-progress",
+            "--limit",
+            "2",
+            "--workers",
+            "4",
+            "--verbose",
+            "--debug",
+            "--profile-startup",
+            "--max-retries",
+            "5",
+            "--github-token",
+            "gh-test",
+            "--compact",
+        ]);
+
+        assert!(args.no_progress);
+        assert_eq!(args.limit, Some(2));
+        assert_eq!(args.workers, Some(4));
+        assert!(args.verbose);
+        assert!(args.debug);
+        assert!(args.profile_startup);
+        assert_eq!(args.max_retries, Some(5));
+        assert_eq!(args.github_token.as_deref(), Some("gh-test"));
+        assert!(args.compact);
     }
 
     #[test]
