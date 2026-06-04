@@ -40,9 +40,7 @@ def test_covered_rust_runtime_invocations():
     assert main_mod._is_rust_covered_invocation(["benchmark", "runtime"]) is True
     assert main_mod._is_rust_covered_invocation(["--configure"]) is False
     assert (
-        main_mod._is_rust_covered_invocation(
-            ["--configure", "--provider", "anthropic"]
-        )
+        main_mod._is_rust_covered_invocation(["--configure", "--provider", "anthropic"])
         is True
     )
     assert main_mod._is_rust_covered_invocation(["--list-models"]) is True
