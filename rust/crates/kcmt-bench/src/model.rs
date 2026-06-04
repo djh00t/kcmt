@@ -52,6 +52,14 @@ pub struct RuntimeBenchmarkResult {
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+    pub stage_timings: Vec<RuntimeStageTiming>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeStageTiming {
+    pub stage: String,
+    pub duration_ms: f64,
+    pub items: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -77,4 +85,25 @@ pub struct RuntimeBenchmarkRun {
     pub corpora: Vec<String>,
     pub results: Vec<RuntimeBenchmarkResult>,
     pub summary: RuntimeBenchmarkSummary,
+    pub optimization_iterations: Vec<OptimizationIteration>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OptimizationMeasurementStatus {
+    Measured,
+    Planned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationIteration {
+    pub iteration: u32,
+    pub label: String,
+    pub baseline: bool,
+    pub measurement_status: OptimizationMeasurementStatus,
+    pub median_wall_time_ms: Option<f64>,
+    pub throughput_commits_per_sec: Option<f64>,
+    pub quality_score: Option<f64>,
+    pub failures: Option<u32>,
+    pub next_bottleneck: String,
 }
