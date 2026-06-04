@@ -414,6 +414,7 @@ fn run_entries_workflow(
     let push_start = Instant::now();
     let push_outcome = auto_push_if_configured(&repo_path, config, !commits.is_empty());
     telemetry.record_since("push", push_start, usize::from(push_outcome.pushed));
+    telemetry.record_empty("output_render");
 
     persist_run_snapshot(
         &repo_path,
@@ -433,14 +434,18 @@ fn run_entries_workflow(
         }
     }
 
-    Ok(render_workflow_output(
-        config,
-        &commits,
-        &failures,
-        &push_outcome,
-        &telemetry,
-        output_options,
-    ))
+    if commits.is_empty() && total_entries <= 1 {
+        Ok("No changes to commit.\n".to_string())
+    } else {
+        Ok(render_workflow_output(
+            config,
+            &commits,
+            &failures,
+            &push_outcome,
+            &telemetry,
+            output_options,
+        ))
+    }
 }
 
 fn parse_status_entries(status: &str) -> Vec<StatusEntry> {
