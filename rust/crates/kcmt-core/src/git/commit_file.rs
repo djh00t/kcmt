@@ -153,7 +153,7 @@ fn commit_file_with_gix(
         stage_path_ms += prepare_stage_ms;
         stage_path_invoked = prepare_stage_invoked;
     }
-    let tree_id = write_index_tree(&repo, &index)?;
+    let tree_id = write_commit_tree(&repo, &index, file_path)?;
     let parents = recent_commit_hash(repo_path)?
         .and_then(|hash| gix::hash::ObjectId::from_hex(hash.as_bytes()).ok())
         .into_iter()
@@ -193,9 +193,7 @@ fn prepare_index_for_gix_commit(
     file_path: &str,
     staging: CommitStaging,
 ) -> Result<(f64, bool)> {
-    if staging == CommitStaging::DirectPath
-        && update_tracked_path_in_index(repo, index, repo_path, file_path).is_ok()
-    {
+    if update_path_in_index(repo, index, repo_path, file_path, staging).is_ok() {
         index
             .write(gix::index::write::Options::default())
             .map_err(|err| KcmtError::Message(format!("gix index write failed: {err}")))?;
@@ -224,15 +222,21 @@ fn stage_path_with_git(repo_path: &Path, file_path: &str) -> Result<f64> {
     Ok(stage_path_ms)
 }
 
-fn update_tracked_path_in_index(
+fn update_path_in_index(
     repo: &gix::Repository,
     index: &mut gix::index::File,
     repo_path: &Path,
     file_path: &str,
+    staging: CommitStaging,
 ) -> Result<()> {
     let worktree_path = repo_path.join(file_path);
     let path = file_path.as_bytes().as_bstr();
     if !worktree_path.exists() {
+        if staging != CommitStaging::DirectPath {
+            return Err(KcmtError::Message(format!(
+                "path requires git staging fallback: {file_path}"
+            )));
+        }
         let mut removed = false;
         index.remove_entries(|_, entry_path, entry| {
             let remove =
@@ -249,6 +253,15 @@ fn update_tracked_path_in_index(
         return Ok(());
     }
 
+    let entry_exists = index
+        .entry_mut_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+        .is_some();
+    if staging == CommitStaging::DirectPath && !entry_exists {
+        return Err(KcmtError::Message(format!(
+            "tracked path not found in index: {file_path}"
+        )));
+    }
+
     let metadata = gix::index::fs::Metadata::from_path_no_follow(&worktree_path)?;
     if !metadata.is_file() {
         return Err(KcmtError::Message(format!(
@@ -260,16 +273,33 @@ fn update_tracked_path_in_index(
         .write_blob_stream(&mut file)
         .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?
         .detach();
-    let entry = index
-        .entry_mut_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
-        .ok_or_else(|| {
-            KcmtError::Message(format!("tracked path not found in index: {file_path}"))
-        })?;
-    entry.id = blob_id;
-    entry.stat = gix::index::entry::Stat::from_fs(&metadata)
+    let stat = gix::index::entry::Stat::from_fs(&metadata)
         .map_err(|err| KcmtError::Message(format!("gix stat conversion failed: {err}")))?;
-    if let Some(change) = entry.mode.change_to_match_fs(&metadata, true, true) {
-        entry.mode = change.apply(entry.mode);
+    if entry_exists {
+        let entry = index
+            .entry_mut_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+            .ok_or_else(|| {
+                KcmtError::Message(format!("tracked path not found in index: {file_path}"))
+            })?;
+        entry.id = blob_id;
+        entry.stat = stat;
+        if let Some(change) = entry.mode.change_to_match_fs(&metadata, true, true) {
+            entry.mode = change.apply(entry.mode);
+        }
+    } else {
+        let mode = if metadata.is_executable() {
+            gix::index::entry::Mode::FILE_EXECUTABLE
+        } else {
+            gix::index::entry::Mode::FILE
+        };
+        index.dangerously_push_entry(
+            stat,
+            blob_id,
+            gix::index::entry::Flags::from_stage(gix::index::entry::Stage::Unconflicted),
+            mode,
+            path,
+        );
+        index.sort_entries();
     }
     index.remove_tree();
     Ok(())
@@ -279,6 +309,123 @@ fn update_tracked_path_in_index(
 struct TreeNode {
     files: BTreeMap<Vec<u8>, (gix::objs::tree::EntryMode, gix::hash::ObjectId)>,
     dirs: BTreeMap<Vec<u8>, TreeNode>,
+}
+
+fn write_commit_tree(
+    repo: &gix::Repository,
+    index: &gix::index::File,
+    file_path: &str,
+) -> Result<gix::hash::ObjectId> {
+    match env::var("KCMT_GIT_TREE_BACKEND").as_deref() {
+        Ok("full") => write_index_tree(repo, index),
+        Ok("path") => write_changed_path_tree(repo, index, file_path)
+            .or_else(|_| write_index_tree(repo, index)),
+        _ if index.entries().len() >= 512 => write_changed_path_tree(repo, index, file_path)
+            .or_else(|_| write_index_tree(repo, index)),
+        _ => write_index_tree(repo, index),
+    }
+}
+
+fn write_changed_path_tree(
+    repo: &gix::Repository,
+    index: &gix::index::File,
+    file_path: &str,
+) -> Result<gix::hash::ObjectId> {
+    let components = file_path
+        .as_bytes()
+        .split(|byte| *byte == b'/')
+        .filter(|component| !component.is_empty())
+        .map(|component| component.to_vec())
+        .collect::<Vec<_>>();
+    if components.is_empty() {
+        return Err(KcmtError::Message("empty commit path".to_string()));
+    }
+    let entry = index_tree_entry_for_path(index, file_path)?;
+    let root_id = repo
+        .head_tree_id_or_empty()
+        .map_err(|err| KcmtError::Message(format!("gix head tree lookup failed: {err}")))?
+        .detach();
+    let (tree_id, _) = write_changed_path_tree_at(repo, root_id, &components, entry)?;
+    Ok(tree_id)
+}
+
+fn index_tree_entry_for_path(
+    index: &gix::index::File,
+    file_path: &str,
+) -> Result<Option<gix::objs::tree::Entry>> {
+    let path = file_path.as_bytes().as_bstr();
+    let Some(entry) = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+    else {
+        return Ok(None);
+    };
+    let mode = entry
+        .mode
+        .to_tree_entry_mode()
+        .ok_or_else(|| KcmtError::Message(format!("invalid index mode for {file_path}")))?;
+    Ok(Some(gix::objs::tree::Entry {
+        mode,
+        filename: components_leaf(file_path)?.to_vec().into(),
+        oid: entry.id,
+    }))
+}
+
+fn components_leaf(file_path: &str) -> Result<&[u8]> {
+    file_path
+        .as_bytes()
+        .rsplit(|byte| *byte == b'/')
+        .find(|component| !component.is_empty())
+        .ok_or_else(|| KcmtError::Message("empty commit path".to_string()))
+}
+
+fn write_changed_path_tree_at(
+    repo: &gix::Repository,
+    tree_id: gix::hash::ObjectId,
+    components: &[Vec<u8>],
+    replacement: Option<gix::objs::tree::Entry>,
+) -> Result<(gix::hash::ObjectId, bool)> {
+    let mut entries = repo
+        .find_tree(tree_id)
+        .map_err(|err| KcmtError::Message(format!("gix find tree failed: {err}")))?
+        .decode()
+        .map_err(|err| KcmtError::Message(format!("gix decode tree failed: {err}")))?
+        .entries
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<gix::objs::tree::Entry>>();
+
+    let name = components[0].as_slice();
+    if components.len() == 1 {
+        entries.retain(|entry| entry.filename.as_slice() != name);
+        if let Some(replacement) = replacement {
+            entries.push(replacement);
+        }
+    } else {
+        let existing_child = entries
+            .iter()
+            .find(|entry| entry.filename.as_slice() == name && entry.mode.is_tree())
+            .map(|entry| entry.oid);
+        let child_id =
+            existing_child.unwrap_or_else(|| gix::hash::ObjectId::empty_tree(repo.object_hash()));
+        let (new_child_id, child_is_empty) =
+            write_changed_path_tree_at(repo, child_id, &components[1..], replacement)?;
+        entries.retain(|entry| entry.filename.as_slice() != name);
+        if !child_is_empty {
+            entries.push(gix::objs::tree::Entry {
+                mode: gix::objs::tree::EntryKind::Tree.into(),
+                filename: name.to_vec().into(),
+                oid: new_child_id,
+            });
+        }
+    }
+
+    entries.sort();
+    let is_empty = entries.is_empty();
+    let tree = gix::objs::Tree { entries };
+    let new_id = repo
+        .write_object(tree)
+        .map_err(|err| KcmtError::Message(format!("gix write tree failed: {err}")))?
+        .detach();
+    Ok((new_id, is_empty))
 }
 
 fn write_index_tree(
@@ -653,12 +800,88 @@ mod tests {
         )
         .expect("gix commit");
 
-        assert!(outcome.stage_path_invoked);
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(outcome.stage_path_ms, 0.0);
         assert!(outcome.commit_hash.is_some());
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
             "chore(repo): add new file"
+        );
+    }
+
+    #[test]
+    fn gix_commit_backend_commits_nested_tracked_file() {
+        let repo = unique_temp_dir("gix-commit-nested");
+        git(&repo, &["init", "-q"]);
+        fs::create_dir_all(repo.join("src").join("module")).expect("nested dir");
+        fs::write(
+            repo.join("src").join("module").join("tracked.py"),
+            "print('seed')\n",
+        )
+        .expect("tracked file");
+        fs::write(repo.join("src").join("other.py"), "print('other')\n").expect("other file");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(
+            repo.join("src").join("module").join("tracked.py"),
+            "print('changed')\n",
+        )
+        .expect("tracked change");
+
+        let outcome = commit_file_with_gix(
+            &repo,
+            "src/module/tracked.py",
+            "chore(src): update tracked",
+            CommitStaging::DirectPath,
+        )
+        .expect("gix commit");
+
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["show", "HEAD:src/module/tracked.py"]),
+            "print('changed')"
+        );
+        assert_eq!(
+            git_output(&repo, &["show", "HEAD:src/other.py"]),
+            "print('other')"
+        );
+    }
+
+    #[test]
+    fn gix_commit_backend_removes_empty_nested_tree_after_delete() {
+        let repo = unique_temp_dir("gix-commit-nested-delete");
+        git(&repo, &["init", "-q"]);
+        fs::create_dir_all(repo.join("src").join("module")).expect("nested dir");
+        fs::write(
+            repo.join("src").join("module").join("tracked.py"),
+            "print('seed')\n",
+        )
+        .expect("tracked file");
+        fs::write(repo.join("src").join("keep.py"), "print('keep')\n").expect("keep file");
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::remove_file(repo.join("src").join("module").join("tracked.py"))
+            .expect("delete tracked file");
+
+        let outcome = commit_file_with_gix(
+            &repo,
+            "src/module/tracked.py",
+            "chore(src): remove tracked",
+            CommitStaging::DirectPath,
+        )
+        .expect("gix commit");
+
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["ls-tree", "--name-only", "HEAD:src"]),
+            "keep.py"
+        );
+        assert_eq!(
+            git_output(&repo, &["show", "HEAD:src/keep.py"]),
+            "print('keep')"
         );
     }
 
