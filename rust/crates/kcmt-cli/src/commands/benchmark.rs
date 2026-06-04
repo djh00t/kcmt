@@ -8,9 +8,13 @@ use crate::args::{BenchmarkArgs, BenchmarkCommand, BenchmarkRuntime};
 
 pub fn run_benchmark_command(repo_path: PathBuf, benchmark: BenchmarkArgs) -> i32 {
     match benchmark.command {
-        Some(BenchmarkCommand::Runtime(runtime)) => {
-            run_runtime_benchmark_command(repo_path, runtime.runtime, runtime.iterations, runtime.json, runtime.rust_bin)
-        }
+        Some(BenchmarkCommand::Runtime(runtime)) => run_runtime_benchmark_command(
+            repo_path,
+            runtime.runtime,
+            runtime.iterations,
+            runtime.json,
+            runtime.rust_bin,
+        ),
         None => {
             eprintln!("Benchmark mode requires a subcommand. Try `kcmt benchmark runtime --help`.");
             1
@@ -76,13 +80,32 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
         format!("- Command set: {}", report.command_set),
         format!("- Corpora: {}", report.corpora.join(", ")),
         String::new(),
-        "| Runtime | Scenarios | Passed | Failed | Excluded | Median wall time (ms) |"
-            .to_string(),
+        "| Runtime | Scenarios | Passed | Failed | Excluded | Median wall time (ms) |".to_string(),
         "| --- | --- | --- | --- | --- | --- |".to_string(),
     ];
 
     append_summary_row(&mut lines, "python", &report.summary.python);
     append_summary_row(&mut lines, "rust", &report.summary.rust);
+
+    lines.push(String::new());
+    lines.push("## Python vs Rust Scoreboard".to_string());
+    lines.push(String::new());
+    lines.push(
+        "| Stage | Python ms | Rust ms | Delta ms | Rust change % | Status | Notes |".to_string(),
+    );
+    lines.push("| --- | --- | --- | --- | --- | --- | --- |".to_string());
+    for row in &report.scoreboard.rows {
+        lines.push(format!(
+            "| {} | {} | {} | {} | {} | {:?} | {} |",
+            row.stage,
+            format_optional_ms(row.python_median_ms),
+            format_optional_ms(row.rust_median_ms),
+            format_optional_ms(row.delta_ms),
+            format_optional_percent(row.rust_change_percent),
+            row.status,
+            row.notes.replace('|', "\\|"),
+        ));
+    }
 
     lines.push(String::new());
     lines.push(
@@ -95,10 +118,7 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
             .median_time_ms
             .map(|value| format!("{value:.2}"))
             .unwrap_or_else(|| "-".to_string());
-        let failure = result
-            .failure_reason
-            .as_deref()
-            .unwrap_or("-");
+        let failure = result.failure_reason.as_deref().unwrap_or("-");
         lines.push(format!(
             "| {} | {} | {:?} | {} | {:.2} | {} | {} |",
             result.scenario_id,
@@ -114,6 +134,18 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
     let mut output = lines.join("\n");
     output.push('\n');
     output
+}
+
+fn format_optional_ms(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.2}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_percent(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.2}%"))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn append_summary_row(
