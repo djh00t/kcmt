@@ -197,7 +197,7 @@ pub fn run_file_workflow(
     telemetry.record_since("config_load", config_start, 1);
     let repo = CliGitRepository::from_path(&repo_path);
     let status_start = Instant::now();
-    let entries = parse_status_entries(&repo.status_porcelain()?);
+    let entries = parse_status_entries(&repo.status_porcelain_for_path(file_path)?);
     telemetry.record_since("status_scan", status_start, entries.len());
     let Some(entry) = entries.into_iter().find(|entry| entry.path == file_path) else {
         return Ok("No changes detected in the specified file.\n".to_string());
@@ -351,10 +351,15 @@ fn run_entries_workflow(
         commit_create_ms += commit_outcome.create_commit_ms;
         let is_deletion = entry.is_deletion();
 
-        let hash_start = Instant::now();
-        let commit_hash = recent_commit_hash(&repo_path)?;
-        commit_read_hash_ms += hash_start.elapsed().as_secs_f64() * 1000.0;
-        commit_hash_reads += usize::from(commit_hash.is_some());
+        let commit_hash = if let Some(commit_hash) = commit_outcome.commit_hash {
+            Some(commit_hash)
+        } else {
+            let hash_start = Instant::now();
+            let commit_hash = recent_commit_hash(&repo_path)?;
+            commit_read_hash_ms += hash_start.elapsed().as_secs_f64() * 1000.0;
+            commit_hash_reads += usize::from(commit_hash.is_some());
+            commit_hash
+        };
 
         commits.push(WorkflowCommit {
             file_path: entry.path,
