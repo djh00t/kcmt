@@ -144,6 +144,9 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         .as_array()
         .expect("stage timings array");
     for expected_stage in [
+        "repo_discovery",
+        "dispatch",
+        "config_load",
         "status_scan",
         "diff_preparation",
         "llm_enqueue",
@@ -155,6 +158,7 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         "commit",
         "push",
         "snapshot",
+        "workflow_total",
     ] {
         assert!(
             stages.iter().any(|stage| stage["stage"] == expected_stage),
