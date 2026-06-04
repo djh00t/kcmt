@@ -101,7 +101,10 @@ pub fn run_file_workflow(
     let repo = CliGitRepository::from_path(&repo_path);
     let mut telemetry = WorkflowTelemetry::default();
     let status_start = Instant::now();
-    let entries = parse_status_entries(&repo.status_porcelain()?);
+    let mut entries = parse_status_entries(&repo.status_porcelain()?);
+    if let Some(limit) = overrides.file_limit.filter(|limit| *limit > 0) {
+        entries.truncate(limit);
+    }
     telemetry.record_since("status_scan", status_start, entries.len());
     let Some(entry) = entries.into_iter().find(|entry| entry.path == file_path) else {
         return Ok("No changes detected in the specified file.\n".to_string());
