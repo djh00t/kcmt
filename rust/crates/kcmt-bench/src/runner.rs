@@ -7,12 +7,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::model::{
-    RuntimeBenchmarkResult, RuntimeBenchmarkRun, RuntimeBenchmarkSummary,
-    RuntimeKind, RuntimeScenarioStatus, RuntimeSummary,
+    OptimizationIteration, OptimizationMeasurementStatus, RuntimeBenchmarkResult,
+    RuntimeBenchmarkRun, RuntimeBenchmarkSummary, RuntimeKind, RuntimeScenarioStatus,
+    RuntimeStageTiming, RuntimeSummary,
 };
 use crate::RUNTIME_BENCHMARK_SCHEMA_VERSION;
 
@@ -84,28 +86,110 @@ pub fn run_runtime_benchmark(
         }
     }
 
+    let summary = RuntimeBenchmarkSummary {
+        python: build_runtime_summary(&results, RuntimeKind::Python),
+        rust: build_runtime_summary(&results, RuntimeKind::Rust),
+    };
+    let optimization_iterations = build_optimization_iterations(&results, &summary);
+
     Ok(RuntimeBenchmarkRun {
         schema_version: RUNTIME_BENCHMARK_SCHEMA_VERSION.to_string(),
         timestamp: benchmark_timestamp(),
         command_set: "local-workflows-v1".to_string(),
-        corpora: vec![metadata
-            .id
-            .clone()
-            .unwrap_or_else(|| repo_root.file_name().unwrap_or_default().to_string_lossy().to_string())],
+        corpora: vec![metadata.id.clone().unwrap_or_else(|| {
+            repo_root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })],
         results: results.clone(),
-        summary: RuntimeBenchmarkSummary {
-            python: build_runtime_summary(&results, RuntimeKind::Python),
-            rust: build_runtime_summary(&results, RuntimeKind::Rust),
-        },
+        summary,
+        optimization_iterations,
     })
+}
+
+fn build_optimization_iterations(
+    results: &[RuntimeBenchmarkResult],
+    summary: &RuntimeBenchmarkSummary,
+) -> Vec<OptimizationIteration> {
+    let baseline_time = summary
+        .rust
+        .median_wall_time_ms
+        .or(summary.python.median_wall_time_ms);
+    let passed = results
+        .iter()
+        .filter(|result| result.status == RuntimeScenarioStatus::Passed)
+        .count() as f64;
+    let failures = results
+        .iter()
+        .filter(|result| result.status == RuntimeScenarioStatus::Failed)
+        .count() as u32;
+    let quality_score = if results.is_empty() {
+        0.0
+    } else {
+        (passed / results.len() as f64) * 100.0
+    };
+    let labels = [
+        ("baseline", true, "git subprocess count"),
+        ("reduce git subprocesses", false, "diff preparation fan-out"),
+        (
+            "parallelize diff preparation",
+            false,
+            "provider batch enqueue",
+        ),
+        (
+            "optimize batch enqueue",
+            false,
+            "post-LLM commit serialization",
+        ),
+        (
+            "minimize commit overhead",
+            false,
+            "snapshot and status rendering",
+        ),
+        (
+            "tighten snapshot overhead",
+            false,
+            "residual provider latency",
+        ),
+    ];
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, (label, baseline, bottleneck))| {
+            let measurement_status = if *baseline {
+                OptimizationMeasurementStatus::Measured
+            } else {
+                OptimizationMeasurementStatus::Planned
+            };
+            let median_wall_time_ms = if *baseline { baseline_time } else { None };
+            let throughput_commits_per_sec = median_wall_time_ms
+                .filter(|value| *value > 0.0)
+                .map(|value| 1000.0 / value);
+            OptimizationIteration {
+                iteration: index as u32,
+                label: (*label).to_string(),
+                baseline: *baseline,
+                measurement_status,
+                median_wall_time_ms,
+                throughput_commits_per_sec,
+                quality_score: if *baseline { Some(quality_score) } else { None },
+                failures: if *baseline { Some(failures) } else { None },
+                next_bottleneck: (*bottleneck).to_string(),
+            }
+        })
+        .collect()
 }
 
 fn build_runtime_summary(
     results: &[RuntimeBenchmarkResult],
     runtime: RuntimeKind,
 ) -> RuntimeSummary {
-    let relevant: Vec<&RuntimeBenchmarkResult> =
-        results.iter().filter(|item| item.runtime == runtime).collect();
+    let relevant: Vec<&RuntimeBenchmarkResult> = results
+        .iter()
+        .filter(|item| item.runtime == runtime)
+        .collect();
     let passing: Vec<&RuntimeBenchmarkResult> = relevant
         .iter()
         .copied()
@@ -152,7 +236,9 @@ fn run_runtime_scenario(
             None => Some("Rust binary not available".to_string()),
         };
         if let Some(reason) = unavailable {
-            return Ok(excluded_result(runtime, scenario, metadata, iterations, reason));
+            return Ok(excluded_result(
+                runtime, scenario, metadata, iterations, reason,
+            ));
         }
     }
     if runtime == RuntimeKind::Python && python_command.is_none() {
@@ -166,13 +252,16 @@ fn run_runtime_scenario(
     }
 
     let mut durations = Vec::new();
+    let mut stage_samples = Vec::new();
     let mut last_exit_code = 0;
     let mut failure_reason = None;
 
     for _ in 0..iterations {
-        let (repo_path, materialized_metadata) =
-            materialize_runtime_corpus(source_repo, metadata)?;
-        let config_home = repo_path.parent().unwrap_or(&repo_path).join(".kcmt-config");
+        let (repo_path, materialized_metadata) = materialize_runtime_corpus(source_repo, metadata)?;
+        let config_home = repo_path
+            .parent()
+            .unwrap_or(&repo_path)
+            .join(".kcmt-config");
         let envs = runtime_benchmark_env(&config_home, runtime);
 
         let iteration_result = (|| -> Result<()> {
@@ -214,6 +303,9 @@ fn run_runtime_scenario(
                 ));
                 last_exit_code = 1;
             }
+            if failure_reason.is_none() && scenario_records_snapshot_telemetry(scenario) {
+                stage_samples.push(load_snapshot_stage_timings(&repo_path, &config_home)?);
+            }
             Ok(())
         })();
 
@@ -245,6 +337,7 @@ fn run_runtime_scenario(
         peak_rss_bytes: None,
         exit_code: Some(last_exit_code),
         failure_reason,
+        stage_timings: aggregate_stage_timings(&stage_samples),
     })
 }
 
@@ -271,22 +364,158 @@ fn excluded_result(
         peak_rss_bytes: None,
         exit_code: None,
         failure_reason: Some(reason),
+        stage_timings: Vec::new(),
     }
+}
+
+fn scenario_records_snapshot_telemetry(scenario: &RuntimeScenario) -> bool {
+    matches!(
+        scenario.workflow_contract_id,
+        "oneshot-repo-path" | "file-repo-path"
+    )
+}
+
+fn load_snapshot_stage_timings(
+    repo_path: &Path,
+    config_home: &Path,
+) -> Result<Vec<RuntimeStageTiming>> {
+    let snapshot_path = config_home
+        .join("repos")
+        .join(repo_namespace(repo_path))
+        .join("last_run.json");
+    if !snapshot_path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&snapshot_path)?;
+    let payload: serde_json::Value = serde_json::from_str(&raw)?;
+    let Some(stages) = payload
+        .get("telemetry")
+        .and_then(|telemetry| telemetry.get("stages"))
+        .and_then(|stages| stages.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(stages
+        .iter()
+        .filter_map(|stage| {
+            let stage_name = stage.get("stage")?.as_str()?.to_string();
+            let duration_ms = stage.get("duration_ms")?.as_f64()?;
+            let items = stage.get("items")?.as_u64().unwrap_or(0) as u32;
+            Some(RuntimeStageTiming {
+                stage: stage_name,
+                duration_ms,
+                items,
+            })
+        })
+        .collect())
+}
+
+fn aggregate_stage_timings(samples: &[Vec<RuntimeStageTiming>]) -> Vec<RuntimeStageTiming> {
+    let mut order = Vec::<String>::new();
+    let mut durations_by_stage = std::collections::BTreeMap::<String, Vec<f64>>::new();
+    let mut items_by_stage = std::collections::BTreeMap::<String, Vec<f64>>::new();
+
+    for sample in samples {
+        for timing in sample {
+            if !durations_by_stage.contains_key(&timing.stage) {
+                order.push(timing.stage.clone());
+            }
+            durations_by_stage
+                .entry(timing.stage.clone())
+                .or_default()
+                .push(timing.duration_ms);
+            items_by_stage
+                .entry(timing.stage.clone())
+                .or_default()
+                .push(timing.items as f64);
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|stage| {
+            let duration_ms = median(durations_by_stage.get(&stage)?)?;
+            let items = median(items_by_stage.get(&stage)?).unwrap_or(0.0).round() as u32;
+            Some(RuntimeStageTiming {
+                stage,
+                duration_ms,
+                items,
+            })
+        })
+        .collect()
+}
+
+fn repo_namespace(repo_path: &Path) -> String {
+    let normalized = git_repo_root(repo_path).unwrap_or_else(|| {
+        if repo_path.is_absolute() {
+            repo_path.to_path_buf()
+        } else {
+            env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(repo_path)
+        }
+    });
+    let digest = Sha256::digest(normalized.to_string_lossy().as_bytes());
+    let digest_hex = format!("{digest:x}");
+    let safe_tail = normalized
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(sanitize_tail)
+        .filter(|tail| !tail.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+    format!("{}-{}", safe_tail, &digest_hex[..8])
+}
+
+fn git_repo_root(repo_path: &Path) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if top.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(top))
+    }
+}
+
+fn sanitize_tail(raw: &str) -> String {
+    raw.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMetadata> {
     let metadata_path = repo_path.join(RUNTIME_BENCHMARK_METADATA_FILENAME);
     if metadata_path.exists() {
         let raw = fs::read_to_string(&metadata_path)?;
-        let parsed = serde_json::from_str::<CorpusMetadata>(&raw)
-            .with_context(|| format!("invalid runtime corpus metadata: {}", metadata_path.display()))?;
+        let parsed = serde_json::from_str::<CorpusMetadata>(&raw).with_context(|| {
+            format!(
+                "invalid runtime corpus metadata: {}",
+                metadata_path.display()
+            )
+        })?;
         return Ok(parsed);
     }
 
-    let default_file_target = runtime_benchmark_target_file(repo_path, &CorpusMetadata {
-        id: None,
-        default_file_target: None,
-    })?;
+    let default_file_target = runtime_benchmark_target_file(
+        repo_path,
+        &CorpusMetadata {
+            id: None,
+            default_file_target: None,
+        },
+    )?;
     Ok(CorpusMetadata {
         id: Some(
             repo_path
@@ -355,12 +584,7 @@ fn materialize_runtime_corpus(
     source_repo: &Path,
     metadata: &CorpusMetadata,
 ) -> Result<(PathBuf, CorpusMetadata)> {
-    let temp_root = unique_temp_dir(
-        metadata
-            .id
-            .as_deref()
-            .unwrap_or("runtime-corpus"),
-    );
+    let temp_root = unique_temp_dir(metadata.id.as_deref().unwrap_or("runtime-corpus"));
     let repo_path = temp_root.join("repo");
     copy_dir_all(source_repo, &repo_path)?;
 
@@ -449,23 +673,38 @@ pub fn default_runtime_benchmark_rust_bin() -> PathBuf {
             return PathBuf::from(configured);
         }
     }
-    workspace_root().join("rust").join("target").join("release").join("kcmt")
+    workspace_root()
+        .join("rust")
+        .join("target")
+        .join("release")
+        .join("kcmt")
 }
 
 fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(String, String)> {
     let mut envs = vec![
         ("KCMT_USE_INK".to_string(), "0".to_string()),
         ("KCMT_AUTO_INSTALL_INK_DEPS".to_string(), "0".to_string()),
-        ("KCMT_CONFIG_HOME".to_string(), config_home.display().to_string()),
+        (
+            "KCMT_CONFIG_HOME".to_string(),
+            config_home.display().to_string(),
+        ),
         (RUNTIME_BENCHMARK_ENV.to_string(), "1".to_string()),
         ("KCMT_NO_SPINNER".to_string(), "1".to_string()),
-        ("OPENAI_API_KEY".to_string(), "kcmt-runtime-benchmark".to_string()),
+        (
+            "OPENAI_API_KEY".to_string(),
+            "kcmt-runtime-benchmark".to_string(),
+        ),
+        ("KCMT_RUNTIME_BENCHMARK".to_string(), "1".to_string()),
+        ("KCMT_ALLOW_LOCAL_SYNTHESIS".to_string(), "1".to_string()),
         ("GIT_AUTHOR_NAME".to_string(), "kcmt-benchmark".to_string()),
         (
             "GIT_AUTHOR_EMAIL".to_string(),
             "kcmt-benchmark@example.com".to_string(),
         ),
-        ("GIT_COMMITTER_NAME".to_string(), "kcmt-benchmark".to_string()),
+        (
+            "GIT_COMMITTER_NAME".to_string(),
+            "kcmt-benchmark".to_string(),
+        ),
         (
             "GIT_COMMITTER_EMAIL".to_string(),
             "kcmt-benchmark@example.com".to_string(),
@@ -557,14 +796,14 @@ fn scenario_command(
     Ok(command)
 }
 
-fn execute_runtime_command(
-    command: &[String],
-    envs: &[(String, String)],
-) -> Result<(Output, f64)> {
+fn execute_runtime_command(command: &[String], envs: &[(String, String)]) -> Result<(Output, f64)> {
     let started = Instant::now();
     let output = Command::new(&command[0])
         .args(&command[1..])
-        .envs(envs.iter().map(|(key, value)| (key.as_str(), value.as_str())))
+        .envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .current_dir(workspace_root())
         .output()
         .with_context(|| format!("failed to run {:?}", command))?;
