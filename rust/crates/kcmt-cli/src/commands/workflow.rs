@@ -2,13 +2,14 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
 use kcmt_core::config::loader::{load_config, ConfigOverrides};
 use kcmt_core::error::KcmtError;
 use kcmt_core::error::Result;
-use kcmt_core::git::commit_file::commit_file;
+use kcmt_core::git::commit_file::{commit_file, recent_commit_hash};
 use kcmt_core::git::repo::{CliGitRepository, GitRepository};
 use kcmt_core::message::{build_prompt, sanitize_commit_output};
 use kcmt_provider::clients::{
@@ -39,11 +40,47 @@ struct WorkflowCommit {
     is_deletion: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkflowFailureStage {
+    Prepare,
+    Commit,
+}
+
+#[derive(Debug, Clone)]
+struct WorkflowFailure {
+    file_path: String,
+    error: String,
+    is_deletion: bool,
+    stage: WorkflowFailureStage,
+}
+
+impl WorkflowFailure {
+    fn prepare(entry: &StatusEntry, error: impl Into<String>) -> Self {
+        Self {
+            file_path: entry.path.clone(),
+            error: error.into(),
+            is_deletion: entry.is_deletion(),
+            stage: WorkflowFailureStage::Prepare,
+        }
+    }
+
+    fn commit(entry: &StatusEntry, error: impl Into<String>) -> Self {
+        Self {
+            file_path: entry.path.clone(),
+            error: error.into(),
+            is_deletion: entry.is_deletion(),
+            stage: WorkflowFailureStage::Commit,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PreparedEntry {
     entry: StatusEntry,
     message: String,
 }
+
+type PreparedOutcome = std::result::Result<PreparedEntry, WorkflowFailure>;
 
 #[derive(Debug, Clone)]
 struct ProviderCandidate {
@@ -70,6 +107,13 @@ impl PushOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkflowOutputOptions {
+    pub compact: bool,
+    pub verbose: bool,
+    pub profile_startup: bool,
+}
+
 #[derive(Debug, Clone)]
 struct WorkflowStageTiming {
     stage: &'static str,
@@ -80,6 +124,7 @@ struct WorkflowStageTiming {
 #[derive(Debug, Clone, Default)]
 struct WorkflowTelemetry {
     stages: Vec<WorkflowStageTiming>,
+    prepare_workers: usize,
 }
 
 impl WorkflowTelemetry {
@@ -90,12 +135,55 @@ impl WorkflowTelemetry {
             items,
         });
     }
+
+    fn record_duration(&mut self, stage: &'static str, duration_ms: f64, items: usize) {
+        self.stages.push(WorkflowStageTiming {
+            stage,
+            duration_ms,
+            items,
+        });
+    }
+
+    fn record_empty(&mut self, stage: &'static str) {
+        self.stages.push(WorkflowStageTiming {
+            stage,
+            duration_ms: 0.0,
+            items: 0,
+        });
+    }
 }
 
 pub fn run_file_workflow(
     repo_path: PathBuf,
     file_path: &str,
     overrides: ConfigOverrides,
+    output_options: WorkflowOutputOptions,
+) -> Result<String> {
+    let config = load_config(&repo_path, &overrides)?;
+    let repo = CliGitRepository::from_path(&repo_path);
+    let mut telemetry = WorkflowTelemetry::default();
+    let status_start = Instant::now();
+    let entries = parse_status_entries(&repo.status_porcelain()?);
+    telemetry.record_since("status_scan", status_start, entries.len());
+    let Some(entry) = entries.into_iter().find(|entry| entry.path == file_path) else {
+        return Ok("No changes detected in the specified file.\n".to_string());
+    };
+
+    run_entries_workflow(
+        repo_path,
+        &config,
+        vec![entry],
+        telemetry,
+        max_attempts_from_retries(overrides.max_retries),
+        overrides.prepare_workers,
+        output_options,
+    )
+}
+
+pub fn run_oneshot_workflow(
+    repo_path: PathBuf,
+    overrides: ConfigOverrides,
+    output_options: WorkflowOutputOptions,
 ) -> Result<String> {
     let config = load_config(&repo_path, &overrides)?;
     let repo = CliGitRepository::from_path(&repo_path);
@@ -106,25 +194,57 @@ pub fn run_file_workflow(
         entries.truncate(limit);
     }
     telemetry.record_since("status_scan", status_start, entries.len());
-    let Some(entry) = entries.into_iter().find(|entry| entry.path == file_path) else {
-        return Ok("No changes detected in the specified file.\n".to_string());
-    };
+    if entries.is_empty() {
+        return Ok("No changes to commit.\n".to_string());
+    }
 
-    run_entries_workflow(repo_path, &config, vec![entry], telemetry)
+    let entry = select_oneshot_entry(entries).expect("entries were checked above");
+    run_entries_workflow(
+        repo_path,
+        &config,
+        vec![entry],
+        telemetry,
+        max_attempts_from_retries(overrides.max_retries),
+        overrides.prepare_workers,
+        output_options,
+    )
 }
 
-pub fn run_oneshot_workflow(repo_path: PathBuf, overrides: ConfigOverrides) -> Result<String> {
+pub fn run_default_workflow(
+    repo_path: PathBuf,
+    overrides: ConfigOverrides,
+    output_options: WorkflowOutputOptions,
+) -> Result<String> {
     let config = load_config(&repo_path, &overrides)?;
     let repo = CliGitRepository::from_path(&repo_path);
     let mut telemetry = WorkflowTelemetry::default();
     let status_start = Instant::now();
-    let entries = parse_status_entries(&repo.status_porcelain()?);
+    let mut entries = parse_status_entries(&repo.status_porcelain()?);
+    if let Some(limit) = overrides.file_limit.filter(|limit| *limit > 0) {
+        entries.truncate(limit);
+    }
     telemetry.record_since("status_scan", status_start, entries.len());
     if entries.is_empty() {
         return Ok("No changes to commit.\n".to_string());
     }
 
-    run_entries_workflow(repo_path, &config, entries, telemetry)
+    run_entries_workflow(
+        repo_path,
+        &config,
+        entries,
+        telemetry,
+        max_attempts_from_retries(overrides.max_retries),
+        overrides.prepare_workers,
+        output_options,
+    )
+}
+
+fn select_oneshot_entry(entries: Vec<StatusEntry>) -> Option<StatusEntry> {
+    entries
+        .iter()
+        .position(|entry| !entry.is_deletion())
+        .map(|index| entries[index].clone())
+        .or_else(|| entries.into_iter().next())
 }
 
 fn run_entries_workflow(
@@ -132,28 +252,59 @@ fn run_entries_workflow(
     config: &kcmt_core::model::WorkflowConfig,
     entries: Vec<StatusEntry>,
     mut telemetry: WorkflowTelemetry,
+    max_attempts: usize,
+    prepare_workers_override: Option<usize>,
+    output_options: WorkflowOutputOptions,
 ) -> Result<String> {
-    let mut lines = Vec::new();
+    let total_entries = entries.len();
     let mut commits = Vec::new();
+    let mut failures = Vec::new();
 
-    let prepare_start = Instant::now();
-    let prepared = prepare_messages_for_entries(&repo_path, entries, config)?;
-    telemetry.record_since("llm_wait", prepare_start, prepared.len());
+    let prepare_workers = select_prepare_workers(entries.len(), prepare_workers_override);
+    telemetry.prepare_workers = prepare_workers;
+    telemetry.record_empty("diff_preparation");
+    telemetry.record_empty("llm_enqueue");
+    let wait_start = Instant::now();
+    let prepared_outcomes =
+        prepare_messages_for_entries(&repo_path, entries, config, max_attempts, prepare_workers)?;
+    let prepared_count = prepared_outcomes
+        .iter()
+        .filter(|outcome| outcome.is_ok())
+        .count();
+    telemetry.record_since("llm_wait", wait_start, prepared_outcomes.len());
+    telemetry.record_empty("response_validation");
 
     let commit_start = Instant::now();
-    for prepared_entry in prepared {
+    let mut commit_stage_path_ms = 0.0;
+    let mut commit_create_ms = 0.0;
+    let mut commit_read_hash_ms = 0.0;
+    let mut commit_hash_reads = 0;
+    for outcome in prepared_outcomes {
+        let prepared_entry = match outcome {
+            Ok(prepared_entry) => prepared_entry,
+            Err(failure) => {
+                failures.push(failure);
+                continue;
+            }
+        };
         let entry = prepared_entry.entry;
         let message = prepared_entry.message;
-        commit_file(&repo_path, &entry.path, &message, false)?;
+        let commit_outcome = match commit_file(&repo_path, &entry.path, &message, false) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                unstage_path(&repo_path, &entry.path);
+                failures.push(WorkflowFailure::commit(&entry, err.to_string()));
+                continue;
+            }
+        };
+        commit_stage_path_ms += commit_outcome.stage_path_ms;
+        commit_create_ms += commit_outcome.create_commit_ms;
         let is_deletion = entry.is_deletion();
 
-        lines.push(format!("✓ {}", entry.path));
-        lines.push(format!("  {message}"));
-
+        let hash_start = Instant::now();
         let commit_hash = recent_commit_hash(&repo_path)?;
-        if let Some(hash) = &commit_hash {
-            lines.push(format!("  {}", truncate_hash(hash)));
-        }
+        commit_read_hash_ms += hash_start.elapsed().as_secs_f64() * 1000.0;
+        commit_hash_reads += usize::from(commit_hash.is_some());
 
         commits.push(WorkflowCommit {
             file_path: entry.path,
@@ -162,22 +313,40 @@ fn run_entries_workflow(
             is_deletion,
         });
     }
+    telemetry.record_duration("commit_stage_path", commit_stage_path_ms, commits.len());
+    telemetry.record_duration("commit_create", commit_create_ms, commits.len());
+    telemetry.record_duration("commit_read_hash", commit_read_hash_ms, commit_hash_reads);
     telemetry.record_since("commit", commit_start, commits.len());
 
     let push_start = Instant::now();
     let push_outcome = auto_push_if_configured(&repo_path, config, !commits.is_empty());
     telemetry.record_since("push", push_start, usize::from(push_outcome.pushed));
-    match push_outcome.state {
-        "pushed" => lines.push("Auto-push: pushed".to_string()),
-        "failed" => lines.push("Auto-push: failed".to_string()),
-        _ => {}
+
+    persist_run_snapshot(
+        &repo_path,
+        config,
+        &commits,
+        &failures,
+        prepared_count,
+        total_entries,
+        &push_outcome,
+        &mut telemetry,
+    )?;
+
+    if commits.is_empty() && total_entries <= 1 {
+        if let Some(failure) = failures.first() {
+            return Err(KcmtError::Message(failure.error.clone()));
+        }
     }
 
-    persist_run_snapshot(&repo_path, config, &commits, &push_outcome, &mut telemetry)?;
-
-    let mut output = lines.join("\n");
-    output.push('\n');
-    Ok(output)
+    Ok(render_workflow_output(
+        config,
+        &commits,
+        &failures,
+        &push_outcome,
+        &telemetry,
+        output_options,
+    ))
 }
 
 fn parse_status_entries(status: &str) -> Vec<StatusEntry> {
@@ -198,17 +367,91 @@ fn parse_status_entries(status: &str) -> Vec<StatusEntry> {
         .collect()
 }
 
+fn render_workflow_output(
+    config: &kcmt_core::model::WorkflowConfig,
+    commits: &[WorkflowCommit],
+    failures: &[WorkflowFailure],
+    push_outcome: &PushOutcome,
+    telemetry: &WorkflowTelemetry,
+    options: WorkflowOutputOptions,
+) -> String {
+    let mut lines = Vec::new();
+    if options.compact {
+        lines.push(format!(
+            "provider {}  model {}  retries -",
+            config.provider, config.model
+        ));
+        lines.push(String::new());
+        lines.push("Run Summary".to_string());
+        lines.push(format!(
+            "Commits {}  Failures {}",
+            commits.len(),
+            failures.len()
+        ));
+        lines.push(format!("Auto-push {}", push_outcome.state));
+        if let Some(subject) = commits.last().map(|commit| commit.message.as_str()) {
+            lines.push(format!("Latest commit: {subject}"));
+        }
+        if options.verbose {
+            lines.push(String::new());
+            lines.push("Commits".to_string());
+            append_commit_lines(&mut lines, commits);
+            append_failure_lines(&mut lines, failures);
+        }
+    } else {
+        append_commit_lines(&mut lines, commits);
+        append_failure_lines(&mut lines, failures);
+        match push_outcome.state {
+            "pushed" => lines.push("Auto-push: pushed".to_string()),
+            "failed" => lines.push("Auto-push: failed".to_string()),
+            _ => {}
+        }
+    }
+
+    if options.profile_startup {
+        lines.push(String::new());
+        for stage in &telemetry.stages {
+            lines.push(format!(
+                "[kcmt-profile] {}: {:.1} ms items={}",
+                stage.stage, stage.duration_ms, stage.items
+            ));
+        }
+    }
+
+    let mut output = lines.join("\n");
+    output.push('\n');
+    output
+}
+
+fn append_commit_lines(lines: &mut Vec<String>, commits: &[WorkflowCommit]) {
+    for commit in commits {
+        lines.push(format!("✓ {}", commit.file_path));
+        lines.push(format!("  {}", commit.message));
+        if let Some(hash) = &commit.commit_hash {
+            lines.push(format!("  {}", truncate_hash(hash)));
+        }
+    }
+}
+
+fn append_failure_lines(lines: &mut Vec<String>, failures: &[WorkflowFailure]) {
+    for failure in failures {
+        lines.push(format!("✗ {}", failure.file_path));
+        lines.push(format!("  {}", failure.error));
+    }
+}
+
 fn commit_message_for_entry(
     repo_path: &Path,
     entry: &StatusEntry,
     config: &kcmt_core::model::WorkflowConfig,
+    max_attempts: usize,
 ) -> Result<String> {
     if entry.is_deletion() {
         Ok(deletion_commit_message(
             &entry.path,
             config.max_commit_length,
         ))
-    } else if let Ok(raw_response) = env::var("KCMT_PROVIDER_RESPONSE") {
+    } else if let Some(raw_response) = fixture_provider_response() {
         sanitize_commit_output(&raw_response)
             .map(|message| limit_subject(message, config.max_commit_length))
             .map_err(KcmtError::Message)
@@ -218,7 +461,7 @@ fn commit_message_for_entry(
             config.max_commit_length,
         ))
     } else if configured_api_key(config).is_some() {
-        invoke_provider_with_fallback(repo_path, entry, config)
+        invoke_provider_with_fallback(repo_path, entry, config, max_attempts)
     } else if local_synthesis_enabled() {
         Ok(heuristic_commit_message(
             &entry.path,
@@ -232,8 +475,39 @@ fn commit_message_for_entry(
     }
 }
 
+fn max_attempts_from_retries(max_retries: Option<usize>) -> usize {
+    max_retries.unwrap_or(3).saturating_add(1).max(1)
+}
+
+fn select_prepare_workers(file_count: usize, override_workers: Option<usize>) -> usize {
+    if file_count <= 1 {
+        return 1;
+    }
+    let desired = override_workers.or_else(|| {
+        env::var("KCMT_PREPARE_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+    });
+    if let Some(workers) = desired.filter(|workers| *workers > 0) {
+        return workers.min(file_count).max(1);
+    }
+    let cpu_hint = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
+    file_count.min(8).min(cpu_hint).max(1)
+}
+
 fn local_synthesis_enabled() -> bool {
     env_truthy("KCMT_ALLOW_LOCAL_SYNTHESIS") || runtime_benchmark_enabled()
+}
+
+fn fixture_provider_response() -> Option<String> {
+    if !env_truthy("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE") && !runtime_benchmark_enabled() {
+        return None;
+    }
+    env::var("KCMT_PROVIDER_RESPONSE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn runtime_benchmark_enabled() -> bool {
@@ -255,20 +529,85 @@ fn prepare_messages_for_entries(
     repo_path: &Path,
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
-) -> Result<Vec<PreparedEntry>> {
+    max_attempts: usize,
+    prepare_workers: usize,
+) -> Result<Vec<PreparedOutcome>> {
     if should_use_openai_batch(config) {
         if let Some(api_key) = configured_api_key(config) {
-            return prepare_openai_batch_messages(repo_path, entries, config, &api_key);
+            return prepare_openai_batch_messages(
+                repo_path,
+                entries,
+                config,
+                &api_key,
+                max_attempts,
+            );
         }
     }
 
-    entries
+    if prepare_workers <= 1 || entries.len() <= 1 {
+        let outcomes = entries
+            .into_iter()
+            .map(
+                |entry| match commit_message_for_entry(repo_path, &entry, config, max_attempts) {
+                    Ok(message) => Ok(PreparedEntry { entry, message }),
+                    Err(err) => Err(WorkflowFailure::prepare(&entry, err.to_string())),
+                },
+            )
+            .collect::<Vec<_>>();
+        return Ok(outcomes);
+    }
+
+    prepare_messages_in_workers(repo_path, entries, config, max_attempts, prepare_workers)
+}
+
+fn prepare_messages_in_workers(
+    repo_path: &Path,
+    entries: Vec<StatusEntry>,
+    config: &kcmt_core::model::WorkflowConfig,
+    max_attempts: usize,
+    prepare_workers: usize,
+) -> Result<Vec<PreparedOutcome>> {
+    let worker_count = prepare_workers.min(entries.len()).max(1);
+    let mut buckets = vec![Vec::<(usize, StatusEntry)>::new(); worker_count];
+    for (index, entry) in entries.into_iter().enumerate() {
+        buckets[index % worker_count].push((index, entry));
+    }
+
+    let handles = buckets
         .into_iter()
-        .map(|entry| {
-            let message = commit_message_for_entry(repo_path, &entry, config)?;
-            Ok(PreparedEntry { entry, message })
+        .filter(|bucket| !bucket.is_empty())
+        .map(|bucket| {
+            let repo_path = repo_path.to_path_buf();
+            let config = config.clone();
+            thread::spawn(move || {
+                bucket
+                    .into_iter()
+                    .map(|(index, entry)| {
+                        let outcome = match commit_message_for_entry(
+                            &repo_path,
+                            &entry,
+                            &config,
+                            max_attempts,
+                        ) {
+                            Ok(message) => Ok(PreparedEntry { entry, message }),
+                            Err(err) => Err(WorkflowFailure::prepare(&entry, err.to_string())),
+                        };
+                        (index, outcome)
+                    })
+                    .collect::<Vec<_>>()
+            })
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    let mut indexed = Vec::new();
+    for handle in handles {
+        let prepared = handle
+            .join()
+            .map_err(|_| KcmtError::Message("prepare worker panicked".to_string()))?;
+        indexed.extend(prepared);
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    Ok(indexed.into_iter().map(|(_, entry)| entry).collect())
 }
 
 fn should_use_openai_batch(config: &kcmt_core::model::WorkflowConfig) -> bool {
@@ -280,25 +619,26 @@ fn prepare_openai_batch_messages(
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
     api_key: &str,
-) -> Result<Vec<PreparedEntry>> {
-    let mut deletions = Vec::new();
+    max_attempts: usize,
+) -> Result<Vec<PreparedOutcome>> {
+    let mut outcomes = Vec::new();
     let mut batch_entries = Vec::new();
+    let mut jobs = Vec::new();
+    let system = "You generate strictly valid Conventional Commit messages.";
     for entry in entries {
         if entry.is_deletion() {
             let message = deletion_commit_message(&entry.path, config.max_commit_length);
-            deletions.push(PreparedEntry { entry, message });
-        } else {
-            batch_entries.push(entry);
+            outcomes.push(Ok(PreparedEntry { entry, message }));
+            continue;
         }
-    }
-    if batch_entries.is_empty() {
-        return Ok(deletions);
-    }
 
-    let system = "You generate strictly valid Conventional Commit messages.";
-    let mut jobs = Vec::new();
-    for entry in &batch_entries {
-        let diff = diff_for_entry(repo_path, entry)?;
+        let diff = match diff_for_entry(repo_path, &entry) {
+            Ok(diff) => diff,
+            Err(err) => {
+                outcomes.push(Err(WorkflowFailure::prepare(&entry, err.to_string())));
+                continue;
+            }
+        };
         let context = format!("File: {}", entry.path);
         let prompt = build_prompt(&diff, &context, "conventional");
         jobs.push(OpenAiBatchJob {
@@ -308,57 +648,99 @@ fn prepare_openai_batch_messages(
                 ProviderMessage::user(prompt),
             ],
         });
+        batch_entries.push(entry);
+    }
+    if batch_entries.is_empty() {
+        return Ok(outcomes);
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|err| {
-            KcmtError::Message(format!("failed to initialize provider runtime: {err}"))
-        })?;
-    let transport = AsyncTransport::new(
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            let error = format!("failed to initialize provider runtime: {err}");
+            outcomes.extend(
+                batch_entries
+                    .into_iter()
+                    .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
+            );
+            return Ok(outcomes);
+        }
+    };
+    let transport = match AsyncTransport::new(
         Duration::from_secs(60),
         RetryPolicy {
-            max_attempts: 3,
+            max_attempts,
             base_backoff: Duration::from_millis(250),
         },
-    )
-    .map_err(|err| KcmtError::Message(format!("failed to initialize provider transport: {err}")))?;
+    ) {
+        Ok(transport) => transport,
+        Err(err) => {
+            let error = format!("failed to initialize provider transport: {err}");
+            outcomes.extend(
+                batch_entries
+                    .into_iter()
+                    .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
+            );
+            return Ok(outcomes);
+        }
+    };
     let batch_model = config
         .batch_model
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(&config.model);
-    let results = runtime
-        .block_on(OpenAiClient::invoke_batch(
-            &transport,
-            &config.llm_endpoint,
-            api_key,
-            batch_model,
-            &jobs,
-            Duration::from_secs(config.batch_timeout_seconds),
-            Duration::from_millis(50),
-        ))
-        .map_err(|err| KcmtError::Message(format!("provider batch request failed: {err}")))?;
-    let mut messages_by_id = results
-        .into_iter()
-        .map(|result| {
-            sanitize_commit_output(&result.content)
-                .map(|message| limit_subject(message, config.max_commit_length))
-                .map(|message| (result.custom_id, message))
-                .map_err(KcmtError::Message)
-        })
-        .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-
-    let mut prepared = Vec::new();
-    for entry in batch_entries {
-        let message = messages_by_id
-            .remove(&entry.path)
-            .ok_or_else(|| KcmtError::Message(format!("batch response missing {}", entry.path)))?;
-        prepared.push(PreparedEntry { entry, message });
+    let results = match runtime.block_on(OpenAiClient::invoke_batch(
+        &transport,
+        &config.llm_endpoint,
+        api_key,
+        batch_model,
+        &jobs,
+        Duration::from_secs(config.batch_timeout_seconds),
+        Duration::from_millis(50),
+    )) {
+        Ok(results) => results,
+        Err(err) => {
+            let error = format!("provider batch request failed: {err}");
+            outcomes.extend(
+                batch_entries
+                    .into_iter()
+                    .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
+            );
+            return Ok(outcomes);
+        }
+    };
+    let mut messages_by_id = std::collections::BTreeMap::new();
+    let mut errors_by_id = std::collections::BTreeMap::new();
+    for result in results {
+        match sanitize_commit_output(&result.content) {
+            Ok(message) => {
+                messages_by_id.insert(
+                    result.custom_id,
+                    limit_subject(message, config.max_commit_length),
+                );
+            }
+            Err(err) => {
+                errors_by_id.insert(result.custom_id, err);
+            }
+        }
     }
-    prepared.extend(deletions);
-    Ok(prepared)
+
+    for entry in batch_entries {
+        if let Some(message) = messages_by_id.remove(&entry.path) {
+            outcomes.push(Ok(PreparedEntry { entry, message }));
+        } else if let Some(error) = errors_by_id.remove(&entry.path) {
+            outcomes.push(Err(WorkflowFailure::prepare(&entry, error)));
+        } else {
+            outcomes.push(Err(WorkflowFailure::prepare(
+                &entry,
+                format!("batch response missing {}", entry.path),
+            )));
+        }
+    }
+    Ok(outcomes)
 }
 
 fn configured_api_key(config: &kcmt_core::model::WorkflowConfig) -> Option<String> {
@@ -435,17 +817,19 @@ fn invoke_provider_with_fallback(
     repo_path: &Path,
     entry: &StatusEntry,
     config: &kcmt_core::model::WorkflowConfig,
+    max_attempts: usize,
 ) -> Result<String> {
     let mut last_error = None;
     for candidate in provider_candidates(config) {
         let Some(api_key) = api_key_for_env(&candidate.api_key_env) else {
             continue;
         };
-        match invoke_provider_candidate(repo_path, entry, &candidate, &api_key).and_then(|raw| {
-            sanitize_commit_output(&raw)
-                .map(|message| limit_subject(message, config.max_commit_length))
-                .map_err(KcmtError::Message)
-        }) {
+        match invoke_provider_candidate(repo_path, entry, &candidate, &api_key, max_attempts)
+            .and_then(|raw| {
+                sanitize_commit_output(&raw)
+                    .map(|message| limit_subject(message, config.max_commit_length))
+                    .map_err(KcmtError::Message)
+            }) {
             Ok(message) => return Ok(message),
             Err(err) => last_error = Some(err),
         }
@@ -460,6 +844,7 @@ fn invoke_provider_candidate(
     entry: &StatusEntry,
     candidate: &ProviderCandidate,
     api_key: &str,
+    max_attempts: usize,
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
@@ -474,7 +859,7 @@ fn invoke_provider_candidate(
     let transport = AsyncTransport::new(
         Duration::from_secs(60),
         RetryPolicy {
-            max_attempts: 3,
+            max_attempts,
             base_backoff: Duration::from_millis(250),
         },
     )
@@ -625,23 +1010,6 @@ fn heuristic_commit_message(file_path: &str, max_commit_length: usize) -> String
     message
 }
 
-fn recent_commit_hash(repo_path: &Path) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(repo_path)
-        .args(["log", "-1", "--pretty=%H"])
-        .output()?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if hash.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(hash))
-    }
-}
-
 fn auto_push_if_configured(
     repo_path: &Path,
     config: &kcmt_core::model::WorkflowConfig,
@@ -674,12 +1042,126 @@ fn auto_push_if_configured(
 }
 
 fn has_origin_remote(repo_path: &Path) -> bool {
+    match local_origin_remote_probe(repo_path) {
+        OriginRemoteProbe::Present => return true,
+        OriginRemoteProbe::Absent => return false,
+        OriginRemoteProbe::Unknown => {}
+    }
+
     Command::new("git")
         .current_dir(repo_path)
         .args(["config", "--get", "remote.origin.url"])
         .output()
         .map(|output| output.status.success() && !output.stdout.is_empty())
         .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OriginRemoteProbe {
+    Present,
+    Absent,
+    Unknown,
+}
+
+fn local_origin_remote_probe(repo_path: &Path) -> OriginRemoteProbe {
+    let Some(config_path) = git_common_config_path(repo_path) else {
+        return OriginRemoteProbe::Unknown;
+    };
+    let Ok(config) = fs::read_to_string(config_path) else {
+        return OriginRemoteProbe::Unknown;
+    };
+    if git_config_value(&config, "remote \"origin\"", "url")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return OriginRemoteProbe::Present;
+    }
+    if git_config_has_include(&config) {
+        return OriginRemoteProbe::Unknown;
+    }
+    OriginRemoteProbe::Absent
+}
+
+fn git_common_config_path(repo_path: &Path) -> Option<PathBuf> {
+    let git_path = repo_path.join(".git");
+    if git_path.is_dir() {
+        return Some(git_path.join("config"));
+    }
+
+    let git_file = fs::read_to_string(&git_path).ok()?;
+    let git_dir = git_file.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("gitdir:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| resolve_git_path(repo_path, value))
+    })?;
+    let common_dir_path = git_dir.join("commondir");
+    let common_dir = fs::read_to_string(&common_dir_path)
+        .ok()
+        .map(|value| resolve_git_path(&git_dir, value.trim()))
+        .unwrap_or(git_dir);
+    Some(common_dir.join("config"))
+}
+
+fn resolve_git_path(base: &Path, value: &str) -> PathBuf {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+fn git_config_value(config: &str, section: &str, key: &str) -> Option<String> {
+    let mut in_target_section = false;
+    for raw_line in config.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(section_name) = git_config_section_name(line) {
+            in_target_section = section_name.eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !in_target_section {
+            continue;
+        }
+        let Some((candidate_key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if candidate_key.trim().eq_ignore_ascii_case(key) {
+            return Some(unquote_git_config_value(value.trim()));
+        }
+    }
+    None
+}
+
+fn git_config_has_include(config: &str) -> bool {
+    config.lines().any(|raw_line| {
+        git_config_section_name(raw_line.trim())
+            .map(|section| {
+                section.eq_ignore_ascii_case("include")
+                    || section.to_ascii_lowercase().starts_with("includeif ")
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn git_config_section_name(line: &str) -> Option<&str> {
+    line.strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn unquote_git_config_value(value: &str) -> String {
+    value
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_string()
 }
 
 fn push_current_branch(repo_path: &Path) -> Result<()> {
@@ -723,10 +1205,46 @@ fn truncate_hash(hash: &str) -> &str {
     &hash[..max]
 }
 
+fn workflow_summary(
+    commit_success: usize,
+    commit_failure: usize,
+    deletions_success: usize,
+    deletions_failure: usize,
+) -> String {
+    let overall_success = commit_success + deletions_success;
+    let overall_failure = commit_failure + deletions_failure;
+    let mut parts = Vec::new();
+    if overall_success > 0 {
+        parts.push(format!("Successfully completed {overall_success} commits"));
+    } else {
+        parts.push("No commits were made".to_string());
+    }
+    if deletions_success > 0 || deletions_failure > 0 {
+        parts.push(format!("Committed {deletions_success} deletion(s)"));
+    }
+    if commit_success > 0 || commit_failure > 0 {
+        parts.push(format!("Committed {commit_success} file change(s)"));
+    }
+    if overall_failure > 0 {
+        parts.push(format!("Encountered {overall_failure} file failure(s)"));
+    }
+    parts.join(". ")
+}
+
+fn unstage_path(repo_path: &Path, file_path: &str) {
+    let _ = Command::new("git")
+        .current_dir(repo_path)
+        .args(["reset", "--", file_path])
+        .status();
+}
+
 fn persist_run_snapshot(
     repo_path: &Path,
     config: &kcmt_core::model::WorkflowConfig,
     commits: &[WorkflowCommit],
+    failures: &[WorkflowFailure],
+    prepared_count: usize,
+    total_entries: usize,
     push_outcome: &PushOutcome,
     telemetry: &mut WorkflowTelemetry,
 ) -> Result<()> {
@@ -736,16 +1254,73 @@ fn persist_run_snapshot(
         .filter(|commit| !commit.is_deletion)
         .collect();
     let deletions: Vec<_> = commits.iter().filter(|commit| commit.is_deletion).collect();
+    let file_failures: Vec<_> = failures
+        .iter()
+        .filter(|failure| !failure.is_deletion)
+        .collect();
+    let deletion_failure_records: Vec<_> = failures
+        .iter()
+        .filter(|failure| failure.is_deletion)
+        .collect();
     let commit_success = file_commits.len();
+    let commit_failure = file_failures.len();
     let deletions_success = deletions.len();
+    let deletions_failure = deletion_failure_records.len();
     let overall_success = commits.len();
+    let prepared_failures = failures
+        .iter()
+        .filter(|failure| failure.stage == WorkflowFailureStage::Prepare)
+        .count();
+    let overall_failure = failures.len();
     let subjects: Vec<&str> = commits
         .iter()
         .map(|commit| commit.message.as_str())
         .collect();
-    let summary = format!(
-        "Successfully completed {overall_success} commits. Committed {overall_success} file change(s)"
+    let summary = workflow_summary(
+        commit_success,
+        commit_failure,
+        deletions_success,
+        deletions_failure,
     );
+    let mut commit_records = Vec::new();
+    for commit in &file_commits {
+        commit_records.push(json!({
+            "success": true,
+            "commit_hash": commit.commit_hash,
+            "message": commit.message,
+            "error": null,
+            "file_path": commit.file_path
+        }));
+    }
+    for failure in &file_failures {
+        commit_records.push(json!({
+            "success": false,
+            "commit_hash": null,
+            "message": null,
+            "error": failure.error,
+            "file_path": failure.file_path
+        }));
+    }
+
+    let mut deletion_records = Vec::new();
+    for commit in &deletions {
+        deletion_records.push(json!({
+            "success": true,
+            "commit_hash": commit.commit_hash,
+            "message": commit.message,
+            "error": null,
+            "file_path": commit.file_path
+        }));
+    }
+    for failure in &deletion_failure_records {
+        deletion_records.push(json!({
+            "success": false,
+            "commit_hash": null,
+            "message": null,
+            "error": failure.error,
+            "file_path": failure.file_path
+        }));
+    }
     telemetry.record_since("snapshot", snapshot_start, 1);
 
     let snapshot = json!({
@@ -775,41 +1350,30 @@ fn persist_run_snapshot(
         "duration_seconds": 0.0,
         "rate_commits_per_sec": 0.0,
         "counts": {
-            "files_total": commits.len(),
-            "prepared_total": commits.len(),
-            "processed_total": commits.len(),
-            "prepared_failures": 0,
+            "files_total": total_entries,
+            "prepared_total": prepared_count,
+            "processed_total": commits.len() + failures.len(),
+            "prepared_failures": prepared_failures,
             "commit_success": commit_success,
-            "commit_failure": 0,
-            "deletions_total": deletions.len(),
+            "commit_failure": commit_failure,
+            "deletions_total": deletions.len() + deletion_failure_records.len(),
             "deletions_success": deletions_success,
-            "deletions_failure": 0,
+            "deletions_failure": deletions_failure,
             "overall_success": overall_success,
-            "overall_failure": 0,
+            "overall_failure": overall_failure,
             "errors": push_outcome.errors.len()
         },
         "pushed": push_outcome.pushed,
         "auto_push_state": push_outcome.state,
         "summary": summary,
         "errors": &push_outcome.errors,
-        "commits": file_commits.iter().map(|commit| json!({
-            "success": true,
-            "commit_hash": commit.commit_hash,
-            "message": commit.message,
-            "error": null,
-            "file_path": commit.file_path
-        })).collect::<Vec<_>>(),
-        "deletions": deletions.iter().map(|commit| json!({
-            "success": true,
-            "commit_hash": commit.commit_hash,
-            "message": commit.message,
-            "error": null,
-            "file_path": commit.file_path
-        })).collect::<Vec<_>>(),
+        "commits": commit_records,
+        "deletions": deletion_records,
         "subjects": subjects,
         "stats": {},
         "telemetry": {
             "schema_version": 1,
+            "prepare_workers": telemetry.prepare_workers,
             "stages": telemetry.stages.iter().map(|stage| json!({
                 "stage": stage.stage,
                 "duration_ms": stage.duration_ms,
@@ -831,8 +1395,32 @@ fn persist_run_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        deletion_commit_message, heuristic_commit_message, parse_status_entries, StatusEntry,
+        deletion_commit_message, git_common_config_path, git_config_has_include, git_config_value,
+        heuristic_commit_message, local_origin_remote_probe, parse_status_entries,
+        select_prepare_workers, OriginRemoteProbe, StatusEntry,
     };
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("kcmt-workflow-{label}-{nanos}-{suffix}"));
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
+    }
+
+    fn write_git_config(repo: &Path, config: &str) {
+        let git_dir = repo.join(".git");
+        fs::create_dir_all(&git_dir).expect("git dir should be created");
+        fs::write(git_dir.join("config"), config).expect("git config should be written");
+    }
 
     #[test]
     fn parses_porcelain_entries() {
@@ -870,10 +1458,93 @@ mod tests {
     }
 
     #[test]
+    fn single_file_prepare_uses_one_worker_without_env_or_cpu_probe() {
+        assert_eq!(select_prepare_workers(0, None), 1);
+        assert_eq!(select_prepare_workers(1, None), 1);
+        assert_eq!(select_prepare_workers(1, Some(8)), 1);
+    }
+
+    #[test]
     fn builds_python_compatible_deletion_message() {
         assert_eq!(
             deletion_commit_message("delete_me.txt", 72),
             "chore(delete_me-txt): file deleted"
+        );
+    }
+
+    #[test]
+    fn reads_origin_url_from_local_git_config() {
+        let config = r#"
+[core]
+    repositoryformatversion = 0
+[remote "origin"]
+    url = git@example.com:owner/repo.git
+"#;
+
+        assert_eq!(
+            git_config_value(config, "remote \"origin\"", "url").as_deref(),
+            Some("git@example.com:owner/repo.git")
+        );
+    }
+
+    #[test]
+    fn detects_git_config_includes_for_command_fallback() {
+        let config = r#"
+[includeIf "gitdir:~/work/"]
+    path = ~/.gitconfig-work
+"#;
+
+        assert!(git_config_has_include(config));
+    }
+
+    #[test]
+    fn local_origin_probe_detects_missing_origin_without_fallback() {
+        let repo = unique_temp_dir("no-origin");
+        write_git_config(
+            &repo,
+            r#"
+[core]
+    repositoryformatversion = 0
+"#,
+        );
+
+        assert_eq!(local_origin_remote_probe(&repo), OriginRemoteProbe::Absent);
+    }
+
+    #[test]
+    fn local_origin_probe_detects_configured_origin() {
+        let repo = unique_temp_dir("origin");
+        write_git_config(
+            &repo,
+            r#"
+[remote "origin"]
+    url = /tmp/origin.git
+"#,
+        );
+
+        assert_eq!(local_origin_remote_probe(&repo), OriginRemoteProbe::Present);
+    }
+
+    #[test]
+    fn worktree_git_file_resolves_common_git_config() {
+        let repo = unique_temp_dir("worktree");
+        let common_git_dir = unique_temp_dir("common-git");
+        let worktree_git_dir = unique_temp_dir("linked-worktree-git");
+        fs::write(
+            worktree_git_dir.join("commondir"),
+            common_git_dir.to_string_lossy().as_bytes(),
+        )
+        .expect("commondir should be written");
+        fs::write(
+            repo.join(".git"),
+            format!("gitdir: {}\n", worktree_git_dir.display()),
+        )
+        .expect("git file should be written");
+
+        let expected_config_path = common_git_dir.join("config");
+        assert_eq!(
+            git_common_config_path(&repo).as_deref(),
+            Some(expected_config_path.as_path())
         );
     }
 }
