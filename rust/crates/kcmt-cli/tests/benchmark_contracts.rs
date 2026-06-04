@@ -164,6 +164,7 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         "commit_read_hash",
         "commit",
         "push",
+        "output_render",
         "snapshot",
         "workflow_total",
         "process_overhead",
