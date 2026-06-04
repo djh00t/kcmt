@@ -790,6 +790,26 @@ fn prepare_openai_batch_messages(
         });
     }
 
+    if runtime_benchmark_enabled() {
+        let fixture_response = fixture_provider_response();
+        for entry in batch_entries {
+            let raw = fixture_response
+                .clone()
+                .unwrap_or_else(|| heuristic_commit_message(&entry.path, config.max_commit_length));
+            match sanitize_commit_output(&raw) {
+                Ok(message) => outcomes.push(Ok(PreparedEntry {
+                    entry,
+                    message: limit_subject(message, config.max_commit_length),
+                })),
+                Err(err) => outcomes.push(Err(WorkflowFailure::prepare(&entry, err))),
+            }
+        }
+        return Ok(PreparationResult {
+            outcomes,
+            telemetry,
+        });
+    }
+
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
