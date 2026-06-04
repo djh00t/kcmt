@@ -62,12 +62,11 @@ def _trace_enabled() -> bool:
 def _is_rust_covered_invocation(args: list[str] | None = None) -> bool:
     arg_list = list(sys.argv[1:] if args is None else args)
     if not arg_list:
-        return False
+        return not sys.stdout.isatty()
     if "--oneshot" in arg_list or "--file" in arg_list:
         return True
-    if ("--configure" in arg_list or "--configure-all" in arg_list) and any(
-        flag in arg_list for flag in _CONFIG_OVERRIDE_FLAGS
-    ):
+    is_configure = "--configure" in arg_list or "--configure-all" in arg_list
+    if is_configure and any(flag in arg_list for flag in _CONFIG_OVERRIDE_FLAGS):
         return True
     if (
         "--list-models" in arg_list
@@ -78,6 +77,8 @@ def _is_rust_covered_invocation(args: list[str] | None = None) -> bool:
     if arg_list[0] == "status":
         return True
     if len(arg_list) >= 2 and arg_list[0] == "benchmark" and arg_list[1] == "runtime":
+        return True
+    if not is_configure and arg_list[0] not in {"status", "benchmark"}:
         return True
     return False
 
