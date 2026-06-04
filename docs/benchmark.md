@@ -65,8 +65,12 @@ The runtime report includes:
   workflows keep prepare workers at one. `commit_stage_path` item counts record
   actual staging subprocesses, so tracked direct-path commits can report zero
   staged items. Rust status scanning uses the gix backend by default; set
-  `KCMT_GIT_STATUS_BACKEND=cli` only for parity/debug comparisons. No-origin
-  auto-push records a skipped push stage instead of running a failing push.
+  `KCMT_GIT_STATUS_BACKEND=cli` only for parity/debug comparisons. Set
+  `KCMT_GIT_COMMIT_BACKEND=gix` to compare the opt-in Rust commit backend,
+  which writes the index tree and updates `HEAD` with gix after staging the
+  selected path. Keep the Git CLI commit backend when hook, signing, or other
+  native `git commit` behavior must be preserved. No-origin auto-push records a
+  skipped push stage instead of running a failing push.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
 - `optimization_iterations`: one baseline row plus five optimization rows with
   median timing, throughput, quality score, failure count, and the next
