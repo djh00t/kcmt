@@ -51,8 +51,8 @@ KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE=1 KCMT_PROVIDER_RESPONSE=$'fix(core): prese
 Result:
 
 - `workflow::tests`: `10 passed`.
-- `workflow_modes`: `26 passed`.
-- Rust workspace: `80 passed`.
+- `workflow_modes`: `29 passed`.
+- Rust workspace: `85 passed`.
 - Focused Python/BDD runtime parity: `48 passed`.
 - Release provider quality fixture: `5` runs, quality `100.0`, success rate
   `1.0`; JSON artifact `/tmp/kcmt-provider-benchmark-quality-after-perf.json`.
