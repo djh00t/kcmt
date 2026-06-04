@@ -1101,7 +1101,7 @@ fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
 
     let output = Command::new("git")
         .current_dir(repo_path)
-        .args(["diff", "--", &entry.path])
+        .args(["diff", "--no-color", "--no-ext-diff", "--", &entry.path])
         .output()?;
     if output.status.success() {
         let diff = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1669,6 +1669,24 @@ mod tests {
         fs::write(git_dir.join("config"), config).expect("git config should be written");
     }
 
+    fn git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "kcmt-bot")
+            .env("GIT_AUTHOR_EMAIL", "kcmt@example.com")
+            .env("GIT_COMMITTER_NAME", "kcmt-bot")
+            .env("GIT_COMMITTER_EMAIL", "kcmt@example.com")
+            .args(args)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn parses_porcelain_entries() {
         let entries = parse_status_entries(" M alpha.py\n?? beta.py\n");
@@ -1702,6 +1720,26 @@ mod tests {
 
             assert_eq!(diff, "New or changed file: new.md\n\n# New file\n");
         }
+    }
+
+    #[test]
+    fn diff_for_tracked_entry_uses_unified_git_diff() {
+        let repo = unique_temp_dir("tracked-diff");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+        let entry = StatusEntry {
+            code: " M".to_string(),
+            path: "tracked.py".to_string(),
+        };
+
+        let diff = diff_for_entry(&repo, &entry).expect("tracked diff");
+
+        assert!(diff.starts_with("diff --git a/tracked.py b/tracked.py"));
+        assert!(diff.contains("-print('seed')"));
+        assert!(diff.contains("+print('changed')"));
     }
 
     #[test]
