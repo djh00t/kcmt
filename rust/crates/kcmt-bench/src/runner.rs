@@ -7,13 +7,15 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use crate::model::{
-    RuntimeBenchmarkResult, RuntimeBenchmarkRun, RuntimeBenchmarkSummary,
-    RuntimeKind, RuntimeScenarioStatus, RuntimeSummary,
+    RuntimeBenchmarkResult, RuntimeBenchmarkRun, RuntimeBenchmarkSummary, RuntimeKind,
+    RuntimeScenarioStatus, RuntimeStageTiming, RuntimeSummary,
 };
+use crate::scoreboard::WorkflowComparisonScoreboard;
 use crate::RUNTIME_BENCHMARK_SCHEMA_VERSION;
 
 const RUNTIME_BENCHMARK_METADATA_FILENAME: &str = ".kcmt-runtime-corpus.json";
@@ -84,19 +86,25 @@ pub fn run_runtime_benchmark(
         }
     }
 
+    let scoreboard = WorkflowComparisonScoreboard::from_results(&results);
+
     Ok(RuntimeBenchmarkRun {
         schema_version: RUNTIME_BENCHMARK_SCHEMA_VERSION.to_string(),
         timestamp: benchmark_timestamp(),
         command_set: "local-workflows-v1".to_string(),
-        corpora: vec![metadata
-            .id
-            .clone()
-            .unwrap_or_else(|| repo_root.file_name().unwrap_or_default().to_string_lossy().to_string())],
+        corpora: vec![metadata.id.clone().unwrap_or_else(|| {
+            repo_root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })],
         results: results.clone(),
         summary: RuntimeBenchmarkSummary {
             python: build_runtime_summary(&results, RuntimeKind::Python),
             rust: build_runtime_summary(&results, RuntimeKind::Rust),
         },
+        scoreboard,
     })
 }
 
@@ -104,8 +112,10 @@ fn build_runtime_summary(
     results: &[RuntimeBenchmarkResult],
     runtime: RuntimeKind,
 ) -> RuntimeSummary {
-    let relevant: Vec<&RuntimeBenchmarkResult> =
-        results.iter().filter(|item| item.runtime == runtime).collect();
+    let relevant: Vec<&RuntimeBenchmarkResult> = results
+        .iter()
+        .filter(|item| item.runtime == runtime)
+        .collect();
     let passing: Vec<&RuntimeBenchmarkResult> = relevant
         .iter()
         .copied()
@@ -152,7 +162,9 @@ fn run_runtime_scenario(
             None => Some("Rust binary not available".to_string()),
         };
         if let Some(reason) = unavailable {
-            return Ok(excluded_result(runtime, scenario, metadata, iterations, reason));
+            return Ok(excluded_result(
+                runtime, scenario, metadata, iterations, reason,
+            ));
         }
     }
     if runtime == RuntimeKind::Python && python_command.is_none() {
@@ -164,16 +176,32 @@ fn run_runtime_scenario(
             "Python runtime executable is unavailable".to_string(),
         ));
     }
+    if runtime == RuntimeKind::Python && scenario.workflow_contract_id == "batch-repo-path" {
+        return Ok(excluded_result(
+            runtime,
+            scenario,
+            metadata,
+            iterations,
+            "Python default batch workflow is not benchmark-compatible under the deterministic runtime harness".to_string(),
+        ));
+    }
 
     let mut durations = Vec::new();
+    let mut stage_timings = Vec::new();
     let mut last_exit_code = 0;
     let mut failure_reason = None;
 
     for _ in 0..iterations {
-        let (repo_path, materialized_metadata) =
-            materialize_runtime_corpus(source_repo, metadata)?;
-        let config_home = repo_path.parent().unwrap_or(&repo_path).join(".kcmt-config");
-        let envs = runtime_benchmark_env(&config_home, runtime);
+        let (repo_path, materialized_metadata) = materialize_runtime_corpus(source_repo, metadata)?;
+        let config_home = repo_path
+            .parent()
+            .unwrap_or(&repo_path)
+            .join(".kcmt-config");
+        let telemetry_path = repo_path
+            .parent()
+            .unwrap_or(&repo_path)
+            .join("runtime-telemetry.json");
+        let envs = runtime_benchmark_env(&config_home, runtime, &telemetry_path);
 
         let iteration_result = (|| -> Result<()> {
             if scenario.workflow_contract_id == "status-repo-path" {
@@ -199,6 +227,7 @@ fn run_runtime_scenario(
                 python_command,
                 rust_bin,
             )?;
+            let _ = fs::remove_file(&telemetry_path);
             let (output, elapsed_ms) = execute_runtime_command(&command, &envs)?;
             last_exit_code = output.status.code().unwrap_or(1);
             durations.push(elapsed_ms);
@@ -217,12 +246,28 @@ fn run_runtime_scenario(
             Ok(())
         })();
 
+        stage_timings.extend(read_runtime_stage_timings(&telemetry_path)?);
         let _ = fs::remove_dir_all(repo_path.parent().unwrap_or(&repo_path));
         iteration_result?;
 
         if failure_reason.is_some() {
             break;
         }
+    }
+
+    let status = if failure_reason.is_some() {
+        RuntimeScenarioStatus::Failed
+    } else {
+        RuntimeScenarioStatus::Passed
+    };
+    let stage_duration = median(&durations).unwrap_or_else(|| durations.iter().sum());
+    if stage_timings.is_empty() {
+        stage_timings.push(RuntimeStageTiming::new(
+            synthetic_stage_name(scenario.workflow_contract_id),
+            stage_duration,
+            status,
+            Some("synthetic scenario timing until workflow telemetry is available".to_string()),
+        ));
     }
 
     Ok(RuntimeBenchmarkResult {
@@ -235,16 +280,13 @@ fn run_runtime_scenario(
         runtime,
         command_label: scenario.command_label.clone(),
         iterations,
-        status: if failure_reason.is_some() {
-            RuntimeScenarioStatus::Failed
-        } else {
-            RuntimeScenarioStatus::Passed
-        },
+        status,
         wall_time_ms: durations.iter().sum(),
         median_time_ms: median(&durations),
         peak_rss_bytes: None,
         exit_code: Some(last_exit_code),
         failure_reason,
+        stage_timings,
     })
 }
 
@@ -271,6 +313,17 @@ fn excluded_result(
         peak_rss_bytes: None,
         exit_code: None,
         failure_reason: Some(reason),
+        stage_timings: Vec::new(),
+    }
+}
+
+fn synthetic_stage_name(workflow_contract_id: &str) -> &'static str {
+    match workflow_contract_id {
+        "status-repo-path" => "status_scan",
+        "oneshot-repo-path" => "oneshot_workflow",
+        "file-repo-path" => "file_workflow",
+        "batch-repo-path" => "batch_workflow",
+        _ => "workflow",
     }
 }
 
@@ -278,15 +331,22 @@ fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMeta
     let metadata_path = repo_path.join(RUNTIME_BENCHMARK_METADATA_FILENAME);
     if metadata_path.exists() {
         let raw = fs::read_to_string(&metadata_path)?;
-        let parsed = serde_json::from_str::<CorpusMetadata>(&raw)
-            .with_context(|| format!("invalid runtime corpus metadata: {}", metadata_path.display()))?;
+        let parsed = serde_json::from_str::<CorpusMetadata>(&raw).with_context(|| {
+            format!(
+                "invalid runtime corpus metadata: {}",
+                metadata_path.display()
+            )
+        })?;
         return Ok(parsed);
     }
 
-    let default_file_target = runtime_benchmark_target_file(repo_path, &CorpusMetadata {
-        id: None,
-        default_file_target: None,
-    })?;
+    let default_file_target = runtime_benchmark_target_file(
+        repo_path,
+        &CorpusMetadata {
+            id: None,
+            default_file_target: None,
+        },
+    )?;
     Ok(CorpusMetadata {
         id: Some(
             repo_path
@@ -327,6 +387,12 @@ fn runtime_benchmark_scenarios(
             command_label: format!("kcmt --file {target} --repo-path <repo>"),
             expected_stdout_fragment: "✓ ",
         },
+        RuntimeScenario {
+            scenario_id: format!("{corpus_id}:batch-repo-path"),
+            workflow_contract_id: "batch-repo-path",
+            command_label: "kcmt --repo-path <repo>".to_string(),
+            expected_stdout_fragment: "✓ ",
+        },
     ])
 }
 
@@ -355,12 +421,7 @@ fn materialize_runtime_corpus(
     source_repo: &Path,
     metadata: &CorpusMetadata,
 ) -> Result<(PathBuf, CorpusMetadata)> {
-    let temp_root = unique_temp_dir(
-        metadata
-            .id
-            .as_deref()
-            .unwrap_or("runtime-corpus"),
-    );
+    let temp_root = unique_temp_dir(metadata.id.as_deref().unwrap_or("runtime-corpus"));
     let repo_path = temp_root.join("repo");
     copy_dir_all(source_repo, &repo_path)?;
 
@@ -449,23 +510,48 @@ pub fn default_runtime_benchmark_rust_bin() -> PathBuf {
             return PathBuf::from(configured);
         }
     }
-    workspace_root().join("rust").join("target").join("release").join("kcmt")
+    workspace_root()
+        .join("rust")
+        .join("target")
+        .join("release")
+        .join("kcmt")
 }
 
-fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(String, String)> {
+fn runtime_benchmark_env(
+    config_home: &Path,
+    runtime: RuntimeKind,
+    telemetry_path: &Path,
+) -> Vec<(String, String)> {
     let mut envs = vec![
         ("KCMT_USE_INK".to_string(), "0".to_string()),
         ("KCMT_AUTO_INSTALL_INK_DEPS".to_string(), "0".to_string()),
-        ("KCMT_CONFIG_HOME".to_string(), config_home.display().to_string()),
+        (
+            "KCMT_CONFIG_HOME".to_string(),
+            config_home.display().to_string(),
+        ),
+        (
+            "KCMT_RUNTIME_TELEMETRY_PATH".to_string(),
+            telemetry_path.display().to_string(),
+        ),
+        (
+            "KCMT_FAKE_LLM_RESPONSE".to_string(),
+            "chore(repo): benchmark fake llm response".to_string(),
+        ),
         (RUNTIME_BENCHMARK_ENV.to_string(), "1".to_string()),
         ("KCMT_NO_SPINNER".to_string(), "1".to_string()),
-        ("OPENAI_API_KEY".to_string(), "kcmt-runtime-benchmark".to_string()),
+        (
+            "OPENAI_API_KEY".to_string(),
+            "kcmt-runtime-benchmark".to_string(),
+        ),
         ("GIT_AUTHOR_NAME".to_string(), "kcmt-benchmark".to_string()),
         (
             "GIT_AUTHOR_EMAIL".to_string(),
             "kcmt-benchmark@example.com".to_string(),
         ),
-        ("GIT_COMMITTER_NAME".to_string(), "kcmt-benchmark".to_string()),
+        (
+            "GIT_COMMITTER_NAME".to_string(),
+            "kcmt-benchmark".to_string(),
+        ),
         (
             "GIT_COMMITTER_EMAIL".to_string(),
             "kcmt-benchmark@example.com".to_string(),
@@ -475,6 +561,39 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
         envs.push(("KCMT_RUNTIME".to_string(), "python".to_string()));
     }
     envs
+}
+
+fn read_runtime_stage_timings(path: &Path) -> Result<Vec<RuntimeStageTiming>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(path)?;
+    let parsed: Value = serde_json::from_str(&raw)?;
+    let Some(stages) = parsed.get("stages").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let timings = stages
+        .iter()
+        .filter_map(|stage| {
+            let stage_name = stage.get("stage")?.as_str()?.to_string();
+            let duration_ms = stage.get("duration_ms")?.as_f64()?;
+            let outcome = match stage.get("outcome").and_then(Value::as_str) {
+                Some("failed") => RuntimeScenarioStatus::Failed,
+                _ => RuntimeScenarioStatus::Passed,
+            };
+            let notes = stage
+                .get("file_path")
+                .and_then(Value::as_str)
+                .map(|file| format!("file: {file}"));
+            Some(RuntimeStageTiming::new(
+                stage_name,
+                duration_ms,
+                outcome,
+                notes,
+            ))
+        })
+        .collect();
+    Ok(timings)
 }
 
 fn prepare_status_snapshot(
@@ -544,6 +663,9 @@ fn scenario_command(
                 repo_path.display().to_string(),
             ]);
         }
+        "batch-repo-path" => {
+            command.extend(["--repo-path".to_string(), repo_path.display().to_string()]);
+        }
         _ => {
             let target = runtime_benchmark_target_file(repo_path, metadata)?;
             command.extend([
@@ -557,14 +679,14 @@ fn scenario_command(
     Ok(command)
 }
 
-fn execute_runtime_command(
-    command: &[String],
-    envs: &[(String, String)],
-) -> Result<(Output, f64)> {
+fn execute_runtime_command(command: &[String], envs: &[(String, String)]) -> Result<(Output, f64)> {
     let started = Instant::now();
     let output = Command::new(&command[0])
         .args(&command[1..])
-        .envs(envs.iter().map(|(key, value)| (key.as_str(), value.as_str())))
+        .envs(
+            envs.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
         .current_dir(workspace_root())
         .output()
         .with_context(|| format!("failed to run {:?}", command))?;
