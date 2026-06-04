@@ -36,6 +36,19 @@ Result:
 - Coverage: `93.88%`.
 - Rust and Ink checks passed.
 
+### Cross-Platform PR Matrix
+
+PR34 head `bcb997817ac2e1af450e8efac3a490da3dcff888` passed all required
+GitHub checks after the Rust parity updates:
+
+- CI / Python 3.12: passed in Actions run `26971474089`.
+- CI / Python 3.13: passed in Actions run `26971474089`.
+- Rust Canary Smoke / ubuntu: passed in Actions run `26971474090`.
+- Keystone Assimilation Watcher: passed in Actions run `26971474102`.
+- Rust Parity Matrix / ubuntu-latest: passed in Actions run `26971474093`.
+- Rust Parity Matrix / macos-latest: passed in Actions run `26971474093`.
+- Rust Parity Matrix / windows-latest: passed in Actions run `26971474093`.
+
 ### Focused Rust and Runtime Parity
 
 Commands:
@@ -172,5 +185,5 @@ Result:
   on both synthetic and realistic corpora with the release Rust binary.
 - User Story 3 benchmark UX separation is enforced in CLI routing, Ink backend
   behavior, and documentation.
-- Remaining full-scope proof should refresh the cross-platform matrix on this
-  branch before declaring the overall Rust migration complete.
+- Cross-platform proof has been refreshed on PR34, with Linux, macOS, and
+  Windows parity matrix jobs passing on the published feature branch.
