@@ -68,13 +68,16 @@ The runtime report includes:
   zero staged items. Rust status scanning uses the gix backend by default; set
   `KCMT_GIT_STATUS_BACKEND=cli` only for parity/debug comparisons. Set
   `KCMT_GIT_COMMIT_BACKEND=gix` to compare the opt-in Rust commit backend,
-  which writes tracked-file index updates, streams blob writes, writes the index
-  tree, and updates `HEAD` with gix. Keep the Git CLI commit backend when hook,
-  signing, or other native `git commit` behavior must be preserved. No-origin
-  auto-push records a skipped push stage instead of running a failing push.
+  which writes tracked-file updates and regular untracked-file index entries,
+  streams blob writes, writes the commit tree, and updates `HEAD` with gix.
+  `KCMT_GIT_TREE_BACKEND=full|path|auto` controls commit-tree construction:
+  small indexes use the full-index writer by default, while large indexes use a
+  path-local tree rewrite. Keep the Git CLI commit backend when hook, signing,
+  or other native `git commit` behavior must be preserved. No-origin auto-push
+  records a skipped push stage instead of running a failing push.
   Corpus metadata can include named `file_targets` so scoreboards compare
-  tracked modified, tracked deleted, untracked, nested, and generated large-file
-  workflows side by side.
+  tracked modified, tracked deleted, untracked, nested, generated large-file,
+  and generated large-index workflows side by side.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
 - `optimization_iterations`: one baseline row plus five optimization rows with
   median timing, throughput, quality score, failure count, and the next
