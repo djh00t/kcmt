@@ -16,7 +16,10 @@ pub fn select_provider(preferred: Option<&str>, fallback: &[(&str, &str)]) -> Pr
         }
     }
 
-    let (provider_id, model) = fallback.first().copied().unwrap_or(("openai", "gpt-4o-mini"));
+    let (provider_id, model) = fallback
+        .first()
+        .copied()
+        .unwrap_or(("openai", "gpt-4o-mini"));
     ProviderSelection {
         provider_id: provider_id.to_string(),
         model: model.to_string(),
