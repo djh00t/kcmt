@@ -132,11 +132,15 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
         let Some(index_oid) = index_oid else {
             return Ok(format!("?? {file_path}\n"));
         };
-        let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
-        if blob_oid != index_oid {
+        if metadata.len() != u64::from(index_entry.expect("index oid came from entry").stat.size) {
             "M"
         } else {
-            " "
+            let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
+            if blob_oid != index_oid {
+                "M"
+            } else {
+                " "
+            }
         }
     } else if index_oid.is_some() {
         "D"
@@ -463,6 +467,21 @@ mod tests {
             .expect("path status should render");
 
         assert_eq!(sorted_lines(&status), vec![" M tracked.py".to_string()]);
+    }
+
+    #[test]
+    fn fast_path_status_hashes_same_size_tracked_modification() {
+        let repo = unique_temp_dir("gix-path-status-same-size");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "abc\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "xyz\n").expect("same size change");
+
+        let status = status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, " M tracked.py\n");
     }
 
     #[test]
