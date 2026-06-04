@@ -83,3 +83,8 @@ Feature: Rust workflow parity
     When the Rust kcmt command benchmarks a provider with structured outputs
     Then the benchmark output includes leaderboard JSON and CSV sections
     And the provider benchmark snapshot is persisted
+
+  Scenario: Runtime benchmark reports Rust snapshot stage telemetry
+    Given a checked-in runtime benchmark corpus
+    When the Rust kcmt runtime benchmark runs against the corpus
+    Then the benchmark report includes Rust workflow stage timings
