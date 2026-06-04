@@ -1,7 +1,6 @@
 //! Git repository adapter built on top of the command runner abstraction.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::error::{KcmtError, Result};
 use crate::git::runner::{CommandRunner, GitCliRunner};
@@ -9,6 +8,7 @@ use crate::git::runner::{CommandRunner, GitCliRunner};
 pub trait GitRepository {
     fn staged_files(&self) -> Result<Vec<String>>;
     fn status_porcelain(&self) -> Result<String>;
+    fn status_porcelain_for_path(&self, file_path: &str) -> Result<String>;
 }
 
 pub struct CliGitRepository<R: CommandRunner> {
@@ -20,18 +20,6 @@ pub fn find_git_repo_root(start_path: impl AsRef<Path>) -> Option<PathBuf> {
     let mut path = start_path.as_ref().to_path_buf();
     if path.is_file() {
         path = path.parent()?.to_path_buf();
-    }
-
-    let output = Command::new("git")
-        .current_dir(&path)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if output.status.success() {
-        let top = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !top.is_empty() {
-            return Some(PathBuf::from(top));
-        }
     }
 
     for candidate in std::iter::once(path.as_path()).chain(path.ancestors()) {
@@ -74,10 +62,21 @@ impl<R: CommandRunner> GitRepository for CliGitRepository<R> {
 
     fn status_porcelain(&self) -> Result<String> {
         if std::env::var("KCMT_GIT_STATUS_BACKEND").as_deref() != Ok("cli") {
-            return status_porcelain_gix(&self.repo_path);
+            return status_porcelain_gix(&self.repo_path, Vec::new());
         }
 
         self.status_porcelain_cli()
+    }
+
+    fn status_porcelain_for_path(&self, file_path: &str) -> Result<String> {
+        if std::env::var("KCMT_GIT_STATUS_BACKEND").as_deref() != Ok("cli") {
+            return status_porcelain_gix(
+                &self.repo_path,
+                vec![gix::bstr::BString::from(file_path.as_bytes().to_vec())],
+            );
+        }
+
+        self.status_porcelain_cli_for_path(file_path)
     }
 }
 
@@ -89,9 +88,24 @@ impl<R: CommandRunner> CliGitRepository<R> {
         )?;
         Ok(render_porcelain_lines(&output.stdout))
     }
+
+    fn status_porcelain_cli_for_path(&self, file_path: &str) -> Result<String> {
+        let output = self.runner.run(
+            &self.repo_path,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--",
+                file_path,
+            ],
+        )?;
+        Ok(render_porcelain_lines(&output.stdout))
+    }
 }
 
-fn status_porcelain_gix(repo_path: &Path) -> Result<String> {
+fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> Result<String> {
     use gix::bstr::ByteSlice;
 
     let repo = gix::open(repo_path)
@@ -111,7 +125,7 @@ fn status_porcelain_gix(repo_path: &Path) -> Result<String> {
     let mut rows = Vec::new();
 
     for item in status
-        .into_iter(Vec::new())
+        .into_iter(patterns)
         .map_err(|err| KcmtError::Message(format!("gix status iterator failed: {err}")))?
     {
         let item =
@@ -339,8 +353,27 @@ mod tests {
             &repo,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
         ));
-        let gix_status = status_porcelain_gix(&repo).expect("gix status should render");
+        let gix_status = status_porcelain_gix(&repo, Vec::new()).expect("gix status should render");
 
         assert_eq!(sorted_lines(&gix_status), sorted_lines(&git_status));
+    }
+
+    #[test]
+    fn path_status_limits_gix_status_to_requested_file() {
+        let repo = unique_temp_dir("gix-path-status");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        fs::write(repo.join("other.py"), "print('seed')\n").expect("other seed");
+        git(&repo, &["add", "tracked.py", "other.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+        fs::write(repo.join("other.py"), "print('changed')\n").expect("other change");
+
+        let status = CliGitRepository::from_path(&repo)
+            .status_porcelain_for_path("tracked.py")
+            .expect("path status should render");
+
+        assert_eq!(sorted_lines(&status), vec![" M tracked.py".to_string()]);
     }
 }
