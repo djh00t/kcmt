@@ -50,7 +50,32 @@ pub fn run_configure(repo_path: PathBuf, overrides: ConfigOverrides) -> i32 {
     }
 }
 
-pub fn run_list_models() -> i32 {
+pub fn run_list_models(debug: bool) -> i32 {
+    if debug {
+        let payload = PROVIDERS
+            .iter()
+            .map(|(provider, name, model, endpoint, api_key_env)| {
+                json!({
+                    "provider": provider,
+                    "display_name": name,
+                    "models": [{
+                        "id": model,
+                        "endpoint": endpoint,
+                        "api_key_env": api_key_env
+                    }]
+                })
+            })
+            .collect::<Vec<_>>();
+        match serde_json::to_string_pretty(&payload) {
+            Ok(rendered) => println!("{rendered}"),
+            Err(err) => {
+                eprintln!("{err}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+
     for (provider, _name, model, endpoint, _api_key_env) in PROVIDERS {
         println!("{provider}\t{model}\t{endpoint}");
     }
