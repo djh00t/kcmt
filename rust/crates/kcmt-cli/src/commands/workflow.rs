@@ -353,7 +353,10 @@ fn run_entries_workflow(
     let mut commit_hash_reads = 0;
     let mut commit_stage_path_invocations = 0;
     let mut gix_session = if gix_commit_backend_enabled() {
-        Some(GixCommitSession::open(&repo_path)?)
+        Some(GixCommitSession::open_with_deferred_index_writes(
+            &repo_path,
+            total_entries > 1,
+        )?)
     } else {
         None
     };
