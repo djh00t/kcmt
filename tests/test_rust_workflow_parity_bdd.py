@@ -144,6 +144,63 @@ def _start_fallback_provider() -> tuple[str, type[_FallbackHandler], HTTPServer]
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+class _GitHubTokenHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, str, str, str]] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "ignore") if length else ""
+        auth = self.headers.get("authorization", "")
+        self.__class__.requests.append((self.command, self.path, auth, body))
+        payload = b'{"choices":[{"message":{"content":"fix(github): use cli token."}}]}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+
+def _start_github_token_provider() -> tuple[str, type[_GitHubTokenHandler], HTTPServer]:
+    class Handler(_GitHubTokenHandler):
+        requests: list[tuple[str, str, str, str]] = []
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
+class _RetryLimitHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, str, str]] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "ignore") if length else ""
+        self.__class__.requests.append((self.command, self.path, body))
+        payload = b'{"error":{"message":"temporary provider failure"}}'
+        self.send_response(500)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+
+def _start_retry_limited_provider() -> tuple[str, type[_RetryLimitHandler], HTTPServer]:
+    class Handler(_RetryLimitHandler):
+        requests: list[tuple[str, str, str]] = []
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
 def _rust_bin(binary: str) -> Path:
     subprocess.run(
         [
@@ -210,6 +267,26 @@ def git_repository_with_one_deleted_tracked_file(tmp_path: Path) -> dict[str, An
     _git(repo, ["commit", "-m", "chore(repo): seed"])
 
     (repo / "delete_me.txt").unlink()
+    return {"repo": repo, "config_home": tmp_path / "config-home"}
+
+
+@given(
+    "a git repository with one deleted tracked file and one changed tracked file",
+    target_fixture="workflow_context",
+)
+def git_repository_with_one_deleted_and_one_changed_tracked_file(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / "delete_me.txt").write_text("bye\n")
+    (repo / "tracked.py").write_text("print('seed')\n")
+    _git(repo, ["add", "delete_me.txt", "tracked.py"])
+    _git(repo, ["commit", "-m", "chore(repo): seed"])
+
+    (repo / "delete_me.txt").unlink()
+    (repo / "tracked.py").write_text("print('changed')\n")
     return {"repo": repo, "config_home": tmp_path / "config-home"}
 
 
@@ -325,6 +402,36 @@ def git_repository_with_one_changed_file_and_fallback_provider_chain(
     return context
 
 
+@given(
+    "a git repository with one changed tracked file and a mocked GitHub Models provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_one_changed_tracked_file_and_mocked_github_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_one_changed_tracked_file(tmp_path)
+    endpoint, handler, server = _start_github_token_provider()
+    context["github_endpoint"] = endpoint
+    context["github_handler"] = handler
+    context["github_server"] = server
+    return context
+
+
+@given(
+    "a git repository with one changed tracked file and a transiently failing provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_one_changed_tracked_file_and_transient_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_one_changed_tracked_file(tmp_path)
+    endpoint, handler, server = _start_retry_limited_provider()
+    context["retry_endpoint"] = endpoint
+    context["retry_handler"] = handler
+    context["retry_server"] = server
+    return context
+
+
 @when(parsers.parse("the Rust {binary} command runs in oneshot mode"))
 def rust_command_runs_in_oneshot_mode(
     workflow_context: dict[str, Any],
@@ -335,6 +442,86 @@ def rust_command_runs_in_oneshot_mode(
         [
             str(_rust_bin(binary)),
             "--oneshot",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust kcmt command runs in default workflow mode")
+def rust_kcmt_command_runs_in_default_workflow_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust kcmt command runs in default workflow mode with two workers")
+def rust_kcmt_command_runs_in_default_workflow_mode_with_two_workers(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--workers",
+            "2",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust kcmt command runs in compact verbose profile mode")
+def rust_kcmt_command_runs_in_compact_verbose_profile_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--compact",
+            "--verbose",
+            "--profile-startup",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust commit command runs in oneshot mode with a file limit")
+def rust_commit_command_runs_in_oneshot_mode_with_file_limit(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("commit")),
+            "--oneshot",
+            "--limit",
+            "1",
             "--no-auto-push",
             "--repo-path",
             str(workflow_context["repo"]),
@@ -364,14 +551,13 @@ def rust_kcmt_runs_in_oneshot_mode_with_auto_push(
     workflow_context["output"] = output
 
 
-@when("the Rust kcmt command runs in oneshot batch mode")
-def rust_kcmt_runs_in_oneshot_batch_mode(workflow_context: dict[str, Any]) -> None:
+@when("the Rust kcmt command runs in default batch mode")
+def rust_kcmt_runs_in_default_batch_mode(workflow_context: dict[str, Any]) -> None:
     env = _clean_env(workflow_context["config_home"])
     env["OPENAI_TEST_KEY"] = "test-key"
     output = _run(
         [
             str(_rust_bin("kcmt")),
-            "--oneshot",
             "--provider",
             "openai",
             "--endpoint",
@@ -418,6 +604,74 @@ def rust_kcmt_commits_file_using_configured_provider_fallback(
     workflow_context["fallback_server"].shutdown()
 
 
+@when("the Rust kcmt command commits the file using a GitHub token flag")
+def rust_kcmt_commits_file_using_github_token_flag(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--file",
+            "tracked.py",
+            "--provider",
+            "github",
+            "--endpoint",
+            workflow_context["github_endpoint"],
+            "--api-key-env",
+            "GITHUB_TOKEN",
+            "--model",
+            "openai/gpt-test",
+            "--github-token",
+            "bdd-gh-token",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+    workflow_context["github_server"].shutdown()
+
+
+@when("the Rust kcmt command commits the file with max retries set to zero")
+def rust_kcmt_commits_file_with_max_retries_zero(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["OPENAI_TEST_KEY"] = "test-key"
+    result = subprocess.run(
+        [
+            str(_rust_bin("kcmt")),
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            workflow_context["retry_endpoint"],
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-retry",
+            "--max-retries",
+            "0",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    workflow_context["result"] = result
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+    workflow_context["retry_server"].shutdown()
+
+
 @when("the Python kcmt entrypoint commits the file in auto runtime mode")
 def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
@@ -433,6 +687,33 @@ def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
             "kcmt.main",
             "--file",
             "tracked.py",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+
+
+@when("the Python kcmt entrypoint runs the default workflow in auto runtime mode")
+def python_kcmt_entrypoint_runs_default_workflow_in_auto_runtime_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    rust_bin = _rust_bin("kcmt")
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_RUST_BIN"] = str(rust_bin)
+    env["KCMT_RUNTIME_TRACE"] = "1"
+    result = subprocess.run(
+        [
+            os.environ.get("PYTHON", "python"),
+            "-m",
+            "kcmt.main",
             "--no-auto-push",
             "--repo-path",
             str(workflow_context["repo"]),
@@ -481,6 +762,17 @@ def rust_kcmt_lists_models(workflow_context: dict[str, Any]) -> None:
     workflow_context["output"] = output
 
 
+@when("the Rust kcmt command lists models in debug mode")
+def rust_kcmt_lists_models_in_debug_mode(workflow_context: dict[str, Any]) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [str(_rust_bin("kcmt")), "--debug", "--list-models"],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
 @when("the Rust kcmt command verifies API keys")
 def rust_kcmt_verifies_api_keys(workflow_context: dict[str, Any]) -> None:
     env = _clean_env(workflow_context["config_home"])
@@ -496,6 +788,7 @@ def rust_kcmt_benchmarks_provider_with_structured_outputs(
     env = _clean_env(workflow_context["config_home"])
     env["OPENAI_API_KEY"] = "bdd-openai-key"
     env["KCMT_PROVIDER_RESPONSE"] = "fix(core): update benchmark"
+    env["KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE"] = "1"
     output = _run(
         [
             str(_rust_bin("kcmt")),
@@ -524,6 +817,7 @@ def rust_kcmt_runtime_benchmark_runs_against_the_corpus(
     rust_bin = _rust_bin("kcmt")
     env = _clean_env(workflow_context["config_home"])
     env["KCMT_PROVIDER_RESPONSE"] = "chore(repo): benchmark fake response"
+    env["KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE"] = "1"
     output = _run(
         [
             str(rust_bin),
@@ -588,6 +882,7 @@ def rust_kcmt_commits_the_file_with_wrapped_provider_output(
     env["KCMT_PROVIDER_RESPONSE"] = (
         "```text\nHere is the commit:\n" "- `fix(core): handle provider output.`\n```"
     )
+    env["KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE"] = "1"
     output = _run(
         [
             str(_rust_bin("kcmt")),
@@ -609,6 +904,57 @@ def rust_kcmt_receives_invalid_provider_output(
 ) -> None:
     env = _clean_env(workflow_context["config_home"])
     env["KCMT_PROVIDER_RESPONSE"] = "This changes a few files"
+    env["KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE"] = "1"
+    result = subprocess.run(
+        [
+            str(_rust_bin("kcmt")),
+            "--file",
+            "tracked.py",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    workflow_context["result"] = result
+
+
+@when("the Rust kcmt command runs default mode with invalid provider output")
+def rust_kcmt_runs_default_mode_with_invalid_provider_output(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_PROVIDER_RESPONSE"] = "This changes a few files"
+    env["KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE"] = "1"
+    result = subprocess.run(
+        [
+            str(_rust_bin("kcmt")),
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    workflow_context["result"] = result
+    workflow_context["output"] = result.stdout
+
+
+@when("the Rust kcmt command receives fixture provider output without opt in")
+def rust_kcmt_receives_fixture_provider_output_without_opt_in(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_PROVIDER_RESPONSE"] = "fix(core): should be ignored"
+    env.pop("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", None)
+    env.pop("KCMT_ALLOW_LOCAL_SYNTHESIS", None)
     result = subprocess.run(
         [
             str(_rust_bin("kcmt")),
@@ -647,6 +993,34 @@ def repository_worktree_is_clean(workflow_context: dict[str, Any]) -> None:
     assert status == ""
 
 
+@then("exactly one changed file is committed")
+def exactly_one_changed_file_is_committed(workflow_context: dict[str, Any]) -> None:
+    output = workflow_context["output"]
+    committed = [name for name in ("alpha.py", "beta.py") if f"✓ {name}" in output]
+    assert len(committed) == 1
+    workflow_context["limited_committed_file"] = committed[0]
+
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s"])
+    subjects = log.splitlines()
+    committed_subjects = [
+        subject
+        for subject in (
+            "chore(repo): update alpha",
+            "chore(repo): update beta",
+        )
+        if subject in subjects
+    ]
+    assert len(committed_subjects) == 1
+
+
+@then("one changed file remains uncommitted")
+def one_changed_file_remains_uncommitted(workflow_context: dict[str, Any]) -> None:
+    committed = workflow_context["limited_committed_file"]
+    remaining = "beta.py" if committed == "alpha.py" else "alpha.py"
+    status = _git(workflow_context["repo"], ["status", "--short"])
+    assert status == f"M {remaining}"
+
+
 @then("the deleted file is committed with the deletion message")
 def deleted_file_is_committed_with_the_deletion_message(
     workflow_context: dict[str, Any],
@@ -683,6 +1057,82 @@ def deletion_is_recorded_in_the_raw_status_snapshot(
     assert '"schema_version": 1' in raw_status
     assert '"stage": "status_scan"' in raw_status
     assert '"stage": "commit"' in raw_status
+
+
+@then("the changed file remains uncommitted with a recorded prepare failure")
+def changed_file_remains_uncommitted_with_recorded_prepare_failure(
+    workflow_context: dict[str, Any],
+) -> None:
+    result = workflow_context["result"]
+    assert result.returncode == 0
+    assert "✗ tracked.py" in result.stdout
+    assert "missing conventional commit header" in result.stdout
+
+    status = _git(workflow_context["repo"], ["status", "--short"])
+    assert status == "M tracked.py"
+
+    env = _clean_env(workflow_context["config_home"])
+    raw_status = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "status",
+            "--raw",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    snapshot = json.loads(raw_status)
+    assert snapshot["counts"]["files_total"] == 2
+    assert snapshot["counts"]["prepared_total"] == 1
+    assert snapshot["counts"]["prepared_failures"] == 1
+    assert snapshot["counts"]["commit_failure"] == 1
+    assert snapshot["counts"]["deletions_success"] == 1
+    assert snapshot["counts"]["overall_success"] == 1
+    assert snapshot["counts"]["overall_failure"] == 1
+    assert snapshot["commits"][0]["success"] is False
+    assert snapshot["commits"][0]["file_path"] == "tracked.py"
+
+
+@then("the raw status snapshot records two prepare workers")
+def raw_status_snapshot_records_two_prepare_workers(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    raw_status = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "status",
+            "--raw",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    snapshot = json.loads(raw_status)
+    assert snapshot["telemetry"]["prepare_workers"] == 2
+
+
+@then("the compact workflow output includes summary and commit details")
+def compact_workflow_output_includes_summary_and_commit_details(
+    workflow_context: dict[str, Any],
+) -> None:
+    output = workflow_context["output"]
+    assert "Run Summary" in output
+    assert "Commits 1  Failures 0" in output
+    assert "Latest commit: chore(repo): update tracked" in output
+    assert "✓ tracked.py" in output
+
+
+@then("the compact workflow output includes profile timings")
+def compact_workflow_output_includes_profile_timings(
+    workflow_context: dict[str, Any],
+) -> None:
+    output = workflow_context["output"]
+    assert "[kcmt-profile] status_scan:" in output
+    assert "[kcmt-profile] snapshot:" in output
 
 
 @then("the raw status snapshot records the config overrides")
@@ -729,6 +1179,21 @@ def workflow_fails_before_committing_the_file(workflow_context: dict[str, Any]) 
     result = workflow_context["result"]
     assert result.returncode == 1
     assert "missing conventional commit header" in result.stderr
+
+    status = _git(workflow_context["repo"], ["status", "--short"])
+    assert "tracked.py" in status
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "chore(repo): seed"
+
+
+@then("the fixture provider output is ignored before committing the file")
+def fixture_provider_output_is_ignored_before_committing_the_file(
+    workflow_context: dict[str, Any],
+) -> None:
+    result = workflow_context["result"]
+    assert result.returncode == 1
+    assert "No API key available" in result.stderr
+    assert "should be ignored" not in result.stderr
 
     status = _git(workflow_context["repo"], ["status", "--short"])
     assert "tracked.py" in status
@@ -868,13 +1333,14 @@ def fallback_provider_is_used_after_the_primary_provider_fails(
     workflow_context: dict[str, Any],
 ) -> None:
     requests = workflow_context["fallback_handler"].requests
-    assert len(requests) == 4
-    assert [request[1] for request in requests[:3]] == [
+    assert len(requests) == 5
+    assert [request[1] for request in requests[:4]] == [
+        "/chat/completions",
         "/chat/completions",
         "/chat/completions",
         "/chat/completions",
     ]
-    assert requests[3][1] == "/v1/messages"
+    assert requests[4][1] == "/v1/messages"
 
 
 @then("the latest commit uses the fallback provider message")
@@ -884,6 +1350,52 @@ def latest_commit_uses_the_fallback_provider_message(
     assert "fix(fallback): use secondary provider" in workflow_context["output"]
     log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
     assert log == "fix(fallback): use secondary provider"
+
+
+@then("the GitHub provider receives the CLI token")
+def github_provider_receives_the_cli_token(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["github_handler"].requests
+    assert len(requests) == 1
+    method, path, auth, body = requests[0]
+    assert method == "POST"
+    assert path == "/chat/completions"
+    assert auth == "Bearer bdd-gh-token"
+    assert "tracked.py" in body
+
+
+@then("the latest commit uses the GitHub provider message")
+def latest_commit_uses_the_github_provider_message(
+    workflow_context: dict[str, Any],
+) -> None:
+    assert "fix(github): use cli token" in workflow_context["output"]
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "fix(github): use cli token"
+
+
+@then("the provider receives exactly one retry-limited request")
+def provider_receives_exactly_one_retry_limited_request(
+    workflow_context: dict[str, Any],
+) -> None:
+    result = workflow_context["result"]
+    assert result.returncode != 0
+    requests = workflow_context["retry_handler"].requests
+    assert len(requests) == 1
+    method, path, body = requests[0]
+    assert method == "POST"
+    assert path == "/chat/completions"
+    assert "tracked.py" in body
+
+
+@then("no commit is written after the retry-limited provider failure")
+def no_commit_is_written_after_retry_limited_provider_failure(
+    workflow_context: dict[str, Any],
+) -> None:
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "chore(repo): seed"
+    status = _git(workflow_context["repo"], ["status", "--short"])
+    assert status == "M tracked.py"
 
 
 @then("the latest commit is written by the Rust runtime")
@@ -919,6 +1431,15 @@ def model_list_includes_all_supported_providers(
     assert "claude-3-5-haiku-latest" in output
     assert "xai" in output
     assert "github" in output
+
+
+@then("the debug model list is structured JSON")
+def debug_model_list_is_structured_json(workflow_context: dict[str, Any]) -> None:
+    payload = json.loads(workflow_context["output"])
+    providers = {entry["provider"]: entry for entry in payload}
+    assert providers["openai"]["models"][0]["id"] == "gpt-5-mini-2025-08-07"
+    assert providers["github"]["models"][0]["api_key_env"] == "GITHUB_TOKEN"
+    assert providers["anthropic"]["display_name"] == "Anthropic"
 
 
 @then("the key verification output shows present and missing providers")
@@ -968,12 +1489,20 @@ def benchmark_report_includes_rust_workflow_stage_timings(
     file_result = next(
         item
         for item in payload["results"]
-        if item["runtime"] == "rust" and item["workflow_contract_id"] == "file-repo-path"
+        if item["runtime"] == "rust"
+        and item["workflow_contract_id"] == "file-repo-path"
     )
     stages = file_result["stage_timings"]
     stage_names = {stage["stage"] for stage in stages}
-    assert {"status_scan", "llm_wait", "commit", "push", "snapshot"}.issubset(
-        stage_names
-    )
+    assert {
+        "status_scan",
+        "diff_preparation",
+        "llm_enqueue",
+        "llm_wait",
+        "response_validation",
+        "commit",
+        "push",
+        "snapshot",
+    }.issubset(stage_names)
     assert all(isinstance(stage["duration_ms"], int | float) for stage in stages)
     assert all(isinstance(stage["items"], int) for stage in stages)
