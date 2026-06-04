@@ -339,10 +339,15 @@ class CommitGenerator:
             raise ValidationError("Diff content cannot be empty.")
 
         if _runtime_benchmark_mode_enabled():
+            if progress_callback is not None:
+                progress_callback("request-sent")
             file_path = ""
             if context and "File:" in context:
                 file_path = context.split("File:", 1)[1].strip()
-            return self._synthesize_small_diff_subject(file_path)
+            subject = self._synthesize_small_diff_subject(file_path)
+            if progress_callback is not None:
+                progress_callback("response-received")
+            return subject
 
         # Optional within-run memoization to avoid duplicate LLM calls.
         disable_memo = str(os.environ.get("KCMT_DISABLE_MEMO", "")).lower() in {
