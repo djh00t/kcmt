@@ -325,6 +325,10 @@ fn run_runtime_scenario(
         }
     }
 
+    let median_time_ms = median(&durations);
+    let mut stage_timings = aggregate_stage_timings(&stage_samples);
+    append_process_overhead_stage(&mut stage_timings, median_time_ms);
+
     Ok(RuntimeBenchmarkResult {
         scenario_id: scenario.scenario_id.clone(),
         workflow_contract_id: scenario.workflow_contract_id.to_string(),
@@ -341,11 +345,11 @@ fn run_runtime_scenario(
             RuntimeScenarioStatus::Passed
         },
         wall_time_ms: durations.iter().sum(),
-        median_time_ms: median(&durations),
+        median_time_ms,
         peak_rss_bytes: None,
         exit_code: Some(last_exit_code),
         failure_reason,
-        stage_timings: aggregate_stage_timings(&stage_samples),
+        stage_timings,
     })
 }
 
@@ -464,6 +468,27 @@ fn aggregate_stage_timings(samples: &[Vec<RuntimeStageTiming>]) -> Vec<RuntimeSt
             })
         })
         .collect()
+}
+
+fn append_process_overhead_stage(
+    stages: &mut Vec<RuntimeStageTiming>,
+    median_time_ms: Option<f64>,
+) {
+    let Some(median_time_ms) = median_time_ms else {
+        return;
+    };
+    let Some(workflow_total_ms) = stages
+        .iter()
+        .find(|stage| stage.stage == "workflow_total")
+        .map(|stage| stage.duration_ms)
+    else {
+        return;
+    };
+    stages.push(RuntimeStageTiming {
+        stage: "process_overhead".to_string(),
+        duration_ms: (median_time_ms - workflow_total_ms).max(0.0),
+        items: 1,
+    });
 }
 
 fn load_runtime_benchmark_corpus_metadata(repo_path: &Path) -> Result<CorpusMetadata> {
