@@ -265,6 +265,12 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).to_string()
     }
 
+    fn init_repo(repo: &Path) {
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.name", "kcmt test"]);
+        git(repo, &["config", "user.email", "kcmt-test@example.com"]);
+    }
+
     fn sorted_lines(value: &str) -> Vec<String> {
         let mut lines = value
             .lines()
@@ -278,7 +284,7 @@ mod tests {
     #[test]
     fn finds_top_level_repo_from_nested_directory() {
         let repo = unique_temp_dir("repo");
-        git(&repo, &["init", "-q"]);
+        init_repo(&repo);
         let nested = repo.join("pkg").join("sub");
         fs::create_dir_all(&nested).expect("nested dir");
 
@@ -300,7 +306,7 @@ mod tests {
     #[test]
     fn status_porcelain_lists_nested_untracked_files() {
         let repo = unique_temp_dir("status-porcelain");
-        git(&repo, &["init", "-q"]);
+        init_repo(&repo);
         let nested = repo.join("src").join("module_000");
         fs::create_dir_all(&nested).expect("nested dir");
         fs::write(nested.join("file_0000.py"), "print('alpha')\n").expect("alpha file");
@@ -317,7 +323,7 @@ mod tests {
     #[test]
     fn gix_status_matches_git_cli_for_common_file_states() {
         let repo = unique_temp_dir("gix-status-parity");
-        git(&repo, &["init", "-q"]);
+        init_repo(&repo);
         fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
         fs::write(repo.join("delete_me.txt"), "bye\n").expect("delete seed");
         git(&repo, &["add", "tracked.py", "delete_me.txt"]);
