@@ -13,9 +13,9 @@
 | Gate | Command | Result |
 |---|---|---|
 | Focused Rust workflow unit helpers | `rtk cargo test --manifest-path rust/Cargo.toml -p kcmt-cli workflow::tests -- --nocapture` | PASS, 10 passed |
-| Focused Rust workflow integration | `rtk cargo test --manifest-path rust/Cargo.toml -p kcmt-cli --test workflow_modes -- --nocapture` | PASS, 26 passed |
+| Focused Rust workflow integration | `rtk cargo test --manifest-path rust/Cargo.toml -p kcmt-cli --test workflow_modes -- --nocapture` | PASS, 29 passed |
 | Focused Python/BDD runtime parity | `rtk uv run pytest -q --no-cov tests/test_main_entrypoint.py tests/test_rust_workflow_parity_bdd.py tests/test_benchmark.py::test_run_runtime_benchmark_produces_python_results tests/test_cli.py::test_cli_runtime_benchmark_json` | PASS, 48 passed |
-| Rust workspace | `rtk cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast` | PASS, 80 passed |
+| Rust workspace | `rtk cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast` | PASS, 85 passed |
 | Repository check gate | `rtk proxy make check` | PASS, all checks passed |
 | Repository quality gate | `rtk proxy make quality-gates` | PASS, 149 Python tests passed, 1 skipped, Rust and Ink tests passed, coverage 93.88% |
 | Release build | `rtk cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli` | PASS |
