@@ -1,9 +1,11 @@
 //! Git repository adapter built on top of the command runner abstraction.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{KcmtError, Result};
 use crate::git::runner::{CommandRunner, GitCliRunner};
+use gix::bstr::ByteSlice;
 
 pub trait GitRepository {
     fn staged_files(&self) -> Result<Vec<String>>;
@@ -70,6 +72,9 @@ impl<R: CommandRunner> GitRepository for CliGitRepository<R> {
 
     fn status_porcelain_for_path(&self, file_path: &str) -> Result<String> {
         if std::env::var("KCMT_GIT_STATUS_BACKEND").as_deref() != Ok("cli") {
+            if let Ok(status) = status_porcelain_for_path_fast(&self.repo_path, file_path) {
+                return Ok(status);
+            }
             return status_porcelain_gix(
                 &self.repo_path,
                 vec![gix::bstr::BString::from(file_path.as_bytes().to_vec())],
@@ -103,6 +108,80 @@ impl<R: CommandRunner> CliGitRepository<R> {
         )?;
         Ok(render_porcelain_lines(&output.stdout))
     }
+}
+
+fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<String> {
+    let repo = gix::open(repo_path)
+        .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
+    let index = repo
+        .open_index()
+        .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
+    let path = file_path.as_bytes().as_bstr();
+    let index_entry = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted);
+    let head_oid = head_tree_entry_oid(&repo, file_path)?;
+    let worktree_path = repo_path.join(file_path);
+
+    let index_oid = index_entry.map(|entry| entry.id);
+    let staged_code = match (head_oid, index_oid) {
+        (None, Some(_)) => "A",
+        (Some(_), None) => "D",
+        (Some(head), Some(index)) if head != index => "M",
+        _ => " ",
+    };
+
+    let worktree_code = if worktree_path.exists() {
+        let metadata = fs::metadata(&worktree_path)?;
+        if !metadata.is_file() {
+            return Err(KcmtError::Message(format!(
+                "path status requires fallback for non-file: {file_path}"
+            )));
+        }
+        if index_oid.is_none() {
+            "?"
+        } else {
+            let blob_oid = write_worktree_blob(&repo, &worktree_path)?;
+            if Some(blob_oid) == index_oid {
+                " "
+            } else {
+                "M"
+            }
+        }
+    } else if index_oid.is_some() {
+        "D"
+    } else {
+        " "
+    };
+
+    if staged_code == " " && worktree_code == " " {
+        return Ok(String::new());
+    }
+    if staged_code == " " && worktree_code == "?" {
+        return Ok(format!("?? {file_path}\n"));
+    }
+    Ok(format!("{staged_code}{worktree_code} {file_path}\n"))
+}
+
+fn head_tree_entry_oid(
+    repo: &gix::Repository,
+    file_path: &str,
+) -> Result<Option<gix::hash::ObjectId>> {
+    let tree_id = repo
+        .head_tree_id_or_empty()
+        .map_err(|err| KcmtError::Message(format!("gix head tree lookup failed: {err}")))?;
+    let tree = repo
+        .find_tree(tree_id)
+        .map_err(|err| KcmtError::Message(format!("gix find tree failed: {err}")))?;
+    let entry = tree
+        .lookup_entry_by_path(Path::new(file_path))
+        .map_err(|err| KcmtError::Message(format!("gix tree path lookup failed: {err}")))?;
+    Ok(entry.map(|entry| entry.object_id()))
+}
+
+fn write_worktree_blob(repo: &gix::Repository, path: &Path) -> Result<gix::hash::ObjectId> {
+    let mut file = fs::File::open(path)?;
+    repo.write_blob_stream(&mut file)
+        .map(|id| id.detach())
+        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))
 }
 
 fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> Result<String> {
@@ -229,8 +308,8 @@ fn render_porcelain_lines(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_git_repo_root, render_porcelain_lines, status_porcelain_gix, CliGitRepository,
-        GitRepository,
+        find_git_repo_root, render_porcelain_lines, status_porcelain_for_path_fast,
+        status_porcelain_gix, CliGitRepository, GitRepository,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -375,5 +454,66 @@ mod tests {
             .expect("path status should render");
 
         assert_eq!(sorted_lines(&status), vec![" M tracked.py".to_string()]);
+    }
+
+    #[test]
+    fn fast_path_status_returns_empty_for_clean_file() {
+        let repo = unique_temp_dir("gix-path-status-clean");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+        let status = status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, "");
+    }
+
+    #[test]
+    fn fast_path_status_detects_tracked_delete() {
+        let repo = unique_temp_dir("gix-path-status-delete");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::remove_file(repo.join("tracked.py")).expect("delete tracked");
+
+        let status = status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, " D tracked.py\n");
+    }
+
+    #[test]
+    fn fast_path_status_detects_untracked_file() {
+        let repo = unique_temp_dir("gix-path-status-untracked");
+        init_repo(&repo);
+        git(
+            &repo,
+            &["commit", "--allow-empty", "-m", "chore(repo): seed"],
+        );
+        fs::write(repo.join("untracked.py"), "print('new')\n").expect("untracked file");
+
+        let status = status_porcelain_for_path_fast(&repo, "untracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, "?? untracked.py\n");
+    }
+
+    #[test]
+    fn fast_path_status_detects_staged_file() {
+        let repo = unique_temp_dir("gix-path-status-staged");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+        git(&repo, &["add", "tracked.py"]);
+
+        let status = status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("fast path status should render");
+
+        assert_eq!(status, "M  tracked.py\n");
     }
 }
