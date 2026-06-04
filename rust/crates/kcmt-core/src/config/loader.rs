@@ -106,6 +106,7 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
 
     let provider = selected_provider(overrides, persisted.as_ref(), &detected);
     let defaults = provider_defaults(&provider).unwrap_or(PROVIDER_DEFAULTS[0]);
+    let explicit_provider = overrides.provider.is_some() || env::var("KCMT_PROVIDER").is_ok();
 
     let model = overrides
         .model
@@ -124,14 +125,28 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
     let api_key_env = overrides
         .api_key_env
         .clone()
-        .or_else(|| persisted.as_ref().map(|cfg| cfg.api_key_env.clone()))
+        .or_else(|| {
+            if explicit_provider {
+                None
+            } else {
+                persisted.as_ref().map(|cfg| cfg.api_key_env.clone())
+            }
+        })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| selected_api_key_env(&provider, &detected).to_string());
     let git_repo_path = overrides
         .repo_path
         .clone()
-        .or_else(|| env::var("KLINGON_CMT_GIT_REPO_PATH").ok().map(PathBuf::from))
-        .or_else(|| persisted.as_ref().map(|cfg| PathBuf::from(&cfg.git_repo_path)))
+        .or_else(|| {
+            env::var("KLINGON_CMT_GIT_REPO_PATH")
+                .ok()
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            persisted
+                .as_ref()
+                .map(|cfg| PathBuf::from(&cfg.git_repo_path))
+        })
         .unwrap_or_else(|| repo_root.to_path_buf());
     let git_repo_path = normalize_repo_path(repo_root, &git_repo_path);
     let max_commit_length = overrides
@@ -225,7 +240,10 @@ fn detect_available_providers() -> HashMap<String, Vec<String>> {
         if env_values.iter().any(|value| value == defaults.api_key_env) {
             matches.push(defaults.api_key_env.to_string());
         }
-        if let Some((_, hints)) = PROVIDER_HINTS.iter().find(|(provider, _)| *provider == defaults.provider) {
+        if let Some((_, hints)) = PROVIDER_HINTS
+            .iter()
+            .find(|(provider, _)| *provider == defaults.provider)
+        {
             for key in &env_values {
                 if hints.iter().any(|hint| key.contains(hint)) && !matches.contains(key) {
                     matches.push(key.clone());
@@ -257,10 +275,7 @@ fn selected_provider(
     }
 }
 
-fn selected_api_key_env<'a>(
-    provider: &str,
-    detected: &'a HashMap<String, Vec<String>>,
-) -> &'a str {
+fn selected_api_key_env<'a>(provider: &str, detected: &'a HashMap<String, Vec<String>>) -> &'a str {
     let defaults = provider_defaults(provider).unwrap_or(PROVIDER_DEFAULTS[0]);
     detected
         .get(provider)
@@ -401,5 +416,36 @@ mod tests {
         assert_eq!(cfg.api_key_env, "XAI_SECRET");
         assert_eq!(cfg.max_commit_length, 80);
         assert!(cfg.git_repo_path.ends_with("nested"));
+    }
+
+    #[test]
+    fn explicit_provider_uses_matching_default_api_key_env() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        clear_test_env();
+        let repo = unique_temp_dir("explicit-provider");
+        let cfg_home = unique_temp_dir("cfg-home-explicit-provider");
+        std::env::set_var("KCMT_CONFIG_HOME", &cfg_home);
+        std::env::set_var("KCMT_PROVIDER", "openai");
+        std::env::set_var("XAI_API_KEY", "xai-key");
+
+        let config_path = config_home().join("config.json");
+        fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        fs::write(
+            &config_path,
+            r#"{
+  "provider": "xai",
+  "model": "grok-code-fast-1",
+  "llm_endpoint": "https://api.x.ai/v1",
+  "api_key_env": "XAI_API_KEY",
+  "git_repo_path": ".",
+  "max_commit_length": 72
+}"#,
+        )
+        .expect("persisted config");
+
+        let cfg = load_config(&repo, &ConfigOverrides::default()).expect("config");
+
+        assert_eq!(cfg.provider, "openai");
+        assert_eq!(cfg.api_key_env, "OPENAI_API_KEY");
     }
 }
