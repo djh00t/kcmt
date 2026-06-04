@@ -1195,6 +1195,12 @@ def _runtime_benchmark_scenarios(
             expected_stdout_fragment="✓ ",
         ),
         _RuntimeBenchmarkScenario(
+            scenario_id=f"{metadata['id']}:default-repo-path",
+            workflow_contract_id="default-repo-path",
+            command_label="kcmt --repo-path <repo>",
+            expected_stdout_fragment="✓ ",
+        ),
+        _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:file-repo-path",
             workflow_contract_id="file-repo-path",
             command_label=f"kcmt --file {target} --repo-path <repo>",
@@ -1349,6 +1355,8 @@ def _scenario_command(
         return [*base, "status", "--repo-path", str(repo_path)]
     if scenario.workflow_contract_id == "oneshot-repo-path":
         return [*base, "--oneshot", "--repo-path", str(repo_path)]
+    if scenario.workflow_contract_id == "default-repo-path":
+        return [*base, "--repo-path", str(repo_path)]
     target = _runtime_benchmark_target_file(repo_path, metadata)
     return [*base, "--file", target, "--repo-path", str(repo_path)]
 
@@ -1382,7 +1390,11 @@ def _prepare_status_snapshot(
 def _scenario_records_snapshot_telemetry(
     scenario: _RuntimeBenchmarkScenario,
 ) -> bool:
-    return scenario.workflow_contract_id in {"oneshot-repo-path", "file-repo-path"}
+    return scenario.workflow_contract_id in {
+        "default-repo-path",
+        "oneshot-repo-path",
+        "file-repo-path",
+    }
 
 
 def _latest_runtime_snapshot_path(config_home: Path) -> Path | None:
