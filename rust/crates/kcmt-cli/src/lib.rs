@@ -10,6 +10,7 @@ use kcmt_core::config::loader::ConfigOverrides;
 use kcmt_core::git::repo::find_git_repo_root;
 
 use args::{CliArgs, CliCommand, StatusArgs};
+use commands::workflow::WorkflowOutputOptions;
 
 /// Executes a named entrypoint.
 pub fn run_entrypoint(name: &str) -> i32 {
@@ -35,12 +36,30 @@ fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
         batch_model: args.batch_model.clone(),
         batch_timeout_seconds: args.batch_timeout_seconds,
         file_limit: args.limit,
+        max_retries: args.max_retries,
+        prepare_workers: args.workers,
+    }
+}
+
+fn output_options(args: &CliArgs) -> WorkflowOutputOptions {
+    WorkflowOutputOptions {
+        compact: args.compact,
+        verbose: args.verbose,
+        profile_startup: args.profile_startup,
     }
 }
 
 fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
+    if let Some(token) = args
+        .github_token
+        .as_ref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        std::env::set_var("GITHUB_TOKEN", token);
+    }
+
     if args.list_models {
-        return commands::configure::run_list_models();
+        return commands::configure::run_list_models(args.debug);
     }
 
     if args.verify_keys {
@@ -77,26 +96,6 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
             commands::benchmark::run_benchmark_command(repo_path, benchmark)
         }
         None => {
-            if args.oneshot {
-                let repo_path = match require_git_repo(&requested_repo_path) {
-                    Ok(repo_path) => repo_path,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return 1;
-                    }
-                };
-                let overrides = config_overrides(&args, repo_path.clone());
-                return match commands::workflow::run_oneshot_workflow(repo_path, overrides) {
-                    Ok(output) => {
-                        print!("{output}");
-                        0
-                    }
-                    Err(err) => {
-                        eprintln!("{err}");
-                        1
-                    }
-                };
-            }
             if let Some(path) = args.file.clone() {
                 let repo_path = match require_git_repo(&requested_repo_path) {
                     Ok(repo_path) => repo_path,
@@ -106,7 +105,13 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                     }
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
-                return match commands::workflow::run_file_workflow(repo_path, &path, overrides) {
+                let output_options = output_options(&args);
+                return match commands::workflow::run_file_workflow(
+                    repo_path,
+                    &path,
+                    overrides,
+                    output_options,
+                ) {
                     Ok(output) => {
                         print!("{output}");
                         0
@@ -117,13 +122,50 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                     }
                 };
             }
-            eprintln!(
-                "{}",
-                kcmt_core::error::KcmtError::Message(
-                    "Rust runtime default workflow is not implemented yet.".to_string()
-                )
-            );
-            1
+            if args.oneshot {
+                let repo_path = match require_git_repo(&requested_repo_path) {
+                    Ok(repo_path) => repo_path,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return 1;
+                    }
+                };
+                let overrides = config_overrides(&args, repo_path.clone());
+                let output_options = output_options(&args);
+                return match commands::workflow::run_oneshot_workflow(
+                    repo_path,
+                    overrides,
+                    output_options,
+                ) {
+                    Ok(output) => {
+                        print!("{output}");
+                        0
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        1
+                    }
+                };
+            }
+            let repo_path = match require_git_repo(&requested_repo_path) {
+                Ok(repo_path) => repo_path,
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            };
+            let overrides = config_overrides(&args, repo_path.clone());
+            let output_options = output_options(&args);
+            match commands::workflow::run_default_workflow(repo_path, overrides, output_options) {
+                Ok(output) => {
+                    print!("{output}");
+                    0
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    1
+                }
+            }
         }
     }
 }
