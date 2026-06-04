@@ -779,7 +779,7 @@ fn untracked_file_commit_still_stages_path() {
 }
 
 #[test]
-fn gix_commit_backend_commits_file_workflow_and_records_stage_path() {
+fn gix_commit_backend_commits_tracked_file_without_stage_path() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
@@ -791,6 +791,35 @@ fn gix_commit_backend_commits_file_workflow_and_records_stage_path() {
         .env("KCMT_CONFIG_HOME", &config_home)
         .env("KCMT_GIT_COMMIT_BACKEND", "gix")
         .args(["--file", "tracked.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(git(&repo, &["status", "--short"]), "");
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 0);
+}
+
+#[test]
+fn gix_commit_backend_stages_untracked_file_workflow() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("new_file.py"), "print('new')\n").expect("new file");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_GIT_COMMIT_BACKEND", "gix")
+        .args(["--file", "new_file.py", "--no-auto-push", "--repo-path"])
         .arg(&repo)
         .output()
         .expect("kcmt binary should run");
