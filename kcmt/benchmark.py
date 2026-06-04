@@ -1385,8 +1385,23 @@ def _scenario_records_snapshot_telemetry(
     return scenario.workflow_contract_id in {"oneshot-repo-path", "file-repo-path"}
 
 
-def _load_snapshot_stage_timings(repo_path: Path) -> list[RuntimeStageTiming]:
-    snapshot_path = state_dir(repo_path) / "last_run.json"
+def _latest_runtime_snapshot_path(config_home: Path) -> Path | None:
+    repos_dir = config_home / "repos"
+    try:
+        candidates = sorted(
+            path / "last_run.json"
+            for path in repos_dir.iterdir()
+            if (path / "last_run.json").exists()
+        )
+    except OSError:
+        return None
+    return candidates[-1] if candidates else None
+
+
+def _load_snapshot_stage_timings(config_home: Path) -> list[RuntimeStageTiming]:
+    snapshot_path = _latest_runtime_snapshot_path(config_home)
+    if snapshot_path is None:
+        return []
     try:
         payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1513,7 +1528,7 @@ def _run_runtime_scenario(
                 last_exit_code = 1
                 break
             if _scenario_records_snapshot_telemetry(scenario):
-                stage_samples.append(_load_snapshot_stage_timings(repo_path))
+                stage_samples.append(_load_snapshot_stage_timings(config_home))
         finally:
             shutil.rmtree(repo_path.parent, ignore_errors=True)
 
