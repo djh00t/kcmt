@@ -49,6 +49,18 @@ impl CliGitRepository<GitCliRunner> {
     }
 }
 
+impl<R: CommandRunner> CliGitRepository<R> {
+    pub fn workflow_status_porcelain_for_path(&self, file_path: &str) -> Result<String> {
+        if std::env::var("KCMT_GIT_STATUS_BACKEND").as_deref() != Ok("cli") {
+            if let Ok(status) = workflow_status_porcelain_for_path_fast(&self.repo_path, file_path)
+            {
+                return Ok(status);
+            }
+        }
+        self.status_porcelain_for_path(file_path)
+    }
+}
+
 impl<R: CommandRunner> GitRepository for CliGitRepository<R> {
     fn staged_files(&self) -> Result<Vec<String>> {
         let output = self
@@ -156,6 +168,38 @@ fn status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<S
         return Ok(String::new());
     }
     Ok(format!("{staged_code}{worktree_code} {file_path}\n"))
+}
+
+fn workflow_status_porcelain_for_path_fast(repo_path: &Path, file_path: &str) -> Result<String> {
+    let repo = gix::open(repo_path)
+        .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
+    let index = repo
+        .open_index()
+        .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
+    let path = file_path.as_bytes().as_bstr();
+    let index_entry = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted);
+    let index_oid = index_entry.map(|entry| entry.id);
+    let worktree_path = repo_path.join(file_path);
+
+    if worktree_path.exists() {
+        let metadata = fs::metadata(&worktree_path)?;
+        if !metadata.is_file() {
+            return Err(KcmtError::Message(format!(
+                "path status requires fallback for non-file: {file_path}"
+            )));
+        }
+        let Some(index_oid) = index_oid else {
+            return Ok(format!("?? {file_path}\n"));
+        };
+        let blob_oid = hash_worktree_blob(&repo, &worktree_path, metadata.len())?;
+        if blob_oid != index_oid {
+            return Ok(format!(" M {file_path}\n"));
+        }
+    } else if index_oid.is_some() {
+        return Ok(format!(" D {file_path}\n"));
+    }
+
+    status_porcelain_for_path_fast(repo_path, file_path)
 }
 
 fn head_tree_entry_oid(
@@ -318,7 +362,8 @@ fn render_porcelain_lines(raw: &str) -> String {
 mod tests {
     use super::{
         find_git_repo_root, render_porcelain_lines, status_porcelain_for_path_fast,
-        status_porcelain_gix, CliGitRepository, GitRepository,
+        status_porcelain_gix, workflow_status_porcelain_for_path_fast, CliGitRepository,
+        GitRepository,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -463,6 +508,37 @@ mod tests {
             .expect("path status should render");
 
         assert_eq!(sorted_lines(&status), vec![" M tracked.py".to_string()]);
+    }
+
+    #[test]
+    fn workflow_path_status_uses_coarse_tracked_modified_status() {
+        let repo = unique_temp_dir("gix-workflow-path-modified");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+        let status = workflow_status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("workflow path status should render");
+
+        assert_eq!(status, " M tracked.py\n");
+    }
+
+    #[test]
+    fn workflow_path_status_falls_back_for_staged_only_change() {
+        let repo = unique_temp_dir("gix-workflow-path-staged");
+        init_repo(&repo);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+        git(&repo, &["add", "tracked.py"]);
+
+        let status = workflow_status_porcelain_for_path_fast(&repo, "tracked.py")
+            .expect("workflow path status should render");
+
+        assert_eq!(status, "M  tracked.py\n");
     }
 
     #[test]
