@@ -28,12 +28,18 @@ fn render_status_summary(repo_path: &Path, snapshot: &Value) -> String {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| repo_path.display().to_string());
-    let timestamp = snapshot.get("timestamp").and_then(Value::as_str).unwrap_or("");
+    let timestamp = snapshot
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let duration = snapshot
         .get("duration_seconds")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    let summary = snapshot.get("summary").and_then(Value::as_str).unwrap_or("");
+    let summary = snapshot
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let counts = snapshot.get("counts").and_then(Value::as_object);
     let success_count = counts
         .and_then(|counts| counts.get("commit_success"))
@@ -133,8 +139,11 @@ mod tests {
         let path = snapshot_path(&repo);
         fs::create_dir_all(path.parent().expect("snapshot parent"))
             .expect("snapshot dir should be created");
-        fs::write(&path, serde_json::to_string_pretty(&snapshot).expect("snapshot json"))
-            .expect("snapshot should be written");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&snapshot).expect("snapshot json"),
+        )
+        .expect("snapshot should be written");
 
         let raw = render_status(Some(repo.clone()), true).expect("raw status");
         assert!(raw.contains("\"summary\": \"Successfully completed 1 commits.\""));
