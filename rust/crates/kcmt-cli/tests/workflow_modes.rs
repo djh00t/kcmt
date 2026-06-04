@@ -39,7 +39,23 @@ fn git(repo: &Path, args: &[&str]) -> String {
 fn kcmt_command(binary_path: &str) -> Command {
     let mut command = Command::new(binary_path);
     command.env_clear();
-    for key in ["PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL"] {
+    for key in [
+        "PATH",
+        "HOME",
+        "USER",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "SystemRoot",
+        "SYSTEMROOT",
+        "ComSpec",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ] {
         if let Ok(value) = std::env::var(key) {
             command.env(key, value);
         }
@@ -805,6 +821,7 @@ fn gix_commit_backend_commits_tracked_file_without_stage_path() {
     let snapshot = raw_status_snapshot(&repo, &config_home);
     assert_eq!(snapshot["counts"]["overall_success"], 1);
     assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 0);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_read_hash"), 0);
 }
 
 #[test]
