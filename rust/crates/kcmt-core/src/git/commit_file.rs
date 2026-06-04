@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::error::{KcmtError, Result};
 use gix::bstr::ByteSlice;
+use gix::objs::Write;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitFileOutcome {
@@ -376,9 +377,9 @@ fn update_path_in_index(
     }
     let mut file = fs::File::open(&worktree_path)?;
     let blob_id = repo
-        .write_blob_stream(&mut file)
-        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?
-        .detach();
+        .objects
+        .write_stream(gix::objs::Kind::Blob, metadata.len(), &mut file)
+        .map_err(|err| KcmtError::Message(format!("gix write blob failed: {err}")))?;
     let stat = gix::index::entry::Stat::from_fs(&metadata)
         .map_err(|err| KcmtError::Message(format!("gix stat conversion failed: {err}")))?;
     if entry_exists {
