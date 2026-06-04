@@ -159,6 +159,7 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         "push",
         "snapshot",
         "workflow_total",
+        "process_overhead",
     ] {
         assert!(
             stages.iter().any(|stage| stage["stage"] == expected_stage),
