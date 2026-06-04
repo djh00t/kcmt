@@ -201,6 +201,7 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
 
     assert payload["schema_version"] == schema["properties"]["schema_version"]["const"]
     assert set(schema["required"]).issubset(payload)
+    assert "optimization_iterations" in schema["properties"]
     assert payload["corpora"] == ["pytest-runtime-corpus"]
     assert len(payload["results"]) == 3
     assert {item["runtime"] for item in payload["results"]} == {"python"}
@@ -209,6 +210,20 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
     assert all(required_result_fields.issubset(item) for item in payload["results"])
     assert payload["summary"]["python"]["passed"] == 3
     assert payload["summary"]["rust"]["scenario_count"] == 0
+    iterations = payload["optimization_iterations"]
+    assert len(iterations) == 6
+    assert iterations[0]["label"] == "baseline"
+    assert iterations[0]["baseline"] is True
+    assert iterations[0]["measurement_status"] == "measured"
+    assert iterations[0]["median_wall_time_ms"] is not None
+    assert iterations[0]["throughput_commits_per_sec"] is not None
+    assert iterations[0]["quality_score"] is not None
+    assert iterations[0]["failures"] is not None
+    assert all(item["measurement_status"] == "planned" for item in iterations[1:])
+    assert all(item["median_wall_time_ms"] is None for item in iterations[1:])
+    assert all(item["throughput_commits_per_sec"] is None for item in iterations[1:])
+    assert all(item["quality_score"] is None for item in iterations[1:])
+    assert all(item["failures"] is None for item in iterations[1:])
 
 
 def test_run_runtime_benchmark_records_missing_rust_binary_as_excluded(tmp_path):
