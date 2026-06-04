@@ -34,6 +34,7 @@ fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
         use_batch: args.use_batch_override(),
         batch_model: args.batch_model.clone(),
         batch_timeout_seconds: args.batch_timeout_seconds,
+        file_limit: args.limit,
     }
 }
 
