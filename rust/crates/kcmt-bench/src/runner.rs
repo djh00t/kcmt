@@ -843,6 +843,12 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
     ];
     if runtime == RuntimeKind::Python {
         envs.push(("KCMT_RUNTIME".to_string(), "python".to_string()));
+    } else {
+        for key in ["KCMT_GIT_COMMIT_BACKEND", "KCMT_GIT_TREE_BACKEND"] {
+            if let Ok(value) = std::env::var(key) {
+                envs.push((key.to_string(), value));
+            }
+        }
     }
     envs
 }
@@ -1098,6 +1104,21 @@ mod tests {
                 .find(|(key, _)| key == "PYTEST_CURRENT_TEST")
                 .map(|(_, value)| value.as_str()),
             Some("kcmt-runtime-benchmark")
+        );
+    }
+
+    #[test]
+    fn runtime_benchmark_env_preserves_rust_git_backend() {
+        std::env::set_var("KCMT_GIT_COMMIT_BACKEND", "gix");
+        let config_home = unique_temp_dir("runtime-rust-env");
+        let envs = runtime_benchmark_env(&config_home, RuntimeKind::Rust);
+        std::env::remove_var("KCMT_GIT_COMMIT_BACKEND");
+
+        assert_eq!(
+            envs.iter()
+                .find(|(key, _)| key == "KCMT_GIT_COMMIT_BACKEND")
+                .map(|(_, value)| value.as_str()),
+            Some("gix")
         );
     }
 }
