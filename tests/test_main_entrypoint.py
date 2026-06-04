@@ -24,7 +24,41 @@ def test_should_use_rust_runtime_auto_requires_canary(monkeypatch):
 def test_should_use_rust_runtime_defaults_to_python(monkeypatch):
     monkeypatch.delenv("KCMT_RUNTIME", raising=False)
     monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
-    assert main_mod._should_use_rust_runtime() is False
+    assert main_mod._should_use_rust_runtime(["--oneshot"]) is True
+    assert main_mod._should_use_rust_runtime([]) is False
+
+
+def test_should_use_rust_runtime_python_escape_hatch(monkeypatch):
+    monkeypatch.setenv("KCMT_RUNTIME", "python")
+    assert main_mod._should_use_rust_runtime(["--oneshot"]) is False
+
+
+def test_covered_rust_runtime_invocations():
+    assert main_mod._is_rust_covered_invocation(["--oneshot"]) is True
+    assert main_mod._is_rust_covered_invocation(["--file", "tracked.py"]) is True
+    assert main_mod._is_rust_covered_invocation(["status", "--raw"]) is True
+    assert main_mod._is_rust_covered_invocation(["benchmark", "runtime"]) is True
+    assert main_mod._is_rust_covered_invocation(["--configure"]) is False
+    assert (
+        main_mod._is_rust_covered_invocation(
+            ["--configure", "--provider", "anthropic"]
+        )
+        is True
+    )
+    assert main_mod._is_rust_covered_invocation(["--list-models"]) is True
+    assert main_mod._is_rust_covered_invocation(["--verify-keys"]) is True
+    assert main_mod._is_rust_covered_invocation(["--configure-all"]) is False
+    assert (
+        main_mod._is_rust_covered_invocation(
+            ["--configure-all", "--api-key-env", "OPENAI_TEST_KEY"]
+        )
+        is True
+    )
+    assert main_mod._is_rust_covered_invocation(["--benchmark"]) is True
+    assert (
+        main_mod._is_rust_covered_invocation(["--benchmark", "--benchmark-json"])
+        is True
+    )
 
 
 def test_resolve_rust_binary_prefers_env(monkeypatch):
@@ -59,17 +93,30 @@ def test_build_runtime_decision_auto_canary_disabled(monkeypatch):
     decision = main_mod._build_runtime_decision("/tmp/kcmt-rust")
 
     assert decision["selected_runtime"] == "python"
-    assert decision["decision_reason"] == "auto_canary_disabled"
+    assert decision["decision_reason"] == "auto_unsupported_invocation"
     assert decision["canary_enabled"] is False
 
 
+def test_build_runtime_decision_auto_covered_invocation(monkeypatch):
+    monkeypatch.delenv("KCMT_RUNTIME", raising=False)
+    monkeypatch.delenv("KCMT_RUST_CANARY", raising=False)
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+
+    decision = main_mod._build_runtime_decision(
+        "/tmp/kcmt-rust", ["--file", "tracked.py"]
+    )
+
+    assert decision["selected_runtime"] == "rust"
+    assert decision["decision_reason"] == "auto_covered_workflow"
+
+
 def test_run_rust_runtime_returns_none_when_disabled(monkeypatch):
-    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: False)
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: False)
     assert main_mod._run_rust_runtime() is None
 
 
 def test_run_rust_runtime_returns_none_when_binary_missing(monkeypatch):
-    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: True)
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
     monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/missing-kcmt")
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: False)
     assert main_mod._run_rust_runtime() is None
@@ -83,7 +130,7 @@ def test_run_rust_runtime_executes_binary_and_returns_code(monkeypatch):
         assert check is False
         return type("CompletedProcessStub", (), {"returncode": 7})()
 
-    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: True)
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
     monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
     monkeypatch.setattr(main_mod.sys, "argv", ["kcmt", "status", "--repo-path", "."])
@@ -101,7 +148,7 @@ def test_run_rust_runtime_preserves_status_raw_args(monkeypatch):
         assert check is False
         return type("CompletedProcessStub", (), {"returncode": 0})()
 
-    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda: True)
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
     monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
     monkeypatch.setattr(
