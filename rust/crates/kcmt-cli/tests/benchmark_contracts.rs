@@ -161,6 +161,7 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         "response_validation",
         "commit_stage_path",
         "commit_create",
+        "commit_index_flush",
         "commit_read_hash",
         "commit",
         "push",
