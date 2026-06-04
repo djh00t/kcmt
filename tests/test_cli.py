@@ -344,6 +344,12 @@ def test_cli_runtime_benchmark_json(tmp_path, capsys):
     assert payload["corpora"] == ["pytest-cli-runtime-corpus"]
     assert len(payload["results"]) == 3
     assert all(item["runtime"] == "python" for item in payload["results"])
+    assert len(payload["optimization_iterations"]) == 6
+    assert payload["optimization_iterations"][0]["measurement_status"] == "measured"
+    assert all(
+        item["measurement_status"] == "planned"
+        for item in payload["optimization_iterations"][1:]
+    )
 
 
 def test_legacy_cli_benchmark_flag_preserves_provider_dispatch(monkeypatch, tmp_path):
