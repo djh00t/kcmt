@@ -130,8 +130,21 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
     let stages = file_result["stage_timings"]
         .as_array()
         .expect("stage timings array");
-    assert!(stages.iter().any(|stage| stage["stage"] == "commit"));
-    assert!(stages.iter().any(|stage| stage["stage"] == "push"));
+    for expected_stage in [
+        "status_scan",
+        "diff_preparation",
+        "llm_enqueue",
+        "llm_wait",
+        "response_validation",
+        "commit",
+        "push",
+        "snapshot",
+    ] {
+        assert!(
+            stages.iter().any(|stage| stage["stage"] == expected_stage),
+            "missing normalized telemetry stage {expected_stage}: {stages:?}"
+        );
+    }
     assert!(stages.iter().all(|stage| {
         stage["duration_ms"].as_f64().is_some() && stage["items"].as_u64().is_some()
     }));
@@ -146,6 +159,7 @@ fn provider_benchmark_emits_json_csv_and_persists_snapshot() {
         .env("KCMT_CONFIG_HOME", &config_home)
         .env("OPENAI_API_KEY", "test-openai-key")
         .env("KCMT_PROVIDER_RESPONSE", "fix(core): update benchmark")
+        .env("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", "1")
         .args([
             "--benchmark",
             "--provider",
