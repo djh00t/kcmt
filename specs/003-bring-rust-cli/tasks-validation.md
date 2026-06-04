@@ -2,94 +2,175 @@
 
 ## Validation Date
 
-- 2026-03-16
+- 2026-06-05 (Australia/Sydney)
+- Branch/worktree: `codex/rust-feature-equivalence` in `.worktrees/rust-feature-equivalence`
+- Rust binary validated: `rust/target/release/kcmt`
 
 ## Quality Gates
 
-### Python
+### Python, BDD, Rust, and Ink
 
 Command:
 
 ```bash
-make check
+rtk proxy make check
 ```
 
 Result:
 
-- Passed
-- `117 passed, 1 skipped`
-- Coverage: `93.33%`
-
-### Rust
+- Passed.
+- Python strict test gate passed.
+- Rust workspace tests passed.
+- Ink model tests passed.
 
 Command:
 
 ```bash
-cargo test -p kcmt-cli -p kcmt-bench -p kcmt-core
+rtk proxy make quality-gates
 ```
 
 Result:
 
-- Passed
-- `kcmt-cli`: parser, status, workflow, and benchmark contracts passed
-- `kcmt-core`: config and git adapter regressions passed
-- `kcmt-bench`: compiled and linked through the runtime benchmark command path
+- Passed.
+- Python: `149 passed, 1 skipped`.
+- Coverage: `93.88%`.
+- Rust and Ink checks passed.
+
+### Focused Rust and Runtime Parity
+
+Commands:
+
+```bash
+rtk cargo test --manifest-path rust/Cargo.toml -p kcmt-cli workflow::tests -- --nocapture
+rtk cargo test --manifest-path rust/Cargo.toml -p kcmt-cli --test workflow_modes -- --nocapture
+rtk cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+rtk uv run pytest -q --no-cov tests/test_main_entrypoint.py tests/test_rust_workflow_parity_bdd.py tests/test_benchmark.py::test_run_runtime_benchmark_produces_python_results tests/test_cli.py::test_cli_runtime_benchmark_json
+KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE=1 KCMT_PROVIDER_RESPONSE=$'fix(core): preserve benchmark quality\n\nMeasure deterministic Rust provider scoring.' OPENAI_API_KEY=test-openai-key rust/target/release/kcmt --benchmark --provider openai --model gpt-bdd --benchmark-limit 1 --benchmark-timeout 0.1 --benchmark-json --repo-path .
+```
+
+Result:
+
+- `workflow::tests`: `10 passed`.
+- `workflow_modes`: `26 passed`.
+- Rust workspace: `80 passed`.
+- Focused Python/BDD runtime parity: `48 passed`.
+- Release provider quality fixture: `5` runs, quality `100.0`, success rate
+  `1.0`; JSON artifact `/tmp/kcmt-provider-benchmark-quality-after-perf.json`.
 
 ## Runtime Benchmark Evidence
 
-### Synthetic 1,000-file corpus
+### Synthetic 1,000-File Corpus
 
 Command:
 
 ```bash
-REPO=$(./.venv/bin/python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json | ./.venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["repo_path"])')
-KCMT_RUST_BIN="$PWD/rust/target/debug/kcmt" ./.venv/bin/python -m kcmt.main benchmark runtime --repo-path "$REPO" --runtime both --iterations 1 --json
+uv run python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
+KCMT_PROVIDER_RESPONSE='chore(repo): benchmark fake response' \
+KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE=1 \
+KCMT_RUNTIME=python \
+KCMT_CONFIG_HOME=/tmp/kcmt-runtime-bench-config-* \
+uv run kcmt benchmark runtime \
+  --repo-path "$REPO" \
+  --runtime both \
+  --iterations 1 \
+  --rust-bin rust/target/release/kcmt \
+  --json
 ```
 
-Result:
+Result artifact: `/tmp/kcmt-runtime-release-synthetic-1000-after-perf.json`
 
-- Passed
-- Corpus: `synthetic-untracked-1000`
-- Python summary: `3 passed / 0 failed / 0 excluded`
-- Rust summary: `3 passed / 0 failed / 0 excluded`
+- Passed.
+- Corpus: `synthetic-untracked-1000`.
+- Python summary: `3 passed / 0 failed / 0 excluded`.
+- Rust summary: `3 passed / 0 failed / 0 excluded`.
 - Median wall time:
-  - Python: `842.477583 ms`
-  - Rust: `344.909875 ms`
+  - Python: `888.375709 ms`.
+  - Rust: `482.19425 ms`.
 
-### Realistic checked-in corpus
+### Realistic Checked-In Corpus
 
 Command:
 
 ```bash
-KCMT_RUST_BIN="$PWD/rust/target/debug/kcmt" ./.venv/bin/python -m kcmt.main benchmark runtime --repo-path tests/fixtures/runtime_corpus/mini_realistic_repo --runtime both --iterations 1 --json
+KCMT_PROVIDER_RESPONSE='chore(repo): benchmark fake response' \
+KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE=1 \
+KCMT_RUNTIME=python \
+KCMT_CONFIG_HOME=/tmp/kcmt-runtime-bench-config-* \
+uv run kcmt benchmark runtime \
+  --repo-path tests/fixtures/runtime_corpus/mini_realistic_repo \
+  --runtime both \
+  --iterations 1 \
+  --rust-bin rust/target/release/kcmt \
+  --json
+```
+
+Result artifact: `/tmp/kcmt-runtime-release-normalized-after-perf.json`
+
+- Passed.
+- Corpus: `mini-realistic-fixture`.
+- Python summary: `3 passed / 0 failed / 0 excluded`.
+- Rust summary: `3 passed / 0 failed / 0 excluded`.
+- Median wall time:
+  - Python: `893.902875 ms`.
+  - Rust: `473.459208 ms`.
+- Rust workflow results include normalized stage rows for `status_scan`,
+  `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
+  `commit`, `push`, and `snapshot`.
+
+## Live Provider Quality Evidence
+
+Command shape:
+
+```bash
+env -i PATH="$PATH" HOME="$HOME" USER="$USER" TMPDIR="$TMPDIR" \
+  GITHUB_TOKEN="$GITHUB_TOKEN" KCMT_CONFIG_HOME=/tmp/kcmt-live-quality-* \
+  <python-or-rust-kcmt> --benchmark \
+    --provider github \
+    --model openai/gpt-4.1-mini \
+    --benchmark-limit 1 \
+    --benchmark-timeout 30 \
+    --benchmark-json \
+    --repo-path .
 ```
 
 Result:
 
-- Passed
-- Corpus: `mini-realistic-fixture`
-- Python summary: `3 passed / 0 failed / 0 excluded`
-- Rust summary: `3 passed / 0 failed / 0 excluded`
-- Median wall time:
-  - Python: `862.526917 ms`
-  - Rust: `356.545625 ms`
+- Python provider benchmark: quality `92.0`, success `100%`, runs `5`.
+- Rust provider benchmark: quality `92.0`, success `100%`, runs `5`.
+- Quality delta: `0.0` points.
+- Live Anthropic benchmark attempts with `claude-3-5-haiku-latest` returned 404
+  in both Python and Rust and were not used for quality-delta evidence.
 
 ## Validation Fixes Landed During Execution
 
-- Rust git porcelain handling now expands nested untracked files using
-  `--porcelain=v1 -z --untracked-files=all`, which fixed synthetic-corpus
-  `--file`, `--oneshot`, and status snapshot preparation.
-- Python runtime benchmark dispatch now preserves the explicit `benchmark runtime
-  --repo-path` corpus path instead of widening it to the enclosing repository
-  root.
-- Ink benchmark UI now rejects runtime benchmark payloads explicitly and points
-  operators to the legacy CLI runtime benchmark mode.
+- Rust default non-interactive workflow now commits all changed files separately,
+  while `--oneshot` selects and commits exactly one file.
+- Python auto runtime dispatch covers non-TTY default workflow invocations while
+  keeping TTY no-arg interactive behavior on Python.
+- Rust workflow snapshots normalize stage timing rows needed by performance
+  scoreboards.
+- Rust default workflow records per-file prepare/commit failures in the snapshot
+  and continues committing other files when at least one file can still succeed.
+- Rust auto-push preflight skips repositories with no local `origin` without a
+  `git config` subprocess where local `.git/config` is sufficient.
+- Rust `--max-retries` is wired through provider and batch retry policies.
+- Rust `--github-token` populates `GITHUB_TOKEN` for GitHub Models calls.
+- Runtime benchmark command initialization now includes `max_retries` and
+  `prepare_workers` overrides so BDD-time Rust binary builds pass.
+- Rust production workflow paths ignore `KCMT_PROVIDER_RESPONSE` unless
+  `KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE=1` or runtime benchmark mode is set,
+  preventing test fixture output from bypassing provider configuration.
+- `.github/workflows/rust-parity-matrix.yml` now runs Rust workspace tests and
+  Python wrapper/BDD parity tests across Linux, macOS, and Windows, in addition
+  to the existing contract probes.
 
 ## Conclusion
 
-- User Story 1 parity workflows are implemented and validated for the required-now
-  catalog.
-- User Story 2 runtime benchmark mode is implemented, schema-backed, and proven on
-  both synthetic and realistic corpora.
+- User Story 1 parity workflows are implemented and validated for the required
+  command catalog covered by current BDD and Rust integration tests.
+- User Story 2 runtime benchmark mode is implemented, schema-backed, and proven
+  on both synthetic and realistic corpora with the release Rust binary.
 - User Story 3 benchmark UX separation is enforced in CLI routing, Ink backend
-  behavior, and user-facing documentation.
+  behavior, and documentation.
+- Remaining full-scope proof should refresh the cross-platform matrix on this
+  branch before declaring the overall Rust migration complete.
