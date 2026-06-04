@@ -59,8 +59,9 @@ The runtime report includes:
   and `--file <target> --repo-path`; workflow results include `stage_timings`
   when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
   `status_scan`, `diff_preparation`, `llm_enqueue`, `llm_wait`,
-  `response_validation`, `commit`, `push`, and `snapshot` rows so scoreboards
-  can compare stable stage columns across short and skipped paths. Single-file
+  `response_validation`, `commit_stage_path`, `commit_create`,
+  `commit_read_hash`, `commit`, `push`, and `snapshot` rows so scoreboards can
+  compare stable stage columns across short and skipped paths. Single-file
   workflows keep prepare workers at one, and no-origin auto-push records a
   skipped push stage instead of running a failing push.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
