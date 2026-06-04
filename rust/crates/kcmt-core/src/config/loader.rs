@@ -41,6 +41,7 @@ pub struct ConfigOverrides {
     pub use_batch: Option<bool>,
     pub batch_model: Option<String>,
     pub batch_timeout_seconds: Option<u64>,
+    pub file_limit: Option<usize>,
 }
 
 impl ConfigLoader {
