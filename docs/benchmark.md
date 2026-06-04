@@ -57,7 +57,12 @@ The runtime report includes:
 - `corpora`: the stable corpus identifiers included in the run
 - `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
   and `--file <target> --repo-path`; workflow results include `stage_timings`
-  when the runtime wrote snapshot telemetry
+  when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
+  `status_scan`, `diff_preparation`, `llm_enqueue`, `llm_wait`,
+  `response_validation`, `commit`, `push`, and `snapshot` rows so scoreboards
+  can compare stable stage columns across short and skipped paths. Single-file
+  workflows keep prepare workers at one, and no-origin auto-push records a
+  skipped push stage instead of running a failing push.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
 - `optimization_iterations`: one baseline row plus five optimization rows with
   median timing, throughput, quality score, failure count, and the next
