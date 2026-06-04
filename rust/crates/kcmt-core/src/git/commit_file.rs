@@ -21,7 +21,9 @@ fn commit_env() -> HashMap<String, String> {
         .or_else(|| values.get("KCMT_GIT_AUTHOR_EMAIL").cloned())
         .unwrap_or_else(|| "kcmt@example.com".to_string());
 
-    values.entry("GIT_AUTHOR_NAME".to_string()).or_insert(author_name.clone());
+    values
+        .entry("GIT_AUTHOR_NAME".to_string())
+        .or_insert(author_name.clone());
     values
         .entry("GIT_COMMITTER_NAME".to_string())
         .or_insert(author_name);
@@ -34,12 +36,7 @@ fn commit_env() -> HashMap<String, String> {
     values
 }
 
-pub fn commit_file(
-    repo_path: &Path,
-    file_path: &str,
-    message: &str,
-    dry_run: bool,
-) -> Result<()> {
+pub fn commit_file(repo_path: &Path, file_path: &str, message: &str, dry_run: bool) -> Result<()> {
     if dry_run {
         return Ok(());
     }
