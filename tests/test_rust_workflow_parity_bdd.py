@@ -23,6 +23,7 @@ def _run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> st
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     return result.stdout.strip()
 
@@ -31,7 +32,24 @@ def _clean_env(config_home: Path) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
-        if key in {"PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL"}
+        if key
+        in {
+            "PATH",
+            "HOME",
+            "USER",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL",
+            "SystemRoot",
+            "SYSTEMROOT",
+            "ComSpec",
+            "PATHEXT",
+            "TEMP",
+            "TMP",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+        }
     }
     env["KCMT_CONFIG_HOME"] = str(config_home)
     env["KCMT_ALLOW_LOCAL_SYNTHESIS"] = "1"
@@ -217,8 +235,10 @@ def _rust_bin(binary: str) -> Path:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
-    return REPO_ROOT / "rust" / "target" / "debug" / binary
+    binary_name = f"{binary}.exe" if os.name == "nt" else binary
+    return REPO_ROOT / "rust" / "target" / "debug" / binary_name
 
 
 @given(
@@ -665,6 +685,7 @@ def rust_kcmt_commits_file_with_max_retries_zero(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["result"] = result
     workflow_context["output"] = result.stdout
@@ -696,6 +717,7 @@ def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["output"] = result.stdout
     workflow_context["stderr"] = result.stderr
@@ -723,6 +745,7 @@ def python_kcmt_entrypoint_runs_default_workflow_in_auto_runtime_mode(
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["output"] = result.stdout
     workflow_context["stderr"] = result.stderr
@@ -919,6 +942,7 @@ def rust_kcmt_receives_invalid_provider_output(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["result"] = result
 
@@ -942,6 +966,7 @@ def rust_kcmt_runs_default_mode_with_invalid_provider_output(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["result"] = result
     workflow_context["output"] = result.stdout
@@ -969,6 +994,7 @@ def rust_kcmt_receives_fixture_provider_output_without_opt_in(
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     workflow_context["result"] = result
 
