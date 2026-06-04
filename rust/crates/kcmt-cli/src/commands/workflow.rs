@@ -1448,8 +1448,8 @@ fn persist_run_snapshot(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let rendered = serde_json::to_string_pretty(&snapshot)
-        .map_err(|err| KcmtError::Message(err.to_string()))?;
+    let rendered =
+        serde_json::to_string(&snapshot).map_err(|err| KcmtError::Message(err.to_string()))?;
     fs::write(path, rendered)?;
     Ok(())
 }
