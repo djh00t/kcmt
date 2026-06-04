@@ -55,8 +55,9 @@ The runtime report includes:
 
 - `command_set`: currently `local-workflows-v1`
 - `corpora`: the stable corpus identifiers included in the run
-- `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
-  and `--file <target> --repo-path`; workflow results include `stage_timings`
+- `results`: per-runtime results for `status --repo-path`,
+  `--oneshot --repo-path`, default `--repo-path`, and
+  `--file <target> --repo-path`; workflow results include `stage_timings`
   when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
   `arg_parse`, `repo_discovery`, `dispatch`, `config_load`, `status_scan`,
   `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
