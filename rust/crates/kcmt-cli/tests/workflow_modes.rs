@@ -289,6 +289,51 @@ fn oneshot_mode_commits_all_changed_files_separately() {
 }
 
 #[test]
+fn oneshot_mode_respects_file_limit() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
+    fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta seed");
+    git(&repo, &["add", "alpha.py", "beta.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::write(repo.join("alpha.py"), "print('alpha updated')\n").expect("alpha change");
+    fs::write(repo.join("beta.py"), "print('beta updated')\n").expect("beta change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_commit"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--oneshot", "--limit", "1", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("commit binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let committed_alpha = stdout.contains("✓ alpha.py");
+    let committed_beta = stdout.contains("✓ beta.py");
+    assert_ne!(committed_alpha, committed_beta);
+
+    let log = git(&repo, &["log", "--pretty=%s"]);
+    let subjects: Vec<&str> = log.lines().collect();
+    assert_ne!(
+        subjects.contains(&"chore(repo): update alpha"),
+        subjects.contains(&"chore(repo): update beta")
+    );
+
+    let status = git(&repo, &["status", "--short"]);
+    if committed_alpha {
+        assert_eq!(status, " M beta.py");
+    } else {
+        assert_eq!(status, " M alpha.py");
+    }
+}
+
+#[test]
 fn oneshot_mode_commits_deletion_only_change() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
