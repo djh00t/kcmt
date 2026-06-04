@@ -136,7 +136,7 @@ fn commit_file_with_gix(
     let mut stage_path_invoked = false;
     let mut index = match repo.open_index() {
         Ok(index) => index,
-        Err(err) if staging == CommitStaging::StagePath => {
+        Err(_) if staging == CommitStaging::StagePath => {
             let stage_result = stage_path_with_git(repo_path, file_path)?;
             stage_path_ms += stage_result;
             stage_path_invoked = true;
