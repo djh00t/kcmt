@@ -54,6 +54,7 @@ fn runtime_benchmark_python_emits_passing_results_json() {
     seed_runtime_corpus(&repo, "pytest-runtime-python");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_PYTHON_BIN", python_bin())
         .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
         .args(["--runtime", "python", "--iterations", "1", "--json"])
@@ -224,6 +225,29 @@ fn unique_temp_dir(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("kcmt-bench-{label}-{nanos}-{suffix}"));
     fs::create_dir_all(&path).expect("temp dir should be created");
     path
+}
+
+fn python_bin() -> PathBuf {
+    if let Ok(configured) = std::env::var("KCMT_PYTHON_BIN") {
+        if !configured.trim().is_empty() {
+            return PathBuf::from(configured);
+        }
+    }
+    if let Ok(virtual_env) = std::env::var("VIRTUAL_ENV") {
+        let executable = if cfg!(windows) {
+            Path::new(&virtual_env).join("Scripts").join("python.exe")
+        } else {
+            Path::new(&virtual_env).join("bin").join("python")
+        };
+        if executable.exists() {
+            return executable;
+        }
+    }
+    PathBuf::from(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python3"
+    })
 }
 
 fn git(repo: &Path, args: &[&str]) {
