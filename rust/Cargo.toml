@@ -27,5 +27,6 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 gix = { version = "0.73", default-features = false, features = ["status"] }
 
 [profile.release]
+codegen-units = 1
 panic = "abort"
 strip = true
