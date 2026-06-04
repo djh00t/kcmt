@@ -383,7 +383,7 @@ fn excluded_result(
 fn scenario_records_snapshot_telemetry(scenario: &RuntimeScenario) -> bool {
     matches!(
         scenario.workflow_contract_id,
-        "oneshot-repo-path" | "file-repo-path"
+        "default-repo-path" | "oneshot-repo-path" | "file-repo-path"
     )
 }
 
@@ -554,6 +554,13 @@ fn runtime_benchmark_scenarios(
             scenario_id: format!("{corpus_id}:oneshot-repo-path"),
             workflow_contract_id: "oneshot-repo-path",
             command_label: "kcmt --oneshot --repo-path <repo>".to_string(),
+            expected_stdout_fragment: "✓ ",
+            file_target: None,
+        },
+        RuntimeScenario {
+            scenario_id: format!("{corpus_id}:default-repo-path"),
+            workflow_contract_id: "default-repo-path",
+            command_label: "kcmt --repo-path <repo>".to_string(),
             expected_stdout_fragment: "✓ ",
             file_target: None,
         },
@@ -907,6 +914,9 @@ fn scenario_command(
                 "--repo-path".to_string(),
                 repo_path.display().to_string(),
             ]);
+        }
+        "default-repo-path" => {
+            command.extend(["--repo-path".to_string(), repo_path.display().to_string()]);
         }
         _ => {
             let target = scenario
