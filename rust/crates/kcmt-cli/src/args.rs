@@ -157,6 +157,9 @@ pub enum BenchmarkRuntime {
 
 #[derive(Debug, Args, Clone)]
 pub struct RuntimeBenchmarkArgs {
+    #[arg(long)]
+    pub repo_path: Option<String>,
+
     #[arg(long, value_enum, default_value_t = BenchmarkRuntime::Both)]
     pub runtime: BenchmarkRuntime,
 
@@ -220,7 +223,7 @@ mod tests {
         match args.command {
             Some(CliCommand::Benchmark(benchmark)) => match benchmark.command {
                 Some(BenchmarkCommand::Runtime(runtime)) => {
-                    assert_eq!(args.repo_path, "/tmp/repo");
+                    assert_eq!(runtime.repo_path.as_deref(), Some("/tmp/repo"));
                     assert_eq!(runtime.runtime, BenchmarkRuntime::Both);
                     assert_eq!(runtime.iterations, 2);
                     assert!(runtime.json);
