@@ -22,11 +22,7 @@ fn runtime_benchmark_rust_missing_binary_is_reported_as_excluded_json() {
     seed_runtime_corpus(&repo, "pytest-runtime-rust-missing");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
-        .args([
-            "benchmark",
-            "runtime",
-            "--repo-path",
-        ])
+        .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
         .args([
             "--runtime",
@@ -44,10 +40,8 @@ fn runtime_benchmark_rust_missing_binary_is_reported_as_excluded_json() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 3);
-    assert!(results
-        .iter()
-        .all(|item| item["status"] == "excluded"));
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|item| item["status"] == "excluded"));
     assert!(results.iter().all(|item| item["failure_reason"]
         .as_str()
         .unwrap_or_default()
@@ -60,19 +54,9 @@ fn runtime_benchmark_python_emits_passing_results_json() {
     seed_runtime_corpus(&repo, "pytest-runtime-python");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
-        .args([
-            "benchmark",
-            "runtime",
-            "--repo-path",
-        ])
+        .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
-        .args([
-            "--runtime",
-            "python",
-            "--iterations",
-            "1",
-            "--json",
-        ])
+        .args(["--runtime", "python", "--iterations", "1", "--json"])
         .output()
         .expect("kcmt benchmark runtime should run");
 
@@ -80,10 +64,41 @@ fn runtime_benchmark_python_emits_passing_results_json() {
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|item| item["runtime"] == "python"));
+    assert!(results.iter().any(|item| item["status"] == "passed"));
     assert!(results
         .iter()
-        .all(|item| item["runtime"] == "python" && item["status"] == "passed"));
+        .any(|item| item["workflow_contract_id"] == "batch-repo-path"
+            && item["status"] == "excluded"));
+    assert!(payload["scoreboard"]["rows"].is_array());
+    assert!(results.iter().all(|item| item["stage_timings"].is_array()));
+    assert!(results
+        .iter()
+        .filter(|item| item["status"] == "passed")
+        .all(|item| !item["stage_timings"]
+            .as_array()
+            .expect("stage timings array")
+            .is_empty()));
+}
+
+#[test]
+fn runtime_benchmark_markdown_includes_python_vs_rust_scoreboard() {
+    let repo = init_repo();
+    seed_runtime_corpus(&repo, "pytest-runtime-scoreboard");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .args(["benchmark", "runtime", "--repo-path"])
+        .arg(&repo)
+        .args(["--runtime", "python", "--iterations", "1"])
+        .output()
+        .expect("kcmt benchmark runtime should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("## Python vs Rust Scoreboard"));
+    assert!(stdout
+        .contains("| Stage | Python ms | Rust ms | Delta ms | Rust change % | Status | Notes |"));
 }
 
 fn unique_temp_dir(label: &str) -> PathBuf {
@@ -124,8 +139,7 @@ fn seed_runtime_corpus(repo: &Path, corpus_id: &str) {
     let source_file = repo.join("src").join("app.py");
     fs::create_dir_all(source_file.parent().expect("source parent"))
         .expect("source dir should be created");
-    fs::write(&source_file, "def greet() -> str:\n    return 'hello'\n")
-        .expect("source file");
+    fs::write(&source_file, "def greet() -> str:\n    return 'hello'\n").expect("source file");
     fs::write(
         repo.join(".kcmt-runtime-corpus.json"),
         format!(
@@ -135,6 +149,9 @@ fn seed_runtime_corpus(repo: &Path, corpus_id: &str) {
     .expect("metadata file");
     git(repo, &["add", "."]);
     git(repo, &["commit", "-m", "chore(repo): seed"]);
-    fs::write(source_file, "def greet() -> str:\n    return 'hello runtime'\n")
-        .expect("modified source");
+    fs::write(
+        source_file,
+        "def greet() -> str:\n    return 'hello runtime'\n",
+    )
+    .expect("modified source");
 }
