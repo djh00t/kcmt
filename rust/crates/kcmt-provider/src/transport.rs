@@ -38,12 +38,7 @@ impl AsyncTransport {
         })
     }
 
-    pub async fn post_json(
-        &self,
-        url: &str,
-        headers: HeaderMap,
-        payload: &Value,
-    ) -> Result<Value> {
+    pub async fn post_json(&self, url: &str, headers: HeaderMap, payload: &Value) -> Result<Value> {
         let mut attempt = 0usize;
         loop {
             attempt += 1;
@@ -66,10 +61,16 @@ impl AsyncTransport {
                         sleep(self.retry_policy.base_backoff * attempt as u32).await;
                         continue;
                     }
-                    return Err(anyhow!("provider request failed with status {}", resp.status()));
+                    return Err(anyhow!(
+                        "provider request failed with status {}",
+                        resp.status()
+                    ));
                 }
                 Ok(resp) => {
-                    return Err(anyhow!("provider request failed with status {}", resp.status()));
+                    return Err(anyhow!(
+                        "provider request failed with status {}",
+                        resp.status()
+                    ));
                 }
                 Err(err) if attempt < self.retry_policy.max_attempts => {
                     sleep(self.retry_policy.base_backoff * attempt as u32).await;
