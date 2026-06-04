@@ -119,18 +119,29 @@ impl PushOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WorkflowOutputOptions {
     pub compact: bool,
     pub verbose: bool,
     pub profile_startup: bool,
+    pub startup_stages: Vec<WorkflowStageTiming>,
 }
 
-#[derive(Debug, Clone)]
-struct WorkflowStageTiming {
-    stage: &'static str,
-    duration_ms: f64,
-    items: usize,
+impl WorkflowOutputOptions {
+    pub fn record_startup_stage(&mut self, stage: &'static str, duration_ms: f64, items: usize) {
+        self.startup_stages.push(WorkflowStageTiming {
+            stage,
+            duration_ms,
+            items,
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WorkflowStageTiming {
+    pub stage: &'static str,
+    pub duration_ms: f64,
+    pub items: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,6 +151,13 @@ struct WorkflowTelemetry {
 }
 
 impl WorkflowTelemetry {
+    fn from_startup_stages(stages: Vec<WorkflowStageTiming>) -> Self {
+        Self {
+            stages,
+            prepare_workers: 0,
+        }
+    }
+
     fn record_since(&mut self, stage: &'static str, start: Instant, items: usize) {
         self.stages.push(WorkflowStageTiming {
             stage,
@@ -171,9 +189,13 @@ pub fn run_file_workflow(
     overrides: ConfigOverrides,
     output_options: WorkflowOutputOptions,
 ) -> Result<String> {
+    let workflow_start = Instant::now();
+    let config_start = Instant::now();
     let config = load_config(&repo_path, &overrides)?;
+    let mut telemetry =
+        WorkflowTelemetry::from_startup_stages(output_options.startup_stages.clone());
+    telemetry.record_since("config_load", config_start, 1);
     let repo = CliGitRepository::from_path(&repo_path);
-    let mut telemetry = WorkflowTelemetry::default();
     let status_start = Instant::now();
     let entries = parse_status_entries(&repo.status_porcelain()?);
     telemetry.record_since("status_scan", status_start, entries.len());
@@ -189,6 +211,7 @@ pub fn run_file_workflow(
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
         output_options,
+        workflow_start,
     )
 }
 
@@ -197,9 +220,13 @@ pub fn run_oneshot_workflow(
     overrides: ConfigOverrides,
     output_options: WorkflowOutputOptions,
 ) -> Result<String> {
+    let workflow_start = Instant::now();
+    let config_start = Instant::now();
     let config = load_config(&repo_path, &overrides)?;
+    let mut telemetry =
+        WorkflowTelemetry::from_startup_stages(output_options.startup_stages.clone());
+    telemetry.record_since("config_load", config_start, 1);
     let repo = CliGitRepository::from_path(&repo_path);
-    let mut telemetry = WorkflowTelemetry::default();
     let status_start = Instant::now();
     let mut entries = parse_status_entries(&repo.status_porcelain()?);
     if let Some(limit) = overrides.file_limit.filter(|limit| *limit > 0) {
@@ -219,6 +246,7 @@ pub fn run_oneshot_workflow(
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
         output_options,
+        workflow_start,
     )
 }
 
@@ -227,9 +255,13 @@ pub fn run_default_workflow(
     overrides: ConfigOverrides,
     output_options: WorkflowOutputOptions,
 ) -> Result<String> {
+    let workflow_start = Instant::now();
+    let config_start = Instant::now();
     let config = load_config(&repo_path, &overrides)?;
+    let mut telemetry =
+        WorkflowTelemetry::from_startup_stages(output_options.startup_stages.clone());
+    telemetry.record_since("config_load", config_start, 1);
     let repo = CliGitRepository::from_path(&repo_path);
-    let mut telemetry = WorkflowTelemetry::default();
     let status_start = Instant::now();
     let mut entries = parse_status_entries(&repo.status_porcelain()?);
     if let Some(limit) = overrides.file_limit.filter(|limit| *limit > 0) {
@@ -248,6 +280,7 @@ pub fn run_default_workflow(
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
         output_options,
+        workflow_start,
     )
 }
 
@@ -267,6 +300,7 @@ fn run_entries_workflow(
     max_attempts: usize,
     prepare_workers_override: Option<usize>,
     output_options: WorkflowOutputOptions,
+    workflow_start: Instant,
 ) -> Result<String> {
     let total_entries = entries.len();
     let mut commits = Vec::new();
@@ -351,6 +385,7 @@ fn run_entries_workflow(
         total_entries,
         &push_outcome,
         &mut telemetry,
+        workflow_start,
     )?;
 
     if commits.is_empty() && total_entries <= 1 {
@@ -1267,6 +1302,7 @@ fn persist_run_snapshot(
     total_entries: usize,
     push_outcome: &PushOutcome,
     telemetry: &mut WorkflowTelemetry,
+    workflow_start: Instant,
 ) -> Result<()> {
     let snapshot_start = Instant::now();
     let file_commits: Vec<_> = commits
@@ -1342,6 +1378,7 @@ fn persist_run_snapshot(
         }));
     }
     telemetry.record_since("snapshot", snapshot_start, 1);
+    telemetry.record_since("workflow_total", workflow_start, total_entries);
 
     let snapshot = json!({
         "schema_version": 1,
