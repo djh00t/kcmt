@@ -90,15 +90,17 @@ uv run kcmt benchmark runtime \
   --json
 ```
 
-Result artifact: `/tmp/kcmt-runtime-release-synthetic-1000-after-perf.json`
+Result artifact: `/tmp/kcmt-runtime-current-synthetic-1000-fixed.json`
 
 - Passed.
 - Corpus: `synthetic-untracked-1000`.
+- Command set: `status-repo-path`, `oneshot-repo-path`, and `file-repo-path`; the documented large synthetic corpus excludes default multi-file commits so runtime mode remains focused on startup, repo scanning, explicit repo-path handling, and file-scoped prompt preparation.
 - Python summary: `3 passed / 0 failed / 0 excluded`.
 - Rust summary: `3 passed / 0 failed / 0 excluded`.
 - Median wall time:
-  - Python: `888.375709 ms`.
-  - Rust: `482.19425 ms`.
+  - Python: `806.140583 ms`.
+  - Rust: `227.613875 ms`.
+- Speedup: `71.76%`.
 
 ### Realistic Checked-In Corpus
 
@@ -117,15 +119,17 @@ uv run kcmt benchmark runtime \
   --json
 ```
 
-Result artifact: `/tmp/kcmt-runtime-release-normalized-after-perf.json`
+Result artifact: `/tmp/kcmt-runtime-current-mini-fixed.json`
 
 - Passed.
 - Corpus: `mini-realistic-fixture`.
-- Python summary: `3 passed / 0 failed / 0 excluded`.
-- Rust summary: `3 passed / 0 failed / 0 excluded`.
+- Command set: `status-repo-path`, `oneshot-repo-path`, `default-repo-path`, and `file-repo-path`.
+- Python summary: `4 passed / 0 failed / 0 excluded`.
+- Rust summary: `4 passed / 0 failed / 0 excluded`.
 - Median wall time:
-  - Python: `893.902875 ms`.
-  - Rust: `473.459208 ms`.
+  - Python: `863.963104 ms`.
+  - Rust: `200.194584 ms`.
+- Speedup: `76.83%`.
 - Rust workflow results include normalized stage rows for `status_scan`,
   `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
   `commit`, `push`, and `snapshot`.
