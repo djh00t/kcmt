@@ -86,6 +86,32 @@ fn spawn_provider_response(response_body: &'static str) -> (String, mpsc::Receiv
     (format!("http://{address}"), receiver)
 }
 
+fn spawn_provider_status_response(
+    status: u16,
+    response_body: &'static str,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("mock provider listener");
+    let address = listener.local_addr().expect("mock provider address");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("mock provider connection");
+        let mut buffer = [0_u8; 8192];
+        let bytes = stream.read(&mut buffer).expect("mock provider read");
+        sender
+            .send(String::from_utf8_lossy(&buffer[..bytes]).to_string())
+            .expect("request should be recorded");
+        let response = format!(
+            "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("mock provider write");
+    });
+    (format!("http://{address}"), receiver)
+}
+
 fn spawn_openai_batch_response() -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("mock batch listener");
     let address = listener.local_addr().expect("mock batch address");
@@ -125,6 +151,7 @@ fn spawn_provider_fallback_response() -> (String, mpsc::Receiver<String>) {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let responses = [
+            (500, r#"{"error":{"message":"primary unavailable"}}"#),
             (500, r#"{"error":{"message":"primary unavailable"}}"#),
             (500, r#"{"error":{"message":"primary unavailable"}}"#),
             (500, r#"{"error":{"message":"primary unavailable"}}"#),
@@ -211,18 +238,18 @@ fn oneshot_mode_commits_changed_non_deletions() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("✓ alpha.py"));
-    assert!(stdout.contains("✓ beta.py"));
+    assert!(!stdout.contains("✓ beta.py"));
     let log = git(&repo, &["log", "--pretty=%s"]);
     let subjects: Vec<&str> = log.lines().collect();
     assert!(subjects.contains(&"chore(repo): update alpha"));
-    assert!(subjects.contains(&"chore(repo): update beta"));
+    assert!(!subjects.contains(&"chore(repo): update beta"));
 
     let status = git(&repo, &["status", "--short"]);
-    assert!(status.is_empty(), "unexpected dirty status: {status}");
+    assert_eq!(status, "M beta.py");
 }
 
 #[test]
-fn oneshot_mode_commits_all_changed_files_separately() {
+fn oneshot_mode_persists_single_selected_file_snapshot() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
@@ -248,15 +275,122 @@ fn oneshot_mode_commits_all_changed_files_separately() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("✓ alpha.py"));
+    assert!(!stdout.contains("✓ beta.py"));
+
+    let log = git(&repo, &["log", "--pretty=%s"]);
+    let subjects: Vec<&str> = log.lines().collect();
+    assert!(subjects.contains(&"chore(repo): update alpha"));
+    assert!(!subjects.contains(&"chore(repo): update beta"));
+
+    let status = git(&repo, &["status", "--short"]);
+    assert_eq!(status, "M beta.py");
+
+    let status_output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["status", "--raw", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt status should run");
+
+    assert!(status_output.status.success());
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&status_output.stdout).expect("raw status is json");
+    assert_eq!(snapshot["counts"]["files_total"], 1);
+    assert_eq!(snapshot["counts"]["commit_success"], 1);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(snapshot["telemetry"]["schema_version"], 1);
+    let stages: Vec<&str> = snapshot["telemetry"]["stages"]
+        .as_array()
+        .expect("telemetry stages")
+        .iter()
+        .map(|stage| stage["stage"].as_str().expect("stage name"))
+        .collect();
+    assert!(stages.contains(&"status_scan"));
+    assert!(stages.contains(&"diff_preparation"));
+    assert!(stages.contains(&"llm_enqueue"));
+    assert!(stages.contains(&"llm_wait"));
+    assert!(stages.contains(&"response_validation"));
+    assert!(stages.contains(&"commit"));
+    assert!(stages.contains(&"push"));
+    assert!(stages.contains(&"snapshot"));
+    assert_eq!(
+        snapshot["commits"].as_array().expect("commits array").len(),
+        1
+    );
+}
+
+#[test]
+fn default_mode_commits_all_changed_files_separately() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
+    fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta seed");
+    git(&repo, &["add", "alpha.py", "beta.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::write(repo.join("alpha.py"), "print('alpha updated')\n").expect("alpha change");
+    fs::write(repo.join("beta.py"), "print('beta updated')\n").expect("beta change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ alpha.py"));
     assert!(stdout.contains("✓ beta.py"));
 
     let log = git(&repo, &["log", "--pretty=%s"]);
     let subjects: Vec<&str> = log.lines().collect();
     assert!(subjects.contains(&"chore(repo): update alpha"));
     assert!(subjects.contains(&"chore(repo): update beta"));
+    assert!(git(&repo, &["status", "--short"]).is_empty());
+}
 
+#[test]
+fn default_mode_records_prepare_failure_without_blocking_deletion_commit() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("delete_me.txt"), "delete me\n").expect("delete seed");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "delete_me.txt", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::remove_file(repo.join("delete_me.txt")).expect("delete file");
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_PROVIDER_RESPONSE", "This changes a few files")
+        .env("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", "1")
+        .args(["--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ delete_me.txt"));
+    assert!(stdout.contains("✗ tracked.py"));
+    assert!(stdout.contains("missing conventional commit header"));
+
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(delete_me-txt): file deleted");
     let status = git(&repo, &["status", "--short"]);
-    assert!(status.is_empty(), "unexpected dirty status: {status}");
+    assert_eq!(status, "M tracked.py");
 
     let status_output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
         .env("KCMT_CONFIG_HOME", &config_home)
@@ -269,23 +403,108 @@ fn oneshot_mode_commits_all_changed_files_separately() {
     let snapshot: serde_json::Value =
         serde_json::from_slice(&status_output.stdout).expect("raw status is json");
     assert_eq!(snapshot["counts"]["files_total"], 2);
-    assert_eq!(snapshot["counts"]["commit_success"], 2);
-    assert_eq!(snapshot["counts"]["overall_success"], 2);
-    assert_eq!(snapshot["telemetry"]["schema_version"], 1);
-    let stages: Vec<&str> = snapshot["telemetry"]["stages"]
-        .as_array()
-        .expect("telemetry stages")
-        .iter()
-        .map(|stage| stage["stage"].as_str().expect("stage name"))
-        .collect();
-    assert!(stages.contains(&"status_scan"));
-    assert!(stages.contains(&"commit"));
-    assert!(stages.contains(&"push"));
-    assert!(stages.contains(&"snapshot"));
-    assert_eq!(
-        snapshot["commits"].as_array().expect("commits array").len(),
-        2
+    assert_eq!(snapshot["counts"]["prepared_total"], 1);
+    assert_eq!(snapshot["counts"]["processed_total"], 2);
+    assert_eq!(snapshot["counts"]["prepared_failures"], 1);
+    assert_eq!(snapshot["counts"]["commit_success"], 0);
+    assert_eq!(snapshot["counts"]["commit_failure"], 1);
+    assert_eq!(snapshot["counts"]["deletions_total"], 1);
+    assert_eq!(snapshot["counts"]["deletions_success"], 1);
+    assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert_eq!(snapshot["counts"]["overall_failure"], 1);
+    assert_eq!(snapshot["commits"][0]["success"], false);
+    assert_eq!(snapshot["commits"][0]["file_path"], "tracked.py");
+    assert_eq!(snapshot["deletions"][0]["success"], true);
+    assert_eq!(snapshot["deletions"][0]["file_path"], "delete_me.txt");
+}
+
+#[test]
+fn workers_flag_controls_prepare_worker_count_in_snapshot() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
+    fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta seed");
+    git(&repo, &["add", "alpha.py", "beta.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::write(repo.join("alpha.py"), "print('alpha updated')\n").expect("alpha change");
+    fs::write(repo.join("beta.py"), "print('beta updated')\n").expect("beta change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--workers", "2", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+
+    let status_output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["status", "--raw", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt status should run");
+
+    assert!(status_output.status.success());
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&status_output.stdout).expect("raw status is json");
+    assert_eq!(snapshot["telemetry"]["prepare_workers"], 2);
+    assert_eq!(snapshot["counts"]["overall_success"], 2);
+}
+
+#[test]
+fn compact_verbose_and_profile_flags_control_workflow_output() {
+    let repo = init_repo();
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let compact = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args(["--compact", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+    assert!(
+        compact.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compact.stdout),
+        String::from_utf8_lossy(&compact.stderr)
+    );
+    let compact_stdout = String::from_utf8_lossy(&compact.stdout);
+    assert!(compact_stdout.contains("Run Summary"));
+    assert!(compact_stdout.contains("Commits 1  Failures 0"));
+    assert!(!compact_stdout.contains("✓ tracked.py"));
+
+    fs::write(repo.join("tracked.py"), "print('changed again')\n").expect("tracked change");
+    let verbose_profile = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args([
+            "--compact",
+            "--verbose",
+            "--profile-startup",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+    assert!(
+        verbose_profile.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&verbose_profile.stdout),
+        String::from_utf8_lossy(&verbose_profile.stderr)
+    );
+    let verbose_stdout = String::from_utf8_lossy(&verbose_profile.stdout);
+    assert!(verbose_stdout.contains("Run Summary"));
+    assert!(verbose_stdout.contains("✓ tracked.py"));
+    assert!(verbose_stdout.contains("[kcmt-profile] status_scan:"));
+    assert!(verbose_stdout.contains("[kcmt-profile] snapshot:"));
 }
 
 #[test]
@@ -327,10 +546,43 @@ fn oneshot_mode_respects_file_limit() {
 
     let status = git(&repo, &["status", "--short"]);
     if committed_alpha {
-        assert_eq!(status, " M beta.py");
+        assert_eq!(status, "M beta.py");
     } else {
-        assert_eq!(status, " M alpha.py");
+        assert_eq!(status, "M alpha.py");
     }
+}
+
+#[test]
+fn oneshot_limit_applies_before_non_deletion_preference() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("aaa_delete.txt"), "bye\n").expect("delete seed");
+    fs::write(repo.join("zzz_keep.py"), "print('seed')\n").expect("keep seed");
+    git(&repo, &["add", "aaa_delete.txt", "zzz_keep.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::remove_file(repo.join("aaa_delete.txt")).expect("delete tracked file");
+    fs::write(repo.join("zzz_keep.py"), "print('changed')\n").expect("modify later file");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--oneshot", "--limit", "1", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ aaa_delete.txt"));
+    assert!(!stdout.contains("✓ zzz_keep.py"));
+
+    let status = git(&repo, &["status", "--short"]);
+    assert_eq!(status, "M zzz_keep.py");
 }
 
 #[test]
@@ -491,6 +743,7 @@ fn file_mode_uses_sanitized_provider_response_when_available() {
             "KCMT_PROVIDER_RESPONSE",
             "```text\nHere is the commit:\n- `fix(core): handle provider output.`\n```",
         )
+        .env("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", "1")
         .args(["--file", "tracked.py", "--no-auto-push", "--repo-path"])
         .arg(&repo)
         .output()
@@ -554,6 +807,101 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
 }
 
 #[test]
+fn github_token_flag_sets_github_models_api_key() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"choices":[{"message":{"content":"fix(github): use cli token."}}]}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "github",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "GITHUB_TOKEN",
+            "--model",
+            "openai/gpt-test",
+            "--github-token",
+            "cli-gh-token",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be recorded");
+    assert!(request.contains("authorization: Bearer cli-gh-token"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "fix(github): use cli token");
+}
+
+#[test]
+fn max_retries_zero_attempts_provider_once() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_status_response(
+        500,
+        r#"{"error":{"message":"temporary provider failure"}}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-mock",
+            "--max-retries",
+            "0",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        !output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be recorded");
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(request_rx.recv_timeout(Duration::from_millis(200)).is_err());
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(repo): seed");
+}
+
+#[test]
 fn file_mode_falls_back_to_next_configured_provider_after_primary_failure() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
@@ -602,19 +950,19 @@ fn file_mode_falls_back_to_next_configured_provider_after_primary_failure() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let requests: Vec<String> = (0..4)
+    let requests: Vec<String> = (0..5)
         .map(|_| request_rx.recv_timeout(Duration::from_secs(2)).unwrap())
         .collect();
     assert!(requests[0].contains("POST /chat/completions HTTP/1.1"));
     assert!(requests[0].contains("authorization: Bearer primary-key"));
-    assert!(requests[3].contains("POST /v1/messages HTTP/1.1"));
-    assert!(requests[3].contains("x-api-key: fallback-key"));
+    assert!(requests[4].contains("POST /v1/messages HTTP/1.1"));
+    assert!(requests[4].contains("x-api-key: fallback-key"));
     let log = git(&repo, &["log", "--pretty=%s", "-1"]);
     assert_eq!(log, "fix(fallback): use secondary provider");
 }
 
 #[test]
-fn oneshot_openai_batch_queues_all_file_prompts_before_committing() {
+fn default_openai_batch_queues_all_file_prompts_before_committing() {
     let repo = init_repo();
     let (endpoint, request_rx) = spawn_openai_batch_response();
     fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
@@ -627,7 +975,6 @@ fn oneshot_openai_batch_queues_all_file_prompts_before_committing() {
     let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
         .env("OPENAI_TEST_KEY", "test-key")
         .args([
-            "--oneshot",
             "--provider",
             "openai",
             "--endpoint",
@@ -689,6 +1036,7 @@ fn file_mode_aborts_on_invalid_provider_response() {
 
     let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
         .env("KCMT_PROVIDER_RESPONSE", "This changes a few files")
+        .env("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", "1")
         .args(["--file", "tracked.py", "--no-auto-push", "--repo-path"])
         .arg(&repo)
         .output()
@@ -729,6 +1077,29 @@ fn file_mode_without_provider_key_aborts_unless_local_synthesis_is_enabled() {
 }
 
 #[test]
+fn provider_response_fixture_is_ignored_without_explicit_opt_in() {
+    let repo = init_repo();
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_PROVIDER_RESPONSE", "fix(core): should be ignored")
+        .env_remove("KCMT_ALLOW_LOCAL_SYNTHESIS")
+        .args(["--file", "tracked.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No API key available"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(repo): seed");
+}
+
+#[test]
 fn file_mode_commits_nested_untracked_target_only() {
     let repo = init_repo();
     let nested = repo.join("src").join("module_000");
@@ -760,7 +1131,7 @@ fn file_mode_commits_nested_untracked_target_only() {
 }
 
 #[test]
-fn oneshot_mode_commits_nested_untracked_files() {
+fn oneshot_mode_commits_one_nested_untracked_file() {
     let repo = init_repo();
     let nested = repo.join("src").join("module_000");
     fs::create_dir_all(&nested).expect("nested dir");
@@ -776,10 +1147,11 @@ fn oneshot_mode_commits_nested_untracked_files() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("✓ src/module_000/file_0000.py"));
-    assert!(stdout.contains("✓ src/module_000/file_0001.py"));
+    assert!(!stdout.contains("✓ src/module_000/file_0001.py"));
 
     let status = git(&repo, &["status", "--short", "--untracked-files=all"]);
-    assert!(status.is_empty(), "unexpected dirty status: {status}");
+    assert!(status.contains("?? src/module_000/file_0001.py"));
+    assert!(!status.contains("file_0000.py"));
 }
 
 #[test]
