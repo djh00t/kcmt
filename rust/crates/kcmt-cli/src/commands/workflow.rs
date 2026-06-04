@@ -9,7 +9,7 @@ use std::time::Instant;
 use kcmt_core::config::loader::{load_config, ConfigOverrides};
 use kcmt_core::error::KcmtError;
 use kcmt_core::error::Result;
-use kcmt_core::git::commit_file::{commit_file, recent_commit_hash};
+use kcmt_core::git::commit_file::{commit_file_with_staging, recent_commit_hash, CommitStaging};
 use kcmt_core::git::repo::{CliGitRepository, GitRepository};
 use kcmt_core::message::{build_prompt, sanitize_commit_output};
 use kcmt_provider::clients::{
@@ -29,6 +29,18 @@ struct StatusEntry {
 impl StatusEntry {
     fn is_deletion(&self) -> bool {
         self.code.contains('D')
+    }
+
+    fn commit_staging(&self) -> CommitStaging {
+        if self.requires_staging_before_commit() {
+            CommitStaging::StagePath
+        } else {
+            CommitStaging::DirectPath
+        }
+    }
+
+    fn requires_staging_before_commit(&self) -> bool {
+        self.code == "??" || self.code.contains('A') || self.code.contains('U')
     }
 }
 
@@ -279,6 +291,7 @@ fn run_entries_workflow(
     let mut commit_create_ms = 0.0;
     let mut commit_read_hash_ms = 0.0;
     let mut commit_hash_reads = 0;
+    let mut commit_stage_path_invocations = 0;
     for outcome in prepared_outcomes {
         let prepared_entry = match outcome {
             Ok(prepared_entry) => prepared_entry,
@@ -289,15 +302,18 @@ fn run_entries_workflow(
         };
         let entry = prepared_entry.entry;
         let message = prepared_entry.message;
-        let commit_outcome = match commit_file(&repo_path, &entry.path, &message, false) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                unstage_path(&repo_path, &entry.path);
-                failures.push(WorkflowFailure::commit(&entry, err.to_string()));
-                continue;
-            }
-        };
+        let staging = entry.commit_staging();
+        let commit_outcome =
+            match commit_file_with_staging(&repo_path, &entry.path, &message, false, staging) {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    unstage_path(&repo_path, &entry.path);
+                    failures.push(WorkflowFailure::commit(&entry, err.to_string()));
+                    continue;
+                }
+            };
         commit_stage_path_ms += commit_outcome.stage_path_ms;
+        commit_stage_path_invocations += usize::from(commit_outcome.stage_path_invoked);
         commit_create_ms += commit_outcome.create_commit_ms;
         let is_deletion = entry.is_deletion();
 
@@ -313,7 +329,11 @@ fn run_entries_workflow(
             is_deletion,
         });
     }
-    telemetry.record_duration("commit_stage_path", commit_stage_path_ms, commits.len());
+    telemetry.record_duration(
+        "commit_stage_path",
+        commit_stage_path_ms,
+        commit_stage_path_invocations,
+    );
     telemetry.record_duration("commit_create", commit_create_ms, commits.len());
     telemetry.record_duration("commit_read_hash", commit_read_hash_ms, commit_hash_reads);
     telemetry.record_since("commit", commit_start, commits.len());
@@ -1399,6 +1419,7 @@ mod tests {
         heuristic_commit_message, local_origin_remote_probe, parse_status_entries,
         select_prepare_workers, OriginRemoteProbe, StatusEntry,
     };
+    use kcmt_core::git::commit_file::CommitStaging;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1439,6 +1460,25 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn tracked_statuses_can_commit_directly_without_staging() {
+        for code in [" M", " D", "M ", "D ", "MM", "MD", "DM"] {
+            let entry = StatusEntry {
+                code: code.to_string(),
+                path: "tracked.py".to_string(),
+            };
+            assert_eq!(entry.commit_staging(), CommitStaging::DirectPath, "{code}");
+        }
+
+        for code in ["??", "A ", "AM", "UU"] {
+            let entry = StatusEntry {
+                code: code.to_string(),
+                path: "new.py".to_string(),
+            };
+            assert_eq!(entry.commit_staging(), CommitStaging::StagePath, "{code}");
+        }
     }
 
     #[test]
