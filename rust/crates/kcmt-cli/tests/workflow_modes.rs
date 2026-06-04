@@ -825,7 +825,7 @@ fn gix_commit_backend_commits_tracked_file_without_stage_path() {
 }
 
 #[test]
-fn gix_commit_backend_stages_untracked_file_workflow() {
+fn gix_commit_backend_commits_untracked_file_without_stage_path() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
@@ -850,7 +850,8 @@ fn gix_commit_backend_stages_untracked_file_workflow() {
     assert_eq!(git(&repo, &["status", "--short"]), "");
     let snapshot = raw_status_snapshot(&repo, &config_home);
     assert_eq!(snapshot["counts"]["overall_success"], 1);
-    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 1);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_stage_path"), 0);
+    assert_eq!(telemetry_stage_items(&snapshot, "commit_read_hash"), 0);
 }
 
 #[test]
