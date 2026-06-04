@@ -10,5 +10,27 @@
     "ignored-files",
     "nested-paths"
   ],
-  "default_file_target": "src/app.py"
+  "default_file_target": "src/app.py",
+  "file_targets": [
+    {
+      "id": "tracked-modified",
+      "path": "src/app.py"
+    },
+    {
+      "id": "tracked-deleted",
+      "path": "docs/notes.md"
+    },
+    {
+      "id": "untracked",
+      "path": "notes/runtime-benchmark.md"
+    },
+    {
+      "id": "nested-tracked-modified",
+      "path": "src/nested/module.py"
+    },
+    {
+      "id": "large-tracked-modified",
+      "path": "large/runtime-large.txt"
+    }
+  ]
 }
