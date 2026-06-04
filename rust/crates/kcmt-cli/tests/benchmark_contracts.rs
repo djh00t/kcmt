@@ -144,6 +144,7 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         .as_array()
         .expect("stage timings array");
     for expected_stage in [
+        "arg_parse",
         "repo_discovery",
         "dispatch",
         "config_load",
