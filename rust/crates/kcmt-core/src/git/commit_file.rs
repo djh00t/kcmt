@@ -135,6 +135,7 @@ pub struct GixCommitSession {
     index: gix::index::File,
     parent: Option<gix::hash::ObjectId>,
     signature: gix::actor::Signature,
+    index_dirty: bool,
 }
 
 impl GixCommitSession {
@@ -153,6 +154,7 @@ impl GixCommitSession {
             index,
             parent,
             signature,
+            index_dirty: false,
         })
     }
 
@@ -163,13 +165,15 @@ impl GixCommitSession {
         staging: CommitStaging,
     ) -> Result<CommitFileOutcome> {
         let commit_start = Instant::now();
-        let (stage_path_ms, stage_path_invoked) = prepare_index_for_gix_commit(
+        let (stage_path_ms, stage_path_invoked, index_dirty) = prepare_index_for_gix_commit(
             &self.repo,
             &mut self.index,
             &self.repo_path,
             file_path,
             staging,
+            false,
         )?;
+        self.index_dirty |= index_dirty;
         let tree_id = write_commit_tree(&self.repo, &self.index, file_path)?;
         let parents = self.parent.into_iter().collect::<Vec<_>>();
         let commit_id = {
@@ -201,6 +205,18 @@ impl GixCommitSession {
             commit_hash: Some(commit_id.to_string()),
         })
     }
+
+    pub fn flush_index(&mut self) -> Result<f64> {
+        if !self.index_dirty {
+            return Ok(0.0);
+        }
+        let flush_start = Instant::now();
+        self.index
+            .write(gix::index::write::Options::default())
+            .map_err(|err| KcmtError::Message(format!("gix index write failed: {err}")))?;
+        self.index_dirty = false;
+        Ok(flush_start.elapsed().as_secs_f64() * 1000.0)
+    }
 }
 
 fn commit_file_with_gix(
@@ -226,8 +242,8 @@ fn commit_file_with_gix(
         Err(err) => return Err(KcmtError::Message(format!("gix open index failed: {err}"))),
     };
     if !stage_path_invoked {
-        let (prepare_stage_ms, prepare_stage_invoked) =
-            prepare_index_for_gix_commit(&repo, &mut index, repo_path, file_path, staging)?;
+        let (prepare_stage_ms, prepare_stage_invoked, _) =
+            prepare_index_for_gix_commit(&repo, &mut index, repo_path, file_path, staging, true)?;
         stage_path_ms += prepare_stage_ms;
         stage_path_invoked = prepare_stage_invoked;
     }
@@ -270,19 +286,22 @@ fn prepare_index_for_gix_commit(
     repo_path: &Path,
     file_path: &str,
     staging: CommitStaging,
-) -> Result<(f64, bool)> {
+    write_index: bool,
+) -> Result<(f64, bool, bool)> {
     if update_path_in_index(repo, index, repo_path, file_path, staging).is_ok() {
-        index
-            .write(gix::index::write::Options::default())
-            .map_err(|err| KcmtError::Message(format!("gix index write failed: {err}")))?;
-        return Ok((0.0, false));
+        if write_index {
+            index
+                .write(gix::index::write::Options::default())
+                .map_err(|err| KcmtError::Message(format!("gix index write failed: {err}")))?;
+        }
+        return Ok((0.0, false, !write_index));
     }
 
     let stage_path_ms = stage_path_with_git(repo_path, file_path)?;
     *index = repo
         .open_index()
         .map_err(|err| KcmtError::Message(format!("gix reopen index failed: {err}")))?;
-    Ok((stage_path_ms, true))
+    Ok((stage_path_ms, true, false))
 }
 
 fn stage_path_with_git(repo_path: &Path, file_path: &str) -> Result<f64> {
@@ -918,6 +937,9 @@ mod tests {
         assert!(first.commit_hash.is_some());
         assert!(second.commit_hash.is_some());
         assert_ne!(first.commit_hash, second.commit_hash);
+        assert_ne!(git_output(&repo, &["status", "--short"]), "");
+        let flush_ms = session.flush_index().expect("index flush");
+        assert!(flush_ms >= 0.0);
         assert_eq!(git_output(&repo, &["status", "--short"]), "");
         assert_eq!(
             git_output(&repo, &["log", "--pretty=%s", "-2"]),
