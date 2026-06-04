@@ -1,5 +1,6 @@
 //! File-scoped commit execution helpers.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -78,6 +79,10 @@ pub fn commit_file_with_staging(
         return Ok(CommitFileOutcome::default());
     }
 
+    if env::var("KCMT_GIT_COMMIT_BACKEND").as_deref() == Ok("gix") {
+        return commit_file_with_gix(repo_path, file_path, message);
+    }
+
     let (stage_path_ms, stage_path_invoked) = match staging {
         CommitStaging::StagePath => {
             let stage_start = Instant::now();
@@ -114,6 +119,147 @@ pub fn commit_file_with_staging(
         Err(KcmtError::Message(format!(
             "git commit failed for pathspec {file_path}"
         )))
+    }
+}
+
+fn commit_file_with_gix(
+    repo_path: &Path,
+    file_path: &str,
+    message: &str,
+) -> Result<CommitFileOutcome> {
+    let stage_start = Instant::now();
+    let add_status = Command::new("git")
+        .current_dir(repo_path)
+        .args(["add", "-A", "--", file_path])
+        .status()?;
+    let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
+    if !add_status.success() {
+        return Err(KcmtError::Message(format!(
+            "failed to stage path for commit: {file_path}"
+        )));
+    }
+
+    let commit_start = Instant::now();
+    let repo = gix::open(repo_path)
+        .map_err(|err| KcmtError::Message(format!("gix open failed: {err}")))?;
+    let index = repo
+        .open_index()
+        .map_err(|err| KcmtError::Message(format!("gix open index failed: {err}")))?;
+    let tree_id = write_index_tree(&repo, &index)?;
+    let parents = recent_commit_hash(repo_path)?
+        .and_then(|hash| gix::hash::ObjectId::from_hex(hash.as_bytes()).ok())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let signature = gix_signature();
+    let commit_id = {
+        let mut time_buf = gix::actor::date::parse::TimeBuf::default();
+        let signature_ref = signature.to_ref(&mut time_buf);
+        repo.commit_as(
+            signature_ref,
+            signature_ref,
+            "HEAD",
+            message,
+            tree_id,
+            parents,
+        )
+        .map_err(|err| KcmtError::Message(format!("gix commit failed: {err}")))?
+    };
+    let create_commit_ms = commit_start.elapsed().as_secs_f64() * 1000.0;
+    if commit_id.is_null() {
+        return Err(KcmtError::Message(
+            "gix commit produced a null commit id".to_string(),
+        ));
+    }
+    Ok(CommitFileOutcome {
+        stage_path_ms,
+        stage_path_invoked: true,
+        create_commit_ms,
+    })
+}
+
+#[derive(Default)]
+struct TreeNode {
+    files: BTreeMap<Vec<u8>, (gix::objs::tree::EntryMode, gix::hash::ObjectId)>,
+    dirs: BTreeMap<Vec<u8>, TreeNode>,
+}
+
+fn write_index_tree(
+    repo: &gix::Repository,
+    index: &gix::index::File,
+) -> Result<gix::hash::ObjectId> {
+    let mut root = TreeNode::default();
+    for (path, (mode, oid)) in index.entries_with_paths_by_filter_map(|_path, entry| {
+        if entry.stage() != gix::index::entry::Stage::Unconflicted {
+            return None;
+        }
+        entry.mode.to_tree_entry_mode().map(|mode| (mode, entry.id))
+    }) {
+        insert_tree_entry(&mut root, path.as_ref(), mode, oid)?;
+    }
+    write_tree_node(repo, root)
+}
+
+fn insert_tree_entry(
+    node: &mut TreeNode,
+    path: &[u8],
+    mode: gix::objs::tree::EntryMode,
+    oid: gix::hash::ObjectId,
+) -> Result<()> {
+    let mut parts = path
+        .split(|byte| *byte == b'/')
+        .filter(|part| !part.is_empty());
+    let Some(first) = parts.next() else {
+        return Ok(());
+    };
+    let mut current = node;
+    let mut name = first;
+    for next in parts {
+        current = current.dirs.entry(name.to_vec()).or_default();
+        name = next;
+    }
+    current.files.insert(name.to_vec(), (mode, oid));
+    Ok(())
+}
+
+fn write_tree_node(repo: &gix::Repository, node: TreeNode) -> Result<gix::hash::ObjectId> {
+    let mut entries = Vec::with_capacity(node.files.len() + node.dirs.len());
+    for (name, child) in node.dirs {
+        let oid = write_tree_node(repo, child)?;
+        entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Tree.into(),
+            filename: name.into(),
+            oid,
+        });
+    }
+    for (name, (mode, oid)) in node.files {
+        entries.push(gix::objs::tree::Entry {
+            mode,
+            filename: name.into(),
+            oid,
+        });
+    }
+    entries.sort();
+    let tree = gix::objs::Tree { entries };
+    Ok(repo
+        .write_object(tree)
+        .map_err(|err| KcmtError::Message(format!("gix write tree failed: {err}")))?
+        .detach())
+}
+
+fn gix_signature() -> gix::actor::Signature {
+    let env = commit_env();
+    let name = env
+        .get("GIT_AUTHOR_NAME")
+        .cloned()
+        .unwrap_or_else(|| "kcmt-bot".to_string());
+    let email = env
+        .get("GIT_AUTHOR_EMAIL")
+        .cloned()
+        .unwrap_or_else(|| "kcmt@example.com".to_string());
+    gix::actor::Signature {
+        name: name.into(),
+        email: email.into(),
+        time: gix::actor::date::Time::now_local_or_utc(),
     }
 }
 
@@ -194,7 +340,7 @@ fn valid_hash(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::recent_commit_hash;
+    use super::{commit_file_with_gix, recent_commit_hash};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -231,6 +377,25 @@ mod tests {
         );
     }
 
+    fn git_output(repo: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(repo)
+            .env("GIT_AUTHOR_NAME", "kcmt-bot")
+            .env("GIT_AUTHOR_EMAIL", "kcmt@example.com")
+            .env("GIT_COMMITTER_NAME", "kcmt-bot")
+            .env("GIT_COMMITTER_EMAIL", "kcmt@example.com")
+            .args(args)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     #[test]
     fn reads_recent_commit_hash_without_git_log() {
         let repo = unique_temp_dir("recent-commit");
@@ -250,5 +415,45 @@ mod tests {
         let actual = recent_commit_hash(&repo).expect("hash should be read");
 
         assert_eq!(actual.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn gix_commit_backend_commits_tracked_file_and_updates_index() {
+        let repo = unique_temp_dir("gix-commit-tracked");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+        let outcome = commit_file_with_gix(&repo, "tracked.py", "chore(repo): update tracked")
+            .expect("gix commit");
+
+        assert!(outcome.stage_path_invoked);
+        assert!(outcome.create_commit_ms >= 0.0);
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["log", "-1", "--pretty=%s"]),
+            "chore(repo): update tracked"
+        );
+    }
+
+    #[test]
+    fn gix_commit_backend_commits_untracked_file() {
+        let repo = unique_temp_dir("gix-commit-untracked");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("new_file.py"), "print('new')\n").expect("new file");
+
+        commit_file_with_gix(&repo, "new_file.py", "chore(repo): add new file")
+            .expect("gix commit");
+
+        assert_eq!(git_output(&repo, &["status", "--short"]), "");
+        assert_eq!(
+            git_output(&repo, &["log", "-1", "--pretty=%s"]),
+            "chore(repo): add new file"
+        );
     }
 }
