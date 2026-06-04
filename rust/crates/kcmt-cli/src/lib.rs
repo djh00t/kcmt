@@ -5,6 +5,7 @@ pub mod commands;
 
 use clap::Parser;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use kcmt_core::config::loader::ConfigOverrides;
 use kcmt_core::git::repo::find_git_repo_root;
@@ -12,15 +13,18 @@ use kcmt_core::git::repo::find_git_repo_root;
 use args::{CliArgs, CliCommand, StatusArgs};
 use commands::workflow::WorkflowOutputOptions;
 
+#[derive(Debug, Clone)]
+struct RepoDiscovery {
+    requested_repo_path: PathBuf,
+    repo_path: PathBuf,
+    found_repo_path: Option<PathBuf>,
+    duration_ms: f64,
+}
+
 /// Executes a named entrypoint.
 pub fn run_entrypoint(name: &str) -> i32 {
     let args = CliArgs::parse();
     dispatch(name, args)
-}
-
-fn require_git_repo(requested_repo_path: &PathBuf) -> Result<PathBuf, String> {
-    find_git_repo_root(requested_repo_path)
-        .ok_or_else(|| format!("Not a Git repository: {}", requested_repo_path.display()))
 }
 
 fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
@@ -46,10 +50,12 @@ fn output_options(args: &CliArgs) -> WorkflowOutputOptions {
         compact: args.compact,
         verbose: args.verbose,
         profile_startup: args.profile_startup,
+        startup_stages: Vec::new(),
     }
 }
 
 fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
+    let dispatch_start = Instant::now();
     if let Some(token) = args
         .github_token
         .as_ref()
@@ -66,9 +72,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
         return commands::configure::run_verify_keys();
     }
 
-    let requested_repo_path = PathBuf::from(&args.repo_path);
-    let repo_path =
-        find_git_repo_root(&requested_repo_path).unwrap_or_else(|| requested_repo_path.clone());
+    let repo_discovery = discover_repo(&args);
+    let repo_path = repo_discovery.repo_path.clone();
 
     if args.configure || args.configure_all {
         let overrides = config_overrides(&args, repo_path.clone());
@@ -97,15 +102,19 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
         }
         None => {
             if let Some(path) = args.file.clone() {
-                let repo_path = match require_git_repo(&requested_repo_path) {
-                    Ok(repo_path) => repo_path,
-                    Err(err) => {
-                        eprintln!("{err}");
+                let repo_path = match repo_discovery.found_repo_path.clone() {
+                    Some(repo_path) => repo_path,
+                    None => {
+                        eprintln!(
+                            "Not a Git repository: {}",
+                            repo_discovery.requested_repo_path.display()
+                        );
                         return 1;
                     }
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
-                let output_options = output_options(&args);
+                let mut output_options = output_options(&args);
+                add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
                 return match commands::workflow::run_file_workflow(
                     repo_path,
                     &path,
@@ -123,15 +132,19 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                 };
             }
             if args.oneshot {
-                let repo_path = match require_git_repo(&requested_repo_path) {
-                    Ok(repo_path) => repo_path,
-                    Err(err) => {
-                        eprintln!("{err}");
+                let repo_path = match repo_discovery.found_repo_path.clone() {
+                    Some(repo_path) => repo_path,
+                    None => {
+                        eprintln!(
+                            "Not a Git repository: {}",
+                            repo_discovery.requested_repo_path.display()
+                        );
                         return 1;
                     }
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
-                let output_options = output_options(&args);
+                let mut output_options = output_options(&args);
+                add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
                 return match commands::workflow::run_oneshot_workflow(
                     repo_path,
                     overrides,
@@ -147,15 +160,19 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
                     }
                 };
             }
-            let repo_path = match require_git_repo(&requested_repo_path) {
-                Ok(repo_path) => repo_path,
-                Err(err) => {
-                    eprintln!("{err}");
+            let repo_path = match repo_discovery.found_repo_path.clone() {
+                Some(repo_path) => repo_path,
+                None => {
+                    eprintln!(
+                        "Not a Git repository: {}",
+                        repo_discovery.requested_repo_path.display()
+                    );
                     return 1;
                 }
             };
             let overrides = config_overrides(&args, repo_path.clone());
-            let output_options = output_options(&args);
+            let mut output_options = output_options(&args);
+            add_dispatch_telemetry(&mut output_options, &repo_discovery, dispatch_start);
             match commands::workflow::run_default_workflow(repo_path, overrides, output_options) {
                 Ok(output) => {
                     print!("{output}");
@@ -168,4 +185,37 @@ fn dispatch(_entrypoint: &str, args: CliArgs) -> i32 {
             }
         }
     }
+}
+
+fn discover_repo(args: &CliArgs) -> RepoDiscovery {
+    let requested_repo_path = PathBuf::from(&args.repo_path);
+    let repo_start = Instant::now();
+    let found_repo_path = find_git_repo_root(&requested_repo_path);
+    let duration_ms = repo_start.elapsed().as_secs_f64() * 1000.0;
+    let repo_path = found_repo_path
+        .clone()
+        .unwrap_or_else(|| requested_repo_path.clone());
+    RepoDiscovery {
+        requested_repo_path,
+        repo_path,
+        found_repo_path,
+        duration_ms,
+    }
+}
+
+fn add_dispatch_telemetry(
+    output_options: &mut WorkflowOutputOptions,
+    repo_discovery: &RepoDiscovery,
+    dispatch_start: Instant,
+) {
+    output_options.record_startup_stage(
+        "repo_discovery",
+        repo_discovery.duration_ms,
+        usize::from(repo_discovery.found_repo_path.is_some()),
+    );
+    output_options.record_startup_stage(
+        "dispatch",
+        dispatch_start.elapsed().as_secs_f64() * 1000.0,
+        1,
+    );
 }
