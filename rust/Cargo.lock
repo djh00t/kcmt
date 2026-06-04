@@ -734,8 +734,10 @@ dependencies = [
  "clap",
  "kcmt-bench",
  "kcmt-core",
+ "kcmt-provider",
  "serde_json",
  "sha2",
+ "tokio",
 ]
 
 [[package]]
