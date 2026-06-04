@@ -4,6 +4,8 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
+
 fn unique_temp_dir(label: &str) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
@@ -122,6 +124,125 @@ fn file_mode_persists_snapshot_for_status_view() {
     let stdout = String::from_utf8_lossy(&status_output.stdout);
     assert!(stdout.contains("Commit status"));
     assert!(stdout.contains("Success: 1"));
+
+    let raw_status_output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["status", "--repo-path"])
+        .arg(&repo)
+        .arg("--raw")
+        .output()
+        .expect("kcmt raw status should run");
+    assert!(raw_status_output.status.success());
+    let snapshot: Value =
+        serde_json::from_slice(&raw_status_output.stdout).expect("raw status json");
+    let telemetry = snapshot["stats"]["telemetry"]["stages"]
+        .as_array()
+        .expect("telemetry stages");
+    assert!(telemetry
+        .iter()
+        .any(|stage| stage["stage"] == "status_scan"));
+    assert!(telemetry
+        .iter()
+        .any(|stage| stage["stage"] == "response_validation"));
+    assert!(telemetry.iter().any(|stage| stage["stage"] == "commit"));
+    assert!(telemetry.iter().any(|stage| stage["stage"] == "push"));
+    assert!(telemetry.iter().any(|stage| stage["stage"] == "snapshot"));
+}
+
+#[test]
+fn file_mode_uses_fake_llm_response_when_configured() {
+    let repo = init_repo();
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env(
+            "KCMT_FAKE_LLM_RESPONSE",
+            "feat(core): use fake provider response",
+        )
+        .args(["--file", "tracked.py", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("feat(core): use fake provider response"));
+    let log = git(&repo, &["log", "--oneline", "-1"]);
+    assert!(log.contains("feat(core): use fake provider response"));
+}
+
+#[test]
+fn file_mode_with_rust_llm_requires_api_key() {
+    let repo = init_repo();
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_RUST_LLM", "1")
+        .env("KCMT_PROVIDER", "openai")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("KLINGON_CMT_API_KEY")
+        .args(["--file", "tracked.py", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("OPENAI_API_KEY"));
+}
+
+#[test]
+fn default_mode_batches_changed_files_with_queue_telemetry() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("batch-config-home");
+    fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha write");
+    fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_FAKE_LLM_RESPONSE", "feat(core): batch fake response")
+        .args(["--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ alpha.py"));
+    assert!(stdout.contains("✓ beta.py"));
+    let log = git(&repo, &["log", "--oneline"]);
+    assert_eq!(log.matches("feat(core): batch fake response").count(), 2);
+
+    let raw_status_output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["status", "--repo-path"])
+        .arg(&repo)
+        .arg("--raw")
+        .output()
+        .expect("kcmt raw status should run");
+    assert!(raw_status_output.status.success());
+    let snapshot: Value =
+        serde_json::from_slice(&raw_status_output.stdout).expect("raw status json");
+    assert_eq!(snapshot["counts"]["commit_success"], 2);
+    let telemetry = snapshot["stats"]["telemetry"]["stages"]
+        .as_array()
+        .expect("telemetry stages");
+    assert!(telemetry
+        .iter()
+        .any(|stage| stage["stage"] == "time_to_first_llm_enqueue"));
+    assert!(telemetry
+        .iter()
+        .any(|stage| stage["stage"] == "time_to_all_llm_enqueued"));
+    assert!(telemetry
+        .iter()
+        .any(|stage| stage["stage"] == "llm_enqueue"));
+    assert!(telemetry.iter().any(|stage| stage["stage"] == "push"));
 }
 
 #[test]
