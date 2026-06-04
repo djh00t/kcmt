@@ -97,6 +97,20 @@ struct PreparedEntry {
 
 type PreparedOutcome = std::result::Result<PreparedEntry, WorkflowFailure>;
 
+#[derive(Debug, Clone, Copy, Default)]
+struct PreparationTelemetry {
+    diff_preparation_ms: f64,
+    diff_preparation_items: usize,
+    llm_enqueue_ms: f64,
+    llm_enqueue_items: usize,
+}
+
+#[derive(Debug)]
+struct PreparationResult {
+    outcomes: Vec<PreparedOutcome>,
+    telemetry: PreparationTelemetry,
+}
+
 #[derive(Debug, Clone)]
 struct ProviderCandidate {
     provider: String,
@@ -311,11 +325,20 @@ fn run_entries_workflow(
 
     let prepare_workers = select_prepare_workers(entries.len(), prepare_workers_override);
     telemetry.prepare_workers = prepare_workers;
-    telemetry.record_empty("diff_preparation");
-    telemetry.record_empty("llm_enqueue");
     let wait_start = Instant::now();
-    let prepared_outcomes =
+    let preparation =
         prepare_messages_for_entries(&repo_path, entries, config, max_attempts, prepare_workers)?;
+    telemetry.record_duration(
+        "diff_preparation",
+        preparation.telemetry.diff_preparation_ms,
+        preparation.telemetry.diff_preparation_items,
+    );
+    telemetry.record_duration(
+        "llm_enqueue",
+        preparation.telemetry.llm_enqueue_ms,
+        preparation.telemetry.llm_enqueue_items,
+    );
+    let prepared_outcomes = preparation.outcomes;
     let prepared_count = prepared_outcomes
         .iter()
         .filter(|outcome| outcome.is_ok())
@@ -602,7 +625,7 @@ fn prepare_messages_for_entries(
     config: &kcmt_core::model::WorkflowConfig,
     max_attempts: usize,
     prepare_workers: usize,
-) -> Result<Vec<PreparedOutcome>> {
+) -> Result<PreparationResult> {
     if should_use_openai_batch(config) {
         if let Some(api_key) = configured_api_key(config) {
             return prepare_openai_batch_messages(
@@ -625,10 +648,18 @@ fn prepare_messages_for_entries(
                 },
             )
             .collect::<Vec<_>>();
-        return Ok(outcomes);
+        return Ok(PreparationResult {
+            outcomes,
+            telemetry: PreparationTelemetry::default(),
+        });
     }
 
-    prepare_messages_in_workers(repo_path, entries, config, max_attempts, prepare_workers)
+    let outcomes =
+        prepare_messages_in_workers(repo_path, entries, config, max_attempts, prepare_workers)?;
+    Ok(PreparationResult {
+        outcomes,
+        telemetry: PreparationTelemetry::default(),
+    })
 }
 
 fn prepare_messages_in_workers(
@@ -691,10 +722,11 @@ fn prepare_openai_batch_messages(
     config: &kcmt_core::model::WorkflowConfig,
     api_key: &str,
     max_attempts: usize,
-) -> Result<Vec<PreparedOutcome>> {
+) -> Result<PreparationResult> {
     let mut outcomes = Vec::new();
     let mut batch_entries = Vec::new();
     let mut jobs = Vec::new();
+    let mut telemetry = PreparationTelemetry::default();
     let system = "You generate strictly valid Conventional Commit messages.";
     for entry in entries {
         if entry.is_deletion() {
@@ -703,13 +735,19 @@ fn prepare_openai_batch_messages(
             continue;
         }
 
+        let diff_start = Instant::now();
         let diff = match diff_for_entry(repo_path, &entry) {
             Ok(diff) => diff,
             Err(err) => {
+                telemetry.diff_preparation_ms += diff_start.elapsed().as_secs_f64() * 1000.0;
+                telemetry.diff_preparation_items += 1;
                 outcomes.push(Err(WorkflowFailure::prepare(&entry, err.to_string())));
                 continue;
             }
         };
+        telemetry.diff_preparation_ms += diff_start.elapsed().as_secs_f64() * 1000.0;
+        telemetry.diff_preparation_items += 1;
+        let enqueue_start = Instant::now();
         let context = format!("File: {}", entry.path);
         let prompt = build_prompt(&diff, &context, "conventional");
         jobs.push(OpenAiBatchJob {
@@ -719,10 +757,15 @@ fn prepare_openai_batch_messages(
                 ProviderMessage::user(prompt),
             ],
         });
+        telemetry.llm_enqueue_ms += enqueue_start.elapsed().as_secs_f64() * 1000.0;
+        telemetry.llm_enqueue_items += 1;
         batch_entries.push(entry);
     }
     if batch_entries.is_empty() {
-        return Ok(outcomes);
+        return Ok(PreparationResult {
+            outcomes,
+            telemetry,
+        });
     }
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -737,7 +780,10 @@ fn prepare_openai_batch_messages(
                     .into_iter()
                     .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
             );
-            return Ok(outcomes);
+            return Ok(PreparationResult {
+                outcomes,
+                telemetry,
+            });
         }
     };
     let transport = match AsyncTransport::new(
@@ -755,7 +801,10 @@ fn prepare_openai_batch_messages(
                     .into_iter()
                     .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
             );
-            return Ok(outcomes);
+            return Ok(PreparationResult {
+                outcomes,
+                telemetry,
+            });
         }
     };
     let batch_model = config
@@ -780,7 +829,10 @@ fn prepare_openai_batch_messages(
                     .into_iter()
                     .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
             );
-            return Ok(outcomes);
+            return Ok(PreparationResult {
+                outcomes,
+                telemetry,
+            });
         }
     };
     let mut messages_by_id = std::collections::BTreeMap::new();
@@ -811,7 +863,10 @@ fn prepare_openai_batch_messages(
             )));
         }
     }
-    Ok(outcomes)
+    Ok(PreparationResult {
+        outcomes,
+        telemetry,
+    })
 }
 
 fn configured_api_key(config: &kcmt_core::model::WorkflowConfig) -> Option<String> {
