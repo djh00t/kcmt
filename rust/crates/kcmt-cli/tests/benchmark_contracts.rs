@@ -36,7 +36,13 @@ fn runtime_benchmark_rust_missing_binary_is_reported_as_excluded_json() {
         .output()
         .expect("kcmt benchmark runtime should run");
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
@@ -61,7 +67,13 @@ fn runtime_benchmark_python_emits_passing_results_json() {
         .output()
         .expect("kcmt benchmark runtime should run");
 
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
     let results = payload["results"].as_array().expect("results array");
