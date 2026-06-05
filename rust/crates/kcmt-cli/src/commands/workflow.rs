@@ -898,7 +898,11 @@ fn should_use_provider_batch(config: &kcmt_core::model::WorkflowConfig) -> bool 
     matches!(config.provider.as_str(), "openai" | "xai") && config.use_batch
 }
 
-const COMMIT_MESSAGE_SYSTEM_PROMPT: &str = "You generate strictly valid Conventional Commit messages. Return only the commit message. Keep the subject <=72 characters. Prefer a single subject line for simple diffs. Use a body only when it materially improves quality; limit body to three concise factual bullets.";
+fn commit_message_system_prompt(max_commit_length: usize) -> String {
+    format!(
+        "You generate strictly valid Conventional Commit messages. Return only the commit message. Keep the subject <={max_commit_length} characters. Prefer a single subject line for simple diffs. Use a body only when it materially improves quality; limit body to three concise factual bullets."
+    )
+}
 
 fn prepare_provider_batch_messages(
     repo_path: &Path,
@@ -912,7 +916,7 @@ fn prepare_provider_batch_messages(
     let mut batch_entries = Vec::new();
     let mut jobs = Vec::new();
     let mut telemetry = PreparationTelemetry::default();
-    let system = COMMIT_MESSAGE_SYSTEM_PROMPT;
+    let system = commit_message_system_prompt(config.max_commit_length);
     for entry in entries {
         if entry.is_deletion() {
             let message = deletion_commit_message(&entry.path, config.max_commit_length);
@@ -942,7 +946,7 @@ fn prepare_provider_batch_messages(
         jobs.push(OpenAiBatchJob {
             custom_id: entry.path.clone(),
             messages: vec![
-                ProviderMessage::system(system),
+                ProviderMessage::system(system.as_str()),
                 ProviderMessage::user(prompt),
             ],
         });
@@ -1200,12 +1204,19 @@ fn invoke_provider_with_fallback(
         let Some(api_key) = api_key_for_env(&candidate.api_key_env) else {
             continue;
         };
-        match invoke_provider_candidate(repo_path, entry, &candidate, &api_key, max_attempts)
-            .and_then(|raw| {
-                sanitize_commit_output(&raw)
-                    .map(|message| limit_subject(message, config.max_commit_length))
-                    .map_err(KcmtError::Message)
-            }) {
+        match invoke_provider_candidate(
+            repo_path,
+            entry,
+            &candidate,
+            &api_key,
+            max_attempts,
+            config.max_commit_length,
+        )
+        .and_then(|raw| {
+            sanitize_commit_output(&raw)
+                .map(|message| limit_subject(message, config.max_commit_length))
+                .map_err(KcmtError::Message)
+        }) {
             Ok(message) => return Ok(message),
             Err(err) => last_error = Some(err),
         }
@@ -1221,11 +1232,12 @@ fn invoke_provider_candidate(
     candidate: &ProviderCandidate,
     api_key: &str,
     max_attempts: usize,
+    max_commit_length: usize,
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
     let prompt = build_prompt(&diff, &context, "conventional");
-    let system = COMMIT_MESSAGE_SYSTEM_PROMPT;
+    let system = commit_message_system_prompt(max_commit_length);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1245,7 +1257,7 @@ fn invoke_provider_candidate(
             match candidate.provider.as_str() {
                 "openai" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     OpenAiClient::invoke_chat(
@@ -1259,7 +1271,7 @@ fn invoke_provider_candidate(
                 }
                 "xai" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     XaiClient::invoke_chat(
@@ -1273,7 +1285,7 @@ fn invoke_provider_candidate(
                 }
                 "github" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     GitHubModelsClient::invoke_chat(
@@ -1291,7 +1303,7 @@ fn invoke_provider_candidate(
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
-                        system,
+                        system.as_str(),
                         &prompt,
                     )
                     .await

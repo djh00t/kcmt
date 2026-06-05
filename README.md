@@ -173,7 +173,7 @@ test -n "$OPENAI_API_KEY" && \
 
 test -n "$ANTHROPIC_API_KEY" && \
   ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
-    --model claude-3-5-haiku-latest --file path/to/changed-file --no-auto-push --repo-path .
+    --model claude-sonnet-4-20250514 --file path/to/changed-file --no-auto-push --repo-path .
 
 test -n "$OPENAI_API_KEY" && \
   ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
@@ -186,7 +186,7 @@ test -n "$OPENAI_API_KEY" && \
 | Provider  | Default model             | Default endpoint                         |
 |-----------|---------------------------|------------------------------------------|
 | OpenAI    | `gpt-5-mini-2025-08-07`   | `https://api.openai.com/v1`              |
-| Anthropic | `claude-3-5-haiku-latest` | `https://api.anthropic.com`             |
+| Anthropic | `claude-sonnet-4-20250514` | `https://api.anthropic.com`             |
 | xAI       | `grok-code-fast`          | `https://api.x.ai/v1`                   |
 | GitHub    | `openai/gpt-4.1-mini`     | `https://models.github.ai/inference`    |
 

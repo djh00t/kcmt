@@ -70,7 +70,7 @@ test -n "$OPENAI_API_KEY" && \
 
 test -n "$ANTHROPIC_API_KEY" && \
   ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
-    --model claude-3-5-haiku-latest --file path/to/changed-file --no-auto-push --repo-path .
+    --model claude-sonnet-4-20250514 --file path/to/changed-file --no-auto-push --repo-path .
 
 test -n "$OPENAI_API_KEY" && \
   ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
