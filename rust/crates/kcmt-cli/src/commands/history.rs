@@ -76,6 +76,11 @@ mod tests {
     #[test]
     fn uses_python_compatible_snapshot_namespace() {
         let repo = PathBuf::from("/tmp/example repo");
-        assert_eq!(repo_namespace(&repo), "example-repo-d305539e");
+        let expected = if cfg!(windows) {
+            "example-repo-d93b0acf"
+        } else {
+            "example-repo-d305539e"
+        };
+        assert_eq!(repo_namespace(&repo), expected);
     }
 }

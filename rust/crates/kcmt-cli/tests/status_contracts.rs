@@ -25,7 +25,10 @@ fn commit_status_help_uses_commit_branding() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Usage: commit status"));
+    assert!(
+        stdout.contains("Usage: commit status") || stdout.contains("Usage: commit.exe status"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]

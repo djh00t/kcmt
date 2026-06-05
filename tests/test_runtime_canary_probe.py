@@ -53,10 +53,12 @@ def test_build_probe_scenarios_contains_required_ids():
 
     scenarios = probe.build_probe_scenarios("/tmp/rust-kcmt")
     ids = {scenario.id for scenario in scenarios}
+    reasons_by_id = {scenario.id: scenario.expected_reason for scenario in scenarios}
 
     assert "default_python_help" in ids
     assert "auto_canary_missing_bin" in ids
     assert "auto_canary_rust_kcmt_help" in ids
+    assert reasons_by_id["auto_canary_rust_kcmt_help"] == "auto_covered_workflow"
     assert "forced_python_rollback" in ids
 
 

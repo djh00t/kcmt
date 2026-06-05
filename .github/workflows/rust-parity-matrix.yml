@@ -6,6 +6,9 @@ on:
     paths:
       - "rust/**"
       - "kcmt/main.py"
+      - "tests/test_main_entrypoint.py"
+      - "tests/test_rust_workflow_parity_bdd.py"
+      - "tests/features/rust_workflow_parity.feature"
       - "specs/001-rust-parity-migration/**"
       - ".github/workflows/rust-parity-matrix.yml"
 
@@ -36,6 +39,10 @@ jobs:
 
     env:
       UV_CACHE_DIR: .uv-cache
+      GIT_AUTHOR_NAME: "kcmt-ci"
+      GIT_AUTHOR_EMAIL: "kcmt-ci@example.com"
+      GIT_COMMITTER_NAME: "kcmt-ci"
+      GIT_COMMITTER_EMAIL: "kcmt-ci@example.com"
 
     steps:
       - name: Checkout
@@ -49,6 +56,13 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure Git identity
+        shell: bash
+        run: |
+          git config --global user.name "${GIT_AUTHOR_NAME}"
+          git config --global user.email "${GIT_AUTHOR_EMAIL}"
+          git config --global init.defaultBranch main
 
       - name: Install Python dependencies
         shell: bash
@@ -73,6 +87,16 @@ jobs:
         shell: bash
         run: |
           cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+
+      - name: Rust workspace tests
+        shell: bash
+        run: |
+          cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+
+      - name: Python wrapper and BDD parity tests
+        shell: bash
+        run: |
+          uv run pytest -q --no-cov tests/test_main_entrypoint.py tests/test_rust_workflow_parity_bdd.py
 
       - name: Rust contract probes
         shell: bash

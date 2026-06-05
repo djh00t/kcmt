@@ -9,7 +9,8 @@
     "command_set",
     "corpora",
     "results",
-    "summary"
+    "summary",
+    "optimization_iterations"
   ],
   "properties": {
     "schema_version": {
@@ -110,6 +111,32 @@
               "string",
               "null"
             ]
+          },
+          "stage_timings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "stage",
+                "duration_ms",
+                "items"
+              ],
+              "properties": {
+                "stage": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "duration_ms": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "allOf": [
@@ -146,6 +173,78 @@
         }
       },
       "additionalProperties": false
+    },
+    "optimization_iterations": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "required": [
+          "iteration",
+          "label",
+          "baseline",
+          "measurement_status",
+          "median_wall_time_ms",
+          "throughput_commits_per_sec",
+          "quality_score",
+          "failures",
+          "next_bottleneck"
+        ],
+        "properties": {
+          "iteration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseline": {
+            "type": "boolean"
+          },
+          "measurement_status": {
+            "type": "string",
+            "enum": [
+              "measured",
+              "planned"
+            ]
+          },
+          "median_wall_time_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "throughput_commits_per_sec": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "quality_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "failures": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "next_bottleneck": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "$defs": {

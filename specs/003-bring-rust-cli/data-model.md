@@ -47,6 +47,8 @@
   - `command_label` (string) - human-readable command name.
   - `status` (`passed` | `failed` | `excluded`) - outcome class.
   - `failure_reason` (string | null) - explanation for failed/excluded runs.
+  - `stage_timings` (array) - workflow snapshot stage timings such as status
+    scan, LLM wait, commit, push, and snapshot when available.
 - Validation rules:
   - Python and Rust runs for the same scenario MUST use the same corpus and command
     label.
@@ -62,10 +64,14 @@
   - `corpora` (array of corpus ids) - corpora included in the run.
   - `results` (array of runtime benchmark scenarios) - detailed outcomes.
   - `summary` (object) - aggregate per-runtime medians and counts.
+  - `optimization_iterations` (array) - baseline plus five optimization rows with
+    `measurement_status` distinguishing measured evidence from planned work.
 - Validation rules:
   - `schema_version` MUST match the contract schema.
   - Every result MUST refer to a known corpus and workflow contract.
   - Summary statistics MUST be derivable from the underlying results.
+  - Planned optimization rows MUST NOT contain timing, throughput, quality, or
+    failure numbers until measured evidence exists.
 
 ## Entity: Git Backend Decision
 

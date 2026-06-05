@@ -55,9 +55,37 @@ The runtime report includes:
 
 - `command_set`: currently `local-workflows-v1`
 - `corpora`: the stable corpus identifiers included in the run
-- `results`: per-runtime results for `status --repo-path`, `--oneshot --repo-path`,
-  and `--file <target> --repo-path`
+- `results`: per-runtime results for `status --repo-path`,
+  `--oneshot --repo-path`, default `--repo-path`, and
+  `--file <target> --repo-path`; workflow results include `stage_timings`
+  when the runtime wrote snapshot telemetry. Rust workflow snapshots normalize
+  `arg_parse`, `repo_discovery`, `dispatch`, `config_load`, `status_scan`,
+  `diff_preparation`, `llm_enqueue`, `llm_wait`, `response_validation`,
+  `commit_stage_path`, `commit_create`, `commit_read_hash`, `commit`, `push`,
+  `snapshot`, `workflow_total`, and `process_overhead` rows so scoreboards can
+  compare stable stage columns across short and skipped paths. Runtime
+  benchmark reports calculate `process_overhead` from the command median after
+  subtracting `arg_parse`, `repo_discovery`, `dispatch`, and `workflow_total`.
+  Single-file workflows keep prepare workers at one and use path-limited status.
+  `commit_stage_path` item counts record actual staging subprocesses, so tracked
+  direct-path commits can report zero staged items. Rust status scanning uses
+  the gix backend by default; set `KCMT_GIT_STATUS_BACKEND=cli` only for
+  parity/debug comparisons. Set `KCMT_GIT_COMMIT_BACKEND=gix` to compare the
+  opt-in Rust commit backend, which writes tracked-file updates and regular
+  untracked-file index entries, streams blob writes, writes the commit tree, and
+  updates `HEAD` with gix.
+  `KCMT_GIT_TREE_BACKEND=full|path|auto` controls commit-tree construction:
+  small indexes use the full-index writer by default, while large indexes use a
+  path-local tree rewrite. Keep the Git CLI commit backend when hook, signing,
+  or other native `git commit` behavior must be preserved. No-origin auto-push
+  records a skipped push stage instead of running a failing push.
+  Corpus metadata can include named `file_targets` so scoreboards compare
+  tracked modified, tracked deleted, untracked, nested, generated large-file,
+  and generated large-index workflows side by side.
 - `summary`: per-runtime pass/fail/exclusion counts and median wall time
+- `optimization_iterations`: one baseline row plus five optimization rows with
+  median timing, throughput, quality score, failure count, and the next
+  bottleneck label for each iteration.
 
 Missing runtimes are recorded explicitly as `excluded` results. For example, if
 the Rust binary is unavailable, the report still emits Python results and

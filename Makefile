@@ -1,4 +1,4 @@
-.PHONY: help install install-dev format ruff-fix lint test test-ink test-verbose test-strict coverage check typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
+.PHONY: help install install-dev format ruff-fix lint test test-ink test-rust test-verbose test-strict coverage check quality-gates typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
@@ -10,9 +10,11 @@ help:
 	@echo "  format        Format code with black and isort"
 	@echo "  lint          Lint code with ruff"
 	@echo "  test          Run tests"
+	@echo "  test-rust     Run Rust workspace tests"
 	@echo "  test-verbose  Run tests with verbose output"
 	@echo "  coverage      Run tests with coverage report"
 	@echo "  check         Run all fixes and checks (ruff --fix, format, lint, typecheck, test)"
+	@echo "  quality-gates Run full Python, Rust, and UI validation"
 	@echo ""
 	@echo "Build and Release:"
 	@echo "  clean         Clean all build artifacts"
@@ -71,6 +73,9 @@ test:
 test-ink:
 	npm --prefix kcmt/ui/ink test
 
+test-rust:
+	cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+
 test-verbose:
 	$(PYTEST) -v
 
@@ -86,8 +91,11 @@ typecheck:
 	$(UV) run mypy ./$(PACKAGE_NAME)
 
 # All checks
-check: ruff-fix format lint typecheck test-strict test-ink
+check: ruff-fix format lint typecheck test-strict test-rust test-ink
 	@echo "All checks passed!"
+
+quality-gates: check coverage
+	@echo "Quality gates passed!"
 
 # Cleaning
 clean: clean-build clean-cache clean-pyc clean-test

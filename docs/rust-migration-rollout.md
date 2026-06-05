@@ -3,9 +3,9 @@
 ## Rollout Stages
 
 1. **Baseline mode**: set `KCMT_RUNTIME=python` and validate expected Python behavior.
-2. **Canary mode**: set `KCMT_RUNTIME=auto` and `KCMT_RUST_CANARY=1` for selected users/jobs.
-3. **Progressive default planning**: keep canary enabled cohorts expanding only after CI canary + parity gates stay green.
-4. **Default cutover (future feature)**: switch defaults only after canary evidence and rollback drills are complete.
+2. **Default covered workflows**: with `KCMT_RUNTIME=auto`, covered non-TUI commands route to Rust by default.
+3. **Canary mode**: set `KCMT_RUNTIME=auto` and `KCMT_RUST_CANARY=1` to route any remaining unsupported invocation to Rust for investigation.
+4. **Widening**: add new default-covered invocations only after CI canary + parity gates stay green.
 
 ## Safety Controls
 
@@ -13,6 +13,10 @@
 - Require canary probe evidence and parity evidence before widening rollout.
 - Use `KCMT_RUNTIME_TRACE=1` during canary investigations for machine-readable routing diagnostics.
 - Restrict optional TUI behavior to TTY sessions.
+- Covered default Rust commands currently include non-TTY default workflow
+  invocations, `--oneshot`, `--file`, `status`, non-interactive
+  `--configure`/`--configure-all` invocations with explicit override flags,
+  `--list-models`, `--verify-keys`, `--benchmark`, and `benchmark runtime`.
 
 ## Operator Commands
 
@@ -41,6 +45,10 @@ uv run python scripts/canary/runtime_canary_probe.py --rust-bin \"$(pwd)/rust/ta
 python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
 KCMT_RUST_BIN="$(pwd)/rust/target/release/kcmt" uv run kcmt benchmark runtime --repo-path "$REPO" --runtime both --json
 ```
+
+The runtime report includes one baseline row plus five optimization rows with
+timings, throughput, quality scores, failures, and the next bottleneck label for
+each iteration.
 
 ## Rollback Procedure
 

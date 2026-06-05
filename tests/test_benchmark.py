@@ -201,14 +201,58 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
 
     assert payload["schema_version"] == schema["properties"]["schema_version"]["const"]
     assert set(schema["required"]).issubset(payload)
+    assert "optimization_iterations" in schema["properties"]
     assert payload["corpora"] == ["pytest-runtime-corpus"]
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 4
+    assert any(
+        item["workflow_contract_id"] == "default-repo-path"
+        for item in payload["results"]
+    )
     assert {item["runtime"] for item in payload["results"]} == {"python"}
     assert all(item["status"] == "passed" for item in payload["results"])
+    assert all(isinstance(item["stage_timings"], list) for item in payload["results"])
     required_result_fields = set(schema["properties"]["results"]["items"]["required"])
     assert all(required_result_fields.issubset(item) for item in payload["results"])
-    assert payload["summary"]["python"]["passed"] == 3
+    assert payload["summary"]["python"]["passed"] == 4
     assert payload["summary"]["rust"]["scenario_count"] == 0
+    iterations = payload["optimization_iterations"]
+    assert len(iterations) == 6
+    assert iterations[0]["label"] == "baseline"
+    assert iterations[0]["baseline"] is True
+    assert iterations[0]["measurement_status"] == "measured"
+    assert iterations[0]["median_wall_time_ms"] is not None
+    assert iterations[0]["throughput_commits_per_sec"] is not None
+    assert iterations[0]["quality_score"] is not None
+    assert iterations[0]["failures"] is not None
+    assert all(item["measurement_status"] == "planned" for item in iterations[1:])
+    assert all(item["median_wall_time_ms"] is None for item in iterations[1:])
+    assert all(item["throughput_commits_per_sec"] is None for item in iterations[1:])
+    assert all(item["quality_score"] is None for item in iterations[1:])
+    assert all(item["failures"] is None for item in iterations[1:])
+
+
+def test_runtime_benchmark_large_synthetic_excludes_default_workflow(tmp_path):
+    repo = tmp_path / "large-synthetic"
+    repo.mkdir()
+    target = repo / "pkg_000" / "file_00000.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("print('runtime')\n", encoding="utf-8")
+    metadata = {
+        "id": "synthetic-untracked-1000",
+        "kind": "synthetic",
+        "file_count": 1000,
+        "git_history_state": "no-commits",
+        "change_shape": ["untracked", "nested-paths"],
+        "default_file_target": "pkg_000/file_00000.py",
+    }
+
+    scenarios = bench._runtime_benchmark_scenarios(repo, metadata)
+
+    assert [item.workflow_contract_id for item in scenarios] == [
+        "status-repo-path",
+        "oneshot-repo-path",
+        "file-repo-path",
+    ]
 
 
 def test_run_runtime_benchmark_records_missing_rust_binary_as_excluded(tmp_path):
@@ -222,13 +266,17 @@ def test_run_runtime_benchmark_records_missing_rust_binary_as_excluded(tmp_path)
     )
     payload = bench.runtime_benchmark_report_to_dict(report)
 
-    assert len(payload["results"]) == 3
+    assert len(payload["results"]) == 4
+    assert any(
+        item["workflow_contract_id"] == "default-repo-path"
+        for item in payload["results"]
+    )
     assert all(item["status"] == "excluded" for item in payload["results"])
     assert all(
         "Rust binary not available" in (item["failure_reason"] or "")
         for item in payload["results"]
     )
-    assert payload["summary"]["rust"]["excluded"] == 3
+    assert payload["summary"]["rust"]["excluded"] == 4
 
 
 def test_render_benchmark_markdown_report_remains_provider_focused() -> None:
