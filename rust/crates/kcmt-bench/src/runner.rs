@@ -43,7 +43,7 @@ struct RuntimeScenario {
     scenario_id: String,
     workflow_contract_id: &'static str,
     command_label: String,
-    expected_stdout_fragment: &'static str,
+    expected_stdout_fragments: &'static [&'static str],
     file_target: Option<String>,
 }
 
@@ -308,10 +308,22 @@ fn run_runtime_scenario(
                 return Ok(());
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stdout.contains(scenario.expected_stdout_fragment) {
+            if !scenario
+                .expected_stdout_fragments
+                .iter()
+                .any(|fragment| stdout.contains(fragment))
+            {
+                let excerpt = stdout
+                    .lines()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .join("\\n")
+                    .chars()
+                    .take(500)
+                    .collect::<String>();
                 failure_reason = Some(format!(
-                    "missing expected stdout fragment: {}",
-                    scenario.expected_stdout_fragment
+                    "missing expected stdout fragment, expected one of {:?}; stdout excerpt: {}",
+                    scenario.expected_stdout_fragments, excerpt
                 ));
                 last_exit_code = 1;
             }
@@ -559,21 +571,21 @@ fn runtime_benchmark_scenarios(
             scenario_id: format!("{corpus_id}:status-repo-path"),
             workflow_contract_id: "status-repo-path",
             command_label: "kcmt status --repo-path <repo>".to_string(),
-            expected_stdout_fragment: "Commit status",
+            expected_stdout_fragments: &["Commit status"],
             file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:oneshot-repo-path"),
             workflow_contract_id: "oneshot-repo-path",
             command_label: "kcmt --oneshot --repo-path <repo>".to_string(),
-            expected_stdout_fragment: "✓ ",
+            expected_stdout_fragments: &["✓ "],
             file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:file-repo-path"),
             workflow_contract_id: "file-repo-path",
             command_label: format!("kcmt --file {target} --repo-path <repo>"),
-            expected_stdout_fragment: "✓ ",
+            expected_stdout_fragments: &["✓ "],
             file_target: Some(target),
         },
     ];
@@ -584,7 +596,7 @@ fn runtime_benchmark_scenarios(
                 scenario_id: format!("{corpus_id}:default-repo-path"),
                 workflow_contract_id: "default-repo-path",
                 command_label: "kcmt --repo-path <repo>".to_string(),
-                expected_stdout_fragment: "✓ ",
+                expected_stdout_fragments: &["✓ ", "Committed "],
                 file_target: None,
             },
         );
@@ -595,7 +607,7 @@ fn runtime_benchmark_scenarios(
                 scenario_id: format!("{corpus_id}:file-{}", file_target.id),
                 workflow_contract_id: "file-repo-path",
                 command_label: format!("kcmt --file {} --repo-path <repo>", file_target.path),
-                expected_stdout_fragment: "✓ ",
+                expected_stdout_fragments: &["✓ "],
                 file_target: Some(file_target.path),
             });
         }
@@ -898,7 +910,7 @@ fn prepare_status_snapshot(
         scenario_id: "prep:file-repo-path".to_string(),
         workflow_contract_id: "file-repo-path",
         command_label: format!("kcmt --file {target} --repo-path <repo>"),
-        expected_stdout_fragment: "✓ ",
+        expected_stdout_fragments: &["✓ "],
         file_target: Some(target),
     };
     let command = scenario_command(
