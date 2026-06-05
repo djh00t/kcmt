@@ -294,7 +294,7 @@ def test_render_benchmark_markdown_report_remains_provider_focused() -> None:
     exclusions = [
         bench.BenchExclusion(
             provider="anthropic",
-            model="claude-3-5-haiku-latest",
+            model="claude-sonnet-4-20250514",
             reason="missing_api_key",
             detail="ANTHROPIC_API_KEY is not set",
         )

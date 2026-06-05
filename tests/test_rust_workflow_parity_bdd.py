@@ -124,6 +124,30 @@ def _start_batch_provider() -> tuple[str, type[_BatchHandler], HTTPServer]:
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+def _start_partial_batch_provider() -> tuple[str, type[_BatchHandler], HTTPServer]:
+    class Handler(_BatchHandler):
+        requests: list[tuple[str, str, str]] = []
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._record()
+            if self.path == "/batches/batch_1":
+                self._json(
+                    '{"id":"batch_1","status":"completed","output_file_id":"output_1"}'
+                )
+            elif self.path == "/files/output_1/content":
+                self._json(
+                    '{"custom_id":"alpha.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"fix(alpha): batch alpha."}}]}}}\n'
+                    '{"custom_id":"beta.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"This is not conventional"}}]}}}\n'
+                )
+            else:
+                self.send_error(404)
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
 class _FallbackHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str, str]] = []
 
@@ -268,6 +292,21 @@ def git_repository_with_two_changed_files_and_mocked_batch_provider(
 ) -> dict[str, Any]:
     context = git_repository_with_two_changed_tracked_files(tmp_path)
     endpoint, handler, server = _start_batch_provider()
+    context["endpoint"] = endpoint
+    context["batch_handler"] = handler
+    context["batch_server"] = server
+    return context
+
+
+@given(
+    "a git repository with two changed tracked files and a partially invalid OpenAI batch provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_two_changed_files_and_partial_batch_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_two_changed_tracked_files(tmp_path)
+    endpoint, handler, server = _start_partial_batch_provider()
     context["endpoint"] = endpoint
     context["batch_handler"] = handler
     context["batch_server"] = server
@@ -1354,6 +1393,43 @@ def both_files_are_committed_with_the_batch_provider_messages(
     assert "fix(beta): batch beta" in subjects
 
 
+@then("only the valid batch file is committed")
+def only_the_valid_batch_file_is_committed(workflow_context: dict[str, Any]) -> None:
+    output = workflow_context["output"]
+    assert "fix(alpha): batch alpha" in output
+    assert "LLM output missing conventional commit header" in output
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s"])
+    subjects = log.splitlines()
+    assert "fix(alpha): batch alpha" in subjects
+    assert "This is not conventional" not in subjects
+    status = _git(workflow_context["repo"], ["status", "--short"])
+    assert "beta.py" in status
+    assert "alpha.py" not in status
+
+
+@then("provider output and status remain secret-free")
+def provider_output_and_status_remain_secret_free(
+    workflow_context: dict[str, Any],
+) -> None:
+    output = workflow_context["output"]
+    assert "test-key" not in output
+    raw_status = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "status",
+            "--raw",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=_clean_env(workflow_context["config_home"]),
+    )
+    assert "test-key" not in raw_status
+    assert '"api_key_env": "OPENAI_TEST_KEY"' in raw_status
+    assert '"commit_success": 1' in raw_status
+    assert '"commit_failure": 1' in raw_status
+
+
 @then("the fallback provider is used after the primary provider fails")
 def fallback_provider_is_used_after_the_primary_provider_fails(
     workflow_context: dict[str, Any],
@@ -1454,7 +1530,7 @@ def model_list_includes_all_supported_providers(
     assert "openai" in output
     assert "gpt-5-mini-2025-08-07" in output
     assert "anthropic" in output
-    assert "claude-3-5-haiku-latest" in output
+    assert "claude-sonnet-4-20250514" in output
     assert "xai" in output
     assert "github" in output
 

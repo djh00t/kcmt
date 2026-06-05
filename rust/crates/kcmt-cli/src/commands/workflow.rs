@@ -2,6 +2,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -18,6 +21,7 @@ use kcmt_core::message::{build_prompt, sanitize_commit_output};
 use kcmt_provider::clients::{
     AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderMessage, XaiClient,
 };
+use kcmt_provider::error_map::normalize_error;
 use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
 use serde_json::json;
 
@@ -116,6 +120,87 @@ struct PreparationResult {
 }
 
 #[derive(Debug, Clone)]
+struct WorkflowProgress {
+    enabled: bool,
+    mode: &'static str,
+    total: usize,
+    queued: Arc<AtomicUsize>,
+    completed: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+}
+
+impl WorkflowProgress {
+    fn new(mode: &'static str, total: usize, options: &WorkflowOutputOptions) -> Self {
+        let progress = Self {
+            enabled: progress_enabled(options) && total > 0,
+            mode,
+            total,
+            queued: Arc::new(AtomicUsize::new(0)),
+            completed: Arc::new(AtomicUsize::new(0)),
+            failed: Arc::new(AtomicUsize::new(0)),
+        };
+        progress.summary("start");
+        progress
+    }
+
+    fn queued(&self, stage: &'static str, file_path: &str) {
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        self.render(stage, Some(file_path), None);
+    }
+
+    fn event(&self, stage: &'static str, file_path: &str) {
+        self.render(stage, Some(file_path), None);
+    }
+
+    fn completed(&self, file_path: &str) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
+        self.render("done", Some(file_path), Some("ok"));
+    }
+
+    fn failed(&self, file_path: &str) {
+        self.failed.fetch_add(1, Ordering::Relaxed);
+        self.render("done", Some(file_path), Some("failed"));
+    }
+
+    fn summary(&self, stage: &'static str) {
+        self.render(stage, None, None);
+    }
+
+    fn render(&self, stage: &'static str, file_path: Option<&str>, status: Option<&str>) {
+        if !self.enabled {
+            return;
+        }
+        let queued = self.queued.load(Ordering::Relaxed);
+        let completed = self.completed.load(Ordering::Relaxed);
+        let failed = self.failed.load(Ordering::Relaxed);
+        let pending = self.total.saturating_sub(completed + failed);
+        let mut line = format!(
+            "kcmt progress: mode={} stage={} total={} queued={} pending={} completed={} failed={}",
+            self.mode, stage, self.total, queued, pending, completed, failed
+        );
+        if let Some(status) = status {
+            line.push_str(&format!(" status={status}"));
+        }
+        if let Some(file_path) = file_path {
+            line.push_str(&format!(" file={file_path}"));
+        }
+        eprintln!("{line}");
+    }
+}
+
+struct BatchProgress {
+    stop: mpsc::Sender<()>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl BatchProgress {
+    fn stop(self) {
+        let _ = self.stop.send(());
+        let _ = self.handle.join();
+    }
+}
+
+#[derive(Debug, Clone)]
 struct ProviderCandidate {
     provider: String,
     model: String,
@@ -144,6 +229,7 @@ impl PushOutcome {
 pub struct WorkflowOutputOptions {
     pub compact: bool,
     pub verbose: bool,
+    pub no_progress: bool,
     pub profile_startup: bool,
     pub startup_stages: Vec<WorkflowStageTiming>,
 }
@@ -329,9 +415,21 @@ fn run_entries_workflow(
 
     let prepare_workers = select_prepare_workers(entries.len(), prepare_workers_override);
     telemetry.prepare_workers = prepare_workers;
+    let progress_mode = if should_use_provider_batch(config) {
+        "batch"
+    } else {
+        "direct"
+    };
+    let progress = WorkflowProgress::new(progress_mode, entries.len(), &output_options);
     let wait_start = Instant::now();
-    let preparation =
-        prepare_messages_for_entries(&repo_path, entries, config, max_attempts, prepare_workers)?;
+    let preparation = prepare_messages_for_entries(
+        &repo_path,
+        entries,
+        config,
+        max_attempts,
+        prepare_workers,
+        progress,
+    )?;
     telemetry.record_duration(
         "diff_preparation",
         preparation.telemetry.diff_preparation_ms,
@@ -630,6 +728,40 @@ fn runtime_benchmark_enabled() -> bool {
     env_truthy("KCMT_RUNTIME_BENCHMARK")
 }
 
+fn progress_enabled(options: &WorkflowOutputOptions) -> bool {
+    !runtime_benchmark_enabled() && !options.no_progress && !env_truthy("KCMT_NO_PROGRESS")
+}
+
+fn start_batch_progress(
+    progress: WorkflowProgress,
+    model: &str,
+    timeout: Duration,
+) -> Option<BatchProgress> {
+    if !progress.enabled {
+        return None;
+    }
+    progress.summary("submitted");
+    let (stop, receiver) = mpsc::channel();
+    let model = model.to_string();
+    let handle = thread::spawn(move || {
+        let started = Instant::now();
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(15)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    progress.summary("waiting");
+                    eprintln!(
+                        "kcmt progress detail: mode=batch stage=waiting model={model} timeout={}s elapsed={:.0}s",
+                        timeout.as_secs(),
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+            }
+        }
+    });
+    Some(BatchProgress { stop, handle })
+}
+
 fn env_truthy(key: &str) -> bool {
     env::var(key)
         .map(|value| {
@@ -647,15 +779,17 @@ fn prepare_messages_for_entries(
     config: &kcmt_core::model::WorkflowConfig,
     max_attempts: usize,
     prepare_workers: usize,
+    progress: WorkflowProgress,
 ) -> Result<PreparationResult> {
-    if should_use_openai_batch(config) {
+    if should_use_provider_batch(config) {
         if let Some(api_key) = configured_api_key(config) {
-            return prepare_openai_batch_messages(
+            return prepare_provider_batch_messages(
                 repo_path,
                 entries,
                 config,
                 &api_key,
                 max_attempts,
+                progress,
             );
         }
     }
@@ -663,21 +797,37 @@ fn prepare_messages_for_entries(
     if prepare_workers <= 1 || entries.len() <= 1 {
         let outcomes = entries
             .into_iter()
-            .map(
-                |entry| match commit_message_for_entry(repo_path, &entry, config, max_attempts) {
-                    Ok(message) => Ok(PreparedEntry { entry, message }),
-                    Err(err) => Err(WorkflowFailure::prepare(&entry, err.to_string())),
-                },
-            )
+            .map(|entry| {
+                progress.queued("diff", &entry.path);
+                progress.event("llm", &entry.path);
+                match commit_message_for_entry(repo_path, &entry, config, max_attempts) {
+                    Ok(message) => {
+                        progress.completed(&entry.path);
+                        Ok(PreparedEntry { entry, message })
+                    }
+                    Err(err) => {
+                        progress.failed(&entry.path);
+                        Err(WorkflowFailure::prepare(&entry, err.to_string()))
+                    }
+                }
+            })
             .collect::<Vec<_>>();
+        progress.summary("results");
         return Ok(PreparationResult {
             outcomes,
             telemetry: PreparationTelemetry::default(),
         });
     }
 
-    let outcomes =
-        prepare_messages_in_workers(repo_path, entries, config, max_attempts, prepare_workers)?;
+    let outcomes = prepare_messages_in_workers(
+        repo_path,
+        entries,
+        config,
+        max_attempts,
+        prepare_workers,
+        progress.clone(),
+    )?;
+    progress.summary("results");
     Ok(PreparationResult {
         outcomes,
         telemetry: PreparationTelemetry::default(),
@@ -690,6 +840,7 @@ fn prepare_messages_in_workers(
     config: &kcmt_core::model::WorkflowConfig,
     max_attempts: usize,
     prepare_workers: usize,
+    progress: WorkflowProgress,
 ) -> Result<Vec<PreparedOutcome>> {
     let worker_count = prepare_workers.min(entries.len()).max(1);
     let mut buckets = vec![Vec::<(usize, StatusEntry)>::new(); worker_count];
@@ -703,18 +854,27 @@ fn prepare_messages_in_workers(
         .map(|bucket| {
             let repo_path = repo_path.to_path_buf();
             let config = config.clone();
+            let progress = progress.clone();
             thread::spawn(move || {
                 bucket
                     .into_iter()
                     .map(|(index, entry)| {
+                        progress.queued("diff", &entry.path);
+                        progress.event("llm", &entry.path);
                         let outcome = match commit_message_for_entry(
                             &repo_path,
                             &entry,
                             &config,
                             max_attempts,
                         ) {
-                            Ok(message) => Ok(PreparedEntry { entry, message }),
-                            Err(err) => Err(WorkflowFailure::prepare(&entry, err.to_string())),
+                            Ok(message) => {
+                                progress.completed(&entry.path);
+                                Ok(PreparedEntry { entry, message })
+                            }
+                            Err(err) => {
+                                progress.failed(&entry.path);
+                                Err(WorkflowFailure::prepare(&entry, err.to_string()))
+                            }
                         };
                         (index, outcome)
                     })
@@ -734,35 +894,46 @@ fn prepare_messages_in_workers(
     Ok(indexed.into_iter().map(|(_, entry)| entry).collect())
 }
 
-fn should_use_openai_batch(config: &kcmt_core::model::WorkflowConfig) -> bool {
-    config.provider == "openai" && config.use_batch
+fn should_use_provider_batch(config: &kcmt_core::model::WorkflowConfig) -> bool {
+    matches!(config.provider.as_str(), "openai" | "xai") && config.use_batch
 }
 
-fn prepare_openai_batch_messages(
+fn commit_message_system_prompt(max_commit_length: usize) -> String {
+    format!(
+        "You generate strictly valid Conventional Commit messages. Return only the commit message. Keep the subject <={max_commit_length} characters. Prefer a single subject line for simple diffs. Use a body only when it materially improves quality; limit body to three concise factual bullets."
+    )
+}
+
+fn prepare_provider_batch_messages(
     repo_path: &Path,
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
     api_key: &str,
     max_attempts: usize,
+    progress: WorkflowProgress,
 ) -> Result<PreparationResult> {
     let mut outcomes = Vec::new();
     let mut batch_entries = Vec::new();
     let mut jobs = Vec::new();
     let mut telemetry = PreparationTelemetry::default();
-    let system = "You generate strictly valid Conventional Commit messages.";
+    let system = commit_message_system_prompt(config.max_commit_length);
     for entry in entries {
         if entry.is_deletion() {
             let message = deletion_commit_message(&entry.path, config.max_commit_length);
+            progress.queued("local", &entry.path);
+            progress.completed(&entry.path);
             outcomes.push(Ok(PreparedEntry { entry, message }));
             continue;
         }
 
+        progress.queued("diff", &entry.path);
         let diff_start = Instant::now();
         let diff = match diff_for_entry(repo_path, &entry) {
             Ok(diff) => diff,
             Err(err) => {
                 telemetry.diff_preparation_ms += diff_start.elapsed().as_secs_f64() * 1000.0;
                 telemetry.diff_preparation_items += 1;
+                progress.failed(&entry.path);
                 outcomes.push(Err(WorkflowFailure::prepare(&entry, err.to_string())));
                 continue;
             }
@@ -775,12 +946,13 @@ fn prepare_openai_batch_messages(
         jobs.push(OpenAiBatchJob {
             custom_id: entry.path.clone(),
             messages: vec![
-                ProviderMessage::system(system),
+                ProviderMessage::system(system.as_str()),
                 ProviderMessage::user(prompt),
             ],
         });
         telemetry.llm_enqueue_ms += enqueue_start.elapsed().as_secs_f64() * 1000.0;
         telemetry.llm_enqueue_items += 1;
+        progress.event("queued", &entry.path);
         batch_entries.push(entry);
     }
     if batch_entries.is_empty() {
@@ -854,23 +1026,53 @@ fn prepare_openai_batch_messages(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(&config.model);
-    let results = match runtime.block_on(OpenAiClient::invoke_batch(
-        &transport,
-        &config.llm_endpoint,
-        api_key,
-        batch_model,
-        &jobs,
-        Duration::from_secs(config.batch_timeout_seconds),
-        Duration::from_millis(50),
-    )) {
-        Ok(results) => results,
+    let batch_timeout = Duration::from_secs(config.batch_timeout_seconds);
+    let batch_wait = start_batch_progress(progress.clone(), batch_model, batch_timeout);
+    let batch_output = match runtime.block_on(async {
+        match config.provider.as_str() {
+            "openai" => {
+                OpenAiClient::invoke_batch(
+                    &transport,
+                    &config.llm_endpoint,
+                    api_key,
+                    batch_model,
+                    &jobs,
+                    batch_timeout,
+                    Duration::from_millis(50),
+                )
+                .await
+            }
+            "xai" => {
+                XaiClient::invoke_batch(
+                    &transport,
+                    &config.llm_endpoint,
+                    api_key,
+                    batch_model,
+                    &jobs,
+                    batch_timeout,
+                    Duration::from_millis(5000),
+                )
+                .await
+            }
+            other => Err(anyhow::anyhow!("unsupported batch provider: {other}")),
+        }
+    }) {
+        Ok(output) => {
+            if let Some(batch_wait) = batch_wait {
+                batch_wait.stop();
+            }
+            output
+        }
         Err(err) => {
-            let error = format!("provider batch request failed: {err}");
-            outcomes.extend(
-                batch_entries
-                    .into_iter()
-                    .map(|entry| Err(WorkflowFailure::prepare(&entry, error.clone()))),
-            );
+            if let Some(batch_wait) = batch_wait {
+                batch_wait.stop();
+            }
+            let error = provider_error_message("provider batch request failed", &err.to_string());
+            outcomes.extend(batch_entries.into_iter().map(|entry| {
+                progress.failed(&entry.path);
+                Err(WorkflowFailure::prepare(&entry, error.clone()))
+            }));
+            progress.summary("results");
             return Ok(PreparationResult {
                 outcomes,
                 telemetry,
@@ -879,7 +1081,7 @@ fn prepare_openai_batch_messages(
     };
     let mut messages_by_id = std::collections::BTreeMap::new();
     let mut errors_by_id = std::collections::BTreeMap::new();
-    for result in results {
+    for result in batch_output.results {
         match sanitize_commit_output(&result.content) {
             Ok(message) => {
                 messages_by_id.insert(
@@ -892,19 +1094,29 @@ fn prepare_openai_batch_messages(
             }
         }
     }
+    for failure in batch_output.failures {
+        errors_by_id.insert(
+            failure.custom_id,
+            provider_error_message("provider batch response failed", &failure.error),
+        );
+    }
 
     for entry in batch_entries {
         if let Some(message) = messages_by_id.remove(&entry.path) {
+            progress.completed(&entry.path);
             outcomes.push(Ok(PreparedEntry { entry, message }));
         } else if let Some(error) = errors_by_id.remove(&entry.path) {
+            progress.failed(&entry.path);
             outcomes.push(Err(WorkflowFailure::prepare(&entry, error)));
         } else {
+            progress.failed(&entry.path);
             outcomes.push(Err(WorkflowFailure::prepare(
                 &entry,
                 format!("batch response missing {}", entry.path),
             )));
         }
     }
+    progress.summary("results");
     Ok(PreparationResult {
         outcomes,
         telemetry,
@@ -958,7 +1170,7 @@ fn provider_candidates(config: &kcmt_core::model::WorkflowConfig) -> Vec<Provide
 
 fn default_provider_endpoint(provider: &str) -> &'static str {
     match provider {
-        "anthropic" => "https://api.anthropic.com/v1",
+        "anthropic" => "https://api.anthropic.com",
         "xai" => "https://api.x.ai/v1",
         "github" => "https://models.github.ai/inference",
         _ => "https://api.openai.com/v1",
@@ -992,12 +1204,19 @@ fn invoke_provider_with_fallback(
         let Some(api_key) = api_key_for_env(&candidate.api_key_env) else {
             continue;
         };
-        match invoke_provider_candidate(repo_path, entry, &candidate, &api_key, max_attempts)
-            .and_then(|raw| {
-                sanitize_commit_output(&raw)
-                    .map(|message| limit_subject(message, config.max_commit_length))
-                    .map_err(KcmtError::Message)
-            }) {
+        match invoke_provider_candidate(
+            repo_path,
+            entry,
+            &candidate,
+            &api_key,
+            max_attempts,
+            config.max_commit_length,
+        )
+        .and_then(|raw| {
+            sanitize_commit_output(&raw)
+                .map(|message| limit_subject(message, config.max_commit_length))
+                .map_err(KcmtError::Message)
+        }) {
             Ok(message) => return Ok(message),
             Err(err) => last_error = Some(err),
         }
@@ -1013,11 +1232,12 @@ fn invoke_provider_candidate(
     candidate: &ProviderCandidate,
     api_key: &str,
     max_attempts: usize,
+    max_commit_length: usize,
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
     let prompt = build_prompt(&diff, &context, "conventional");
-    let system = "You generate strictly valid Conventional Commit messages.";
+    let system = commit_message_system_prompt(max_commit_length);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1037,7 +1257,7 @@ fn invoke_provider_candidate(
             match candidate.provider.as_str() {
                 "openai" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     OpenAiClient::invoke_chat(
@@ -1051,7 +1271,7 @@ fn invoke_provider_candidate(
                 }
                 "xai" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     XaiClient::invoke_chat(
@@ -1065,7 +1285,7 @@ fn invoke_provider_candidate(
                 }
                 "github" => {
                     let messages = vec![
-                        ProviderMessage::system(system),
+                        ProviderMessage::system(system.as_str()),
                         ProviderMessage::user(prompt),
                     ];
                     GitHubModelsClient::invoke_chat(
@@ -1083,7 +1303,7 @@ fn invoke_provider_candidate(
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
-                        system,
+                        system.as_str(),
                         &prompt,
                     )
                     .await
@@ -1091,7 +1311,26 @@ fn invoke_provider_candidate(
                 other => Err(anyhow::anyhow!("unsupported provider: {other}")),
             }
         })
-        .map_err(|err| KcmtError::Message(format!("provider request failed: {err}")))
+        .map_err(|err| {
+            KcmtError::Message(provider_error_message(
+                "provider request failed",
+                &err.to_string(),
+            ))
+        })
+}
+
+fn provider_error_message(prefix: &str, raw_error: &str) -> String {
+    let normalized = normalize_error(raw_error, provider_status_from_error(raw_error));
+    format!("{prefix}: {}", normalized.message)
+}
+
+fn provider_status_from_error(raw_error: &str) -> Option<u16> {
+    raw_error.split_whitespace().find_map(|part| {
+        part.trim_matches(|ch: char| !ch.is_ascii_digit())
+            .parse::<u16>()
+            .ok()
+            .filter(|status| (400..=599).contains(status))
+    })
 }
 
 fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {

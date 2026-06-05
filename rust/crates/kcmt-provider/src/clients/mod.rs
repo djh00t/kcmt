@@ -59,6 +59,18 @@ pub struct OpenAiBatchResult {
     pub content: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiBatchFailure {
+    pub custom_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenAiBatchOutput {
+    pub results: Vec<OpenAiBatchResult>,
+    pub failures: Vec<OpenAiBatchFailure>,
+}
+
 impl ProviderRequest {
     pub fn header_map(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
@@ -109,9 +121,11 @@ impl OpenAiClient {
     }
 
     pub fn build_batch_jsonl(model: &str, jobs: &[OpenAiBatchJob]) -> String {
+        let token_limit_key = openai_token_limit_key(model);
+        let token_limit = openai_token_limit(model);
         jobs.iter()
             .map(|job| {
-                json!({
+                let mut body = json!({
                     "custom_id": job.custom_id,
                     "method": "POST",
                     "url": "/v1/chat/completions",
@@ -121,19 +135,19 @@ impl OpenAiClient {
                             "role": message.role,
                             "content": message.content,
                         })).collect::<Vec<_>>(),
-                        "max_tokens": 512,
                         "temperature": 1
                     }
-                })
-                .to_string()
+                });
+                body["body"][token_limit_key] = json!(token_limit);
+                body.to_string()
             })
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"
     }
 
-    pub fn parse_batch_output(raw_text: &str) -> Result<Vec<OpenAiBatchResult>, String> {
-        let mut results = Vec::new();
+    pub fn parse_batch_output(raw_text: &str) -> Result<OpenAiBatchOutput, String> {
+        let mut output = OpenAiBatchOutput::default();
         for line in raw_text
             .lines()
             .map(str::trim)
@@ -146,7 +160,14 @@ impl OpenAiClient {
                 .and_then(Value::as_str)
                 .ok_or_else(|| "batch output missing custom_id".to_string())?;
             if let Some(error) = payload.get("error").filter(|value| !value.is_null()) {
-                return Err(format!("batch response error for {custom_id}: {error}"));
+                output.failures.push(OpenAiBatchFailure {
+                    custom_id: custom_id.to_string(),
+                    error: format!(
+                        "batch response error for {custom_id}: {}",
+                        redact_json(error)
+                    ),
+                });
+                continue;
             }
             let response = payload
                 .get("response")
@@ -157,23 +178,30 @@ impl OpenAiClient {
                 .and_then(Value::as_u64)
                 .unwrap_or(200);
             if status_code >= 400 {
-                return Err(format!(
-                    "batch response error for {custom_id} (status {status_code})"
-                ));
+                output.failures.push(OpenAiBatchFailure {
+                    custom_id: custom_id.to_string(),
+                    error: format!("batch response error for {custom_id} (status {status_code})"),
+                });
+                continue;
             }
             let body = response
                 .get("body")
                 .ok_or_else(|| format!("batch output missing body for {custom_id}"))?;
-            let content = Self::parse_chat_response(body)?;
-            results.push(OpenAiBatchResult {
-                custom_id: custom_id.to_string(),
-                content,
-            });
+            match Self::parse_chat_response(body) {
+                Ok(content) => output.results.push(OpenAiBatchResult {
+                    custom_id: custom_id.to_string(),
+                    content,
+                }),
+                Err(error) => output.failures.push(OpenAiBatchFailure {
+                    custom_id: custom_id.to_string(),
+                    error,
+                }),
+            }
         }
-        if results.is_empty() {
+        if output.results.is_empty() && output.failures.is_empty() {
             Err("batch output missing expected responses".to_string())
         } else {
-            Ok(results)
+            Ok(output)
         }
     }
 
@@ -185,9 +213,9 @@ impl OpenAiClient {
         jobs: &[OpenAiBatchJob],
         timeout: Duration,
         poll_interval: Duration,
-    ) -> Result<Vec<OpenAiBatchResult>> {
+    ) -> Result<OpenAiBatchOutput> {
         if jobs.is_empty() {
-            return Ok(Vec::new());
+            return Ok(OpenAiBatchOutput::default());
         }
         let mut headers = BTreeMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
@@ -268,6 +296,28 @@ impl OpenAiClient {
     }
 }
 
+fn redact_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let redacted = map
+                .iter()
+                .map(|(key, value)| {
+                    if key.to_ascii_lowercase().contains("key")
+                        || key.to_ascii_lowercase().contains("token")
+                        || key.to_ascii_lowercase().contains("secret")
+                    {
+                        (key.clone(), Value::String("[redacted]".to_string()))
+                    } else {
+                        (key.clone(), value.clone())
+                    }
+                })
+                .collect::<serde_json::Map<_, _>>();
+            Value::Object(redacted).to_string()
+        }
+        _ => value.to_string(),
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AnthropicClient;
 
@@ -291,11 +341,11 @@ impl AnthropicClient {
         headers.insert("content-type".to_string(), "application/json".to_string());
 
         ProviderRequest {
-            url: format!("{}/v1/messages", trim_endpoint(endpoint)),
+            url: format!("{}/v1/messages", trim_anthropic_endpoint(endpoint)),
             headers,
             payload: json!({
                 "model": model,
-                "max_output_tokens": 512,
+                "max_tokens": 512,
                 "messages": [{
                     "role": "user",
                     "content": [{
@@ -384,6 +434,167 @@ impl XaiClient {
             .await?;
         Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
     }
+
+    pub fn build_batch_requests_payload(model: &str, jobs: &[OpenAiBatchJob]) -> Value {
+        json!({
+            "batch_requests": jobs.iter().map(|job| json!({
+                "batch_request_id": job.custom_id,
+                "batch_request": {
+                    "responses": {
+                        "model": model,
+                        "input": job.messages.iter().map(|message| json!({
+                            "role": message.role,
+                            "content": message.content,
+                        })).collect::<Vec<_>>()
+                    }
+                }
+            })).collect::<Vec<_>>()
+        })
+    }
+
+    pub fn parse_batch_results(payload: &Value) -> OpenAiBatchOutput {
+        let mut output = OpenAiBatchOutput::default();
+        let Some(results) = payload.get("results").and_then(Value::as_array) else {
+            return output;
+        };
+        for result in results {
+            let custom_id = result
+                .get("batch_request_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            if let Some(error) = result.get("error_message").and_then(Value::as_str) {
+                output.failures.push(OpenAiBatchFailure {
+                    custom_id,
+                    error: error.to_string(),
+                });
+                continue;
+            }
+            let content = result
+                .get("batch_result")
+                .and_then(|value| value.get("response"))
+                .and_then(|value| value.get("chat_get_completion"))
+                .or_else(|| result.get("response"))
+                .and_then(|value| parse_openai_compatible_response(value).ok());
+            match content {
+                Some(content) => output
+                    .results
+                    .push(OpenAiBatchResult { custom_id, content }),
+                None => output.failures.push(OpenAiBatchFailure {
+                    custom_id,
+                    error: "xAI batch response missing assistant content".to_string(),
+                }),
+            }
+        }
+        output
+    }
+
+    pub async fn invoke_batch(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        jobs: &[OpenAiBatchJob],
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<OpenAiBatchOutput> {
+        if jobs.is_empty() {
+            return Ok(OpenAiBatchOutput::default());
+        }
+        let mut headers = BTreeMap::new();
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        let headers = ProviderRequest {
+            url: String::new(),
+            headers,
+            payload: Value::Null,
+        }
+        .header_map()?;
+
+        let batch = transport
+            .post_json(
+                &format!("{}/batches", trim_endpoint(endpoint)),
+                headers.clone(),
+                &json!({"name": "kcmt_commit_messages"}),
+            )
+            .await?;
+        let batch_id = batch
+            .get("batch_id")
+            .or_else(|| batch.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("xAI batch create missing batch_id"))?
+            .to_string();
+
+        transport
+            .post_json(
+                &format!("{}/batches/{batch_id}/requests", trim_endpoint(endpoint)),
+                headers.clone(),
+                &Self::build_batch_requests_payload(model, jobs),
+            )
+            .await?;
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            let current = transport
+                .get_json(
+                    &format!("{}/batches/{batch_id}", trim_endpoint(endpoint)),
+                    headers.clone(),
+                )
+                .await?;
+            let pending = current
+                .get("state")
+                .and_then(|state| state.get("num_pending"))
+                .and_then(Value::as_u64);
+            let total = current
+                .get("state")
+                .and_then(|state| state.get("num_requests"))
+                .and_then(Value::as_u64);
+            if pending == Some(0) && total.unwrap_or(0) > 0 {
+                break;
+            }
+            if matches!(
+                current.get("status").and_then(Value::as_str),
+                Some("failed" | "cancelled" | "expired")
+            ) {
+                return Err(anyhow!(
+                    "xAI batch exited with status {:?}",
+                    current.get("status")
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(anyhow!("xAI batch did not complete before timeout"));
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+
+        let mut output = OpenAiBatchOutput::default();
+        let mut pagination_token = None::<String>;
+        loop {
+            let url = match pagination_token.as_deref() {
+                Some(token) => format!(
+                    "{}/batches/{batch_id}/results?limit=100&pagination_token={token}",
+                    trim_endpoint(endpoint)
+                ),
+                None => format!(
+                    "{}/batches/{batch_id}/results?limit=100",
+                    trim_endpoint(endpoint)
+                ),
+            };
+            let page = transport.get_json(&url, headers.clone()).await?;
+            let page_output = Self::parse_batch_results(&page);
+            output.results.extend(page_output.results);
+            output.failures.extend(page_output.failures);
+            pagination_token = page
+                .get("pagination_token")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            if pagination_token.is_none() {
+                break;
+            }
+        }
+        Ok(output)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -434,45 +645,97 @@ fn build_openai_compatible_request(
     headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
     headers.insert("content-type".to_string(), "application/json".to_string());
 
+    let mut payload = json!({
+        "model": model,
+        "messages": messages
+            .iter()
+            .map(|message| json!({
+                "role": message.role,
+                "content": message.content,
+            }))
+            .collect::<Vec<_>>(),
+        "temperature": 1,
+    });
+    payload[openai_token_limit_key(model)] = json!(openai_token_limit(model));
+
     ProviderRequest {
         url: format!("{}/chat/completions", trim_endpoint(endpoint)),
         headers,
-        payload: json!({
-            "model": model,
-            "messages": messages
-                .iter()
-                .map(|message| json!({
-                    "role": message.role,
-                    "content": message.content,
-                }))
-                .collect::<Vec<_>>(),
-            "max_tokens": 512,
-            "temperature": 1,
-        }),
+        payload,
+    }
+}
+
+fn openai_token_limit_key(model: &str) -> &'static str {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.starts_with("gpt-5")
+        || normalized.starts_with("o1")
+        || normalized.starts_with("o3")
+        || normalized.starts_with("o4")
+    {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    }
+}
+
+fn openai_token_limit(model: &str) -> u32 {
+    if openai_token_limit_key(model) == "max_completion_tokens" {
+        4096
+    } else {
+        512
     }
 }
 
 fn parse_openai_compatible_response(payload: &Value) -> Result<String, String> {
-    let content = payload
+    let first_choice = payload
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
-        .and_then(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .or_else(|| choice.get("text"))
-        })
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+        .ok_or_else(|| "provider response missing choices".to_string())?;
 
-    content.ok_or_else(|| "provider response missing assistant content".to_string())
+    let content = first_choice
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| first_choice.get("text"))
+        .and_then(provider_content_text)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    content.ok_or_else(|| {
+        let finish_reason = first_choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        format!("provider response missing assistant content (finish_reason={finish_reason})")
+    })
+}
+
+fn provider_content_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => {
+            let text = items
+                .iter()
+                .filter_map(|item| {
+                    item.get("text")
+                        .or_else(|| item.get("content"))
+                        .and_then(Value::as_str)
+                })
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    }
 }
 
 fn trim_endpoint(endpoint: &str) -> &str {
     endpoint.trim_end_matches('/')
+}
+
+fn trim_anthropic_endpoint(endpoint: &str) -> &str {
+    trim_endpoint(endpoint).trim_end_matches("/v1")
 }
 
 #[cfg(test)]
@@ -519,6 +782,44 @@ mod tests {
     }
 
     #[test]
+    fn openai_gpt5_uses_max_completion_tokens() {
+        let request = OpenAiClient::build_chat_request(
+            "https://api.openai.com/v1",
+            "sk-test",
+            "gpt-5-mini-2025-08-07",
+            &[ProviderMessage::user("prompt")],
+        );
+
+        assert_eq!(request.payload["max_completion_tokens"], 4096);
+        assert!(request.payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn openai_parses_structured_text_content() {
+        let content = OpenAiClient::parse_chat_response(&json!({
+            "choices": [{
+                "message": {
+                    "content": [{"type": "text", "text": "fix(core): parse structured content"}]
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("structured content should parse");
+
+        assert_eq!(content, "fix(core): parse structured content");
+    }
+
+    #[test]
+    fn openai_missing_content_reports_finish_reason() {
+        let err = OpenAiClient::parse_chat_response(&json!({
+            "choices": [{"message": {"content": null}, "finish_reason": "length"}]
+        }))
+        .expect_err("missing content should fail");
+
+        assert!(err.contains("finish_reason=length"));
+    }
+
+    #[test]
     fn anthropic_builds_messages_request_and_extracts_text_chunks() {
         let request = AnthropicClient::build_messages_request(
             "https://api.anthropic.com",
@@ -532,6 +833,8 @@ mod tests {
         assert_eq!(request.headers["x-api-key"], "anthropic-key");
         assert_eq!(request.headers["anthropic-version"], "2023-06-01");
         assert_eq!(request.payload["model"], "claude-test");
+        assert_eq!(request.payload["max_tokens"], 512);
+        assert!(request.payload.get("max_output_tokens").is_none());
         assert_eq!(request.payload["system"], "system");
         assert_eq!(
             request.payload["messages"][0]["content"][0]["text"],
@@ -547,6 +850,19 @@ mod tests {
         }))
         .expect("anthropic response should parse");
         assert_eq!(content, "feat(core): add client\nBody line");
+    }
+
+    #[test]
+    fn anthropic_endpoint_accepts_legacy_v1_suffix() {
+        let request = AnthropicClient::build_messages_request(
+            "https://api.anthropic.com/v1",
+            "anthropic-key",
+            "claude-sonnet-4-20250514",
+            "system",
+            "prompt",
+        );
+
+        assert_eq!(request.url, "https://api.anthropic.com/v1/messages");
     }
 
     #[test]
@@ -576,11 +892,70 @@ mod tests {
     }
 
     #[test]
+    fn xai_builds_responses_batch_requests_payload() {
+        let payload = XaiClient::build_batch_requests_payload(
+            "grok-code-fast",
+            &[OpenAiBatchJob {
+                custom_id: "alpha.py".to_string(),
+                messages: vec![
+                    ProviderMessage::system("system"),
+                    ProviderMessage::user("prompt"),
+                ],
+            }],
+        );
+
+        assert_eq!(payload["batch_requests"][0]["batch_request_id"], "alpha.py");
+        assert_eq!(
+            payload["batch_requests"][0]["batch_request"]["responses"]["model"],
+            "grok-code-fast"
+        );
+        assert_eq!(
+            payload["batch_requests"][0]["batch_request"]["responses"]["input"][0]["role"],
+            "system"
+        );
+        assert_eq!(
+            payload["batch_requests"][0]["batch_request"]["responses"]["input"][1]["content"],
+            "prompt"
+        );
+    }
+
+    #[test]
+    fn xai_parses_batch_results_and_failures() {
+        let output = XaiClient::parse_batch_results(&json!({
+            "results": [
+                {
+                    "batch_request_id": "alpha.py",
+                    "batch_result": {
+                        "response": {
+                            "chat_get_completion": {
+                                "choices": [{
+                                    "message": {"content": "fix(alpha): batch alpha"}
+                                }]
+                            }
+                        }
+                    }
+                },
+                {
+                    "batch_request_id": "beta.py",
+                    "error_message": "model failed"
+                }
+            ]
+        }));
+
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].custom_id, "alpha.py");
+        assert_eq!(output.results[0].content, "fix(alpha): batch alpha");
+        assert_eq!(output.failures.len(), 1);
+        assert_eq!(output.failures[0].custom_id, "beta.py");
+        assert_eq!(output.failures[0].error, "model failed");
+    }
+
+    #[test]
     fn missing_provider_content_is_reported_as_parse_error() {
         let err = OpenAiClient::parse_chat_response(&json!({"choices": []}))
             .expect_err("empty choices should fail");
 
-        assert!(err.contains("missing assistant content"));
+        assert!(err.contains("missing choices"));
     }
 
     #[test]
@@ -598,13 +973,35 @@ mod tests {
         assert!(jsonl.contains(r#""model":"gpt-batch""#));
         assert!(jsonl.contains(r#""content":"prompt""#));
 
-        let results = OpenAiClient::parse_batch_output(
-            r#"{"custom_id":"alpha.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"fix(core): batch alpha"}}]}}}"#,
+        let output = OpenAiClient::parse_batch_output(
+            r#"{"custom_id":"alpha.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"fix(core): batch alpha"}}]}}}
+{"custom_id":"beta.py","response":{"status_code":400,"body":{"error":{"message":"invalid model","api_key":"sk-test"}}}}
+{"custom_id":"gamma.py","error":{"message":"rate limited","token":"secret-token"}}"#,
         )
         .expect("batch output should parse");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].custom_id, "alpha.py");
-        assert_eq!(results[0].content, "fix(core): batch alpha");
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].custom_id, "alpha.py");
+        assert_eq!(output.results[0].content, "fix(core): batch alpha");
+        assert_eq!(output.failures.len(), 2);
+        assert_eq!(output.failures[0].custom_id, "beta.py");
+        assert!(output.failures[0].error.contains("status 400"));
+        assert_eq!(output.failures[1].custom_id, "gamma.py");
+        assert!(output.failures[1].error.contains("[redacted]"));
+        assert!(!output.failures[1].error.contains("secret-token"));
+    }
+
+    #[test]
+    fn openai_batch_gpt5_uses_max_completion_tokens() {
+        let jsonl = OpenAiClient::build_batch_jsonl(
+            "gpt-5-mini-2025-08-07",
+            &[OpenAiBatchJob {
+                custom_id: "alpha.py".to_string(),
+                messages: vec![ProviderMessage::user("prompt")],
+            }],
+        );
+
+        assert!(jsonl.contains(r#""max_completion_tokens":4096"#));
+        assert!(!jsonl.contains(r#""max_tokens""#));
     }
 
     #[tokio::test]
@@ -667,7 +1064,7 @@ mod tests {
         let transport =
             AsyncTransport::new(Duration::from_secs(2), RetryPolicy::default()).unwrap();
 
-        let results = OpenAiClient::invoke_batch(
+        let output = OpenAiClient::invoke_batch(
             &transport,
             &endpoint,
             "sk-test",
@@ -688,11 +1085,12 @@ mod tests {
         .await
         .expect("batch should complete");
 
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].custom_id, "alpha.py");
-        assert_eq!(results[0].content, "fix(core): batch alpha");
-        assert_eq!(results[1].custom_id, "beta.py");
-        assert_eq!(results[1].content, "fix(core): batch beta");
+        assert_eq!(output.results.len(), 2);
+        assert!(output.failures.is_empty());
+        assert_eq!(output.results[0].custom_id, "alpha.py");
+        assert_eq!(output.results[0].content, "fix(core): batch alpha");
+        assert_eq!(output.results[1].custom_id, "beta.py");
+        assert_eq!(output.results[1].content, "fix(core): batch beta");
 
         let requests: Vec<String> = (0..4)
             .map(|_| received.recv_timeout(Duration::from_secs(2)).unwrap())

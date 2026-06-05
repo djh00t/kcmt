@@ -87,6 +87,13 @@ Feature: Rust workflow parity
     Then the batch provider receives both file prompts before commits are written
     And both files are committed with the batch provider messages
 
+  Scenario: Default OpenAI batch reports partial invalid provider output
+    Given a git repository with two changed tracked files and a partially invalid OpenAI batch provider
+    When the Rust kcmt command runs in default batch mode
+    Then the batch provider receives both file prompts before commits are written
+    And only the valid batch file is committed
+    And provider output and status remain secret-free
+
   Scenario: File workflow falls back to the next configured provider
     Given a git repository with one changed tracked file and a fallback provider chain
     When the Rust kcmt command commits the file using configured provider fallback
