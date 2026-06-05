@@ -60,7 +60,7 @@ pub struct CliArgs {
     #[arg(long = "benchmark-csv")]
     pub benchmark_csv: bool,
 
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub debug: bool,
 
     #[arg(long = "verify-keys")]
@@ -195,6 +195,14 @@ mod tests {
             Some(CliCommand::Status(status)) => assert!(status.raw),
             other => panic!("expected status subcommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_debug_after_status_subcommand() {
+        let args = CliArgs::parse_from(["commit", "status", "--debug", "--repo-path", "."]);
+
+        assert!(args.debug);
+        assert!(matches!(args.command, Some(CliCommand::Status(_))));
     }
 
     #[test]
