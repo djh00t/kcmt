@@ -17,8 +17,8 @@ const PROVIDERS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "anthropic",
         "Anthropic",
-        "claude-3-5-haiku-latest",
-        "https://api.anthropic.com/v1",
+        "claude-sonnet-4-20250514",
+        "https://api.anthropic.com",
         "ANTHROPIC_API_KEY",
     ),
     (

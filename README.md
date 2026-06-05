@@ -132,7 +132,54 @@ OpenAI batch mode
 
 - Enable with `--batch` (or via the configure menu) to route commit message generation through the OpenAI Batch API.
 - Pick the batch model interactively; defaults to your OpenAI preferred model. Override on the CLI with `--batch-model`.
-- kcmt shows a spinner while the batch job runs and polls for up to 5 minutes by default (tunable via `--batch-timeout` or `KCMT_BATCH_TIMEOUT`).
+- kcmt polls batch jobs for at least 15 minutes by default (tunable upward via
+  `--batch-timeout` or `KCMT_BATCH_TIMEOUT`).
+- Rust batch mode uploads all file prompts before writing commits, maps responses by
+  `custom_id`, commits valid responses, and reports per-file failures for invalid
+  model/output or provider errors without printing API key values.
+
+### Rust-only install and live smoke
+
+Build the Rust binaries directly from the repo root:
+
+```shell
+cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+```
+
+Run Rust without the Python wrapper:
+
+```shell
+./rust/target/release/kcmt --repo-path .
+./rust/target/release/commit --repo-path .
+./rust/target/release/kc --repo-path .
+```
+
+To make `kcmt` resolve to Rust in a shell session, put the release directory
+before the Python environment on `PATH`:
+
+```shell
+export PATH="$(pwd)/rust/target/release:$PATH"
+kcmt --help
+```
+
+Optional live smoke commands use real provider keys only when the corresponding
+environment variable is already set. They do not print secret values; `status
+--raw` records the env var name, not the key.
+
+```shell
+test -n "$OPENAI_API_KEY" && \
+  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
+    --model gpt-5-mini-2025-08-07 --file path/to/changed-file --no-auto-push --repo-path .
+
+test -n "$ANTHROPIC_API_KEY" && \
+  ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
+    --model claude-3-5-haiku-latest --file path/to/changed-file --no-auto-push --repo-path .
+
+test -n "$OPENAI_API_KEY" && \
+  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
+    --batch --batch-model gpt-5-mini-2025-08-07 --batch-timeout 900 \
+    --no-auto-push --repo-path .
+```
 
 ### Provider defaults
 

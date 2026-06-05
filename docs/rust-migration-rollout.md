@@ -50,6 +50,47 @@ The runtime report includes one baseline row plus five optimization rows with
 timings, throughput, quality scores, failures, and the next bottleneck label for
 each iteration.
 
+### Rust-Only Live LLM Smoke
+
+Build and run the Rust binary directly when validating production cutover:
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+./rust/target/release/kcmt --help
+```
+
+Run live provider smoke checks only when the relevant key is already present in
+the environment. Keep `--no-auto-push` for smoke runs unless the branch is meant
+to publish commits.
+
+```bash
+test -n "$OPENAI_API_KEY" && \
+  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
+    --model gpt-5-mini-2025-08-07 --file path/to/changed-file --no-auto-push --repo-path .
+
+test -n "$ANTHROPIC_API_KEY" && \
+  ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
+    --model claude-3-5-haiku-latest --file path/to/changed-file --no-auto-push --repo-path .
+
+test -n "$OPENAI_API_KEY" && \
+  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
+    --batch --batch-model gpt-5-mini-2025-08-07 --batch-timeout 900 \
+    --no-auto-push --repo-path .
+```
+
+Expected production-readiness behavior:
+
+- Direct OpenAI and Anthropic calls fail fast for missing keys, invalid models,
+  malformed provider output, and provider 4xx/5xx responses.
+- OpenAI batch mode uploads every file prompt before committing, maps responses
+  by `custom_id`, commits valid responses, and reports invalid or missing
+  responses per file.
+- Debug/profile output and status snapshots record provider names, model names,
+  endpoints, and API key environment variable names, but not API key values.
+- To make `kcmt`, `commit`, and `kc` point at Rust without the Python wrapper,
+  prepend `$(pwd)/rust/target/release` to `PATH` or install those release
+  binaries into the operator's normal bin directory.
+
 ## Rollback Procedure
 
 1. Set `KCMT_RUNTIME=python` in runtime environment.

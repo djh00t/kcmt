@@ -189,6 +189,39 @@ fn spawn_openai_batch_response() -> (String, mpsc::Receiver<String>) {
     (format!("http://{address}"), receiver)
 }
 
+fn spawn_openai_partial_batch_response() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("mock partial batch listener");
+    let address = listener.local_addr().expect("mock partial batch address");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let responses = [
+            r#"{"id":"file_1"}"#,
+            r#"{"id":"batch_1","status":"validating"}"#,
+            r#"{"id":"batch_1","status":"completed","output_file_id":"output_1"}"#,
+            r#"{"custom_id":"alpha.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"fix(alpha): batch alpha."}}]}}}
+{"custom_id":"beta.py","response":{"status_code":200,"body":{"choices":[{"message":{"content":"This is not conventional"}}]}}}
+"#,
+        ];
+        for response_body in responses {
+            let (mut stream, _) = listener.accept().expect("mock partial batch connection");
+            let mut buffer = [0_u8; 16384];
+            let bytes = stream.read(&mut buffer).expect("mock partial batch read");
+            sender
+                .send(String::from_utf8_lossy(&buffer[..bytes]).to_string())
+                .expect("request should be recorded");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("mock partial batch write");
+        }
+    });
+    (format!("http://{address}"), receiver)
+}
+
 fn spawn_provider_fallback_response() -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("mock fallback listener");
     let address = listener.local_addr().expect("mock fallback address");
@@ -836,7 +869,13 @@ fn debug_mode_prints_workflow_telemetry() {
     let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
         .env("KCMT_CONFIG_HOME", &config_home)
         .env("KCMT_GIT_COMMIT_BACKEND", "gix")
-        .args(["--debug", "--file", "tracked.py", "--no-auto-push", "--repo-path"])
+        .args([
+            "--debug",
+            "--file",
+            "tracked.py",
+            "--no-auto-push",
+            "--repo-path",
+        ])
         .arg(&repo)
         .output()
         .expect("kcmt binary should run");
@@ -849,8 +888,14 @@ fn debug_mode_prints_workflow_telemetry() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("tracked.py"), "stdout: {stdout}");
-    assert!(stdout.contains("[kcmt-profile] arg_parse:"), "stdout: {stdout}");
-    assert!(stdout.contains("[kcmt-profile] workflow_total:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("[kcmt-profile] arg_parse:"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("[kcmt-profile] workflow_total:"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]
@@ -880,7 +925,10 @@ fn default_workflow_discovers_repo_from_nested_current_directory() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("tracked.py"), "stdout: {stdout}");
-    assert!(stdout.contains("[kcmt-profile] repo_discovery:"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("[kcmt-profile] repo_discovery:"),
+        "stdout: {stdout}"
+    );
     assert_eq!(git(&repo, &["status", "--short"]), "");
 }
 
@@ -1045,6 +1093,21 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fix(core): use provider message"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("kcmt progress: mode=direct stage=start total=1"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("stage=llm") && stderr.contains("file=tracked.py"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("stage=done")
+            && stderr.contains("status=ok")
+            && stderr.contains("file=tracked.py"),
+        "stderr: {stderr}"
+    );
     let log = git(&repo, &["log", "--pretty=%s", "-1"]);
     assert_eq!(log, "fix(core): use provider message");
 }
@@ -1145,6 +1208,55 @@ fn max_retries_zero_attempts_provider_once() {
 }
 
 #[test]
+fn file_mode_provider_failure_reports_secret_free_error() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_status_response(
+        401,
+        r#"{"error":{"message":"invalid api key sk-leaked-test"}}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("OPENAI_TEST_KEY", "sk-leaked-test")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "invalid-model",
+            "--max-retries",
+            "0",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("provider request failed"));
+    assert!(stderr.contains("HTTP 401"), "stderr: {stderr}");
+    assert!(stderr.contains("invalid api key"), "stderr: {stderr}");
+    assert!(stderr.contains("[redacted]"), "stderr: {stderr}");
+    assert!(!stderr.contains("sk-leaked-test"));
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be recorded");
+    assert!(request.contains("authorization: Bearer sk-leaked-test"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(repo): seed");
+}
+
+#[test]
 fn file_mode_falls_back_to_next_configured_provider_after_primary_failure() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
@@ -1205,6 +1317,81 @@ fn file_mode_falls_back_to_next_configured_provider_after_primary_failure() {
 }
 
 #[test]
+fn explicit_provider_override_disables_persisted_fallback_priority() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    let (endpoint, request_rx) = spawn_provider_fallback_response();
+    fs::create_dir_all(&config_home).expect("config home");
+    fs::write(
+        config_home.join("config.json"),
+        format!(
+            r#"{{
+  "provider": "openai",
+  "model": "gpt-primary",
+  "llm_endpoint": "{endpoint}",
+  "api_key_env": "OPENAI_TEST_KEY",
+  "git_repo_path": ".",
+  "max_commit_length": 72,
+  "auto_push": false,
+  "providers": {{
+    "openai": {{"endpoint": "{endpoint}", "api_key_env": "OPENAI_TEST_KEY", "preferred_model": "gpt-primary"}},
+    "anthropic": {{"endpoint": "{endpoint}", "api_key_env": "ANTHROPIC_TEST_KEY", "preferred_model": "claude-fallback"}}
+  }},
+  "model_priority": [
+    {{"provider": "openai", "model": "gpt-primary"}},
+    {{"provider": "anthropic", "model": "claude-fallback"}}
+  ]
+}}"#
+        ),
+    )
+    .expect("persist fallback config");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("OPENAI_TEST_KEY", "primary-key")
+        .env("ANTHROPIC_TEST_KEY", "fallback-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert_eq!(output.status.code(), Some(1));
+    let requests: Vec<String> = (0..4)
+        .map(|_| {
+            request_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("primary provider request should be recorded")
+        })
+        .collect();
+    assert!(requests
+        .iter()
+        .all(|request| request.contains("POST /chat/completions HTTP/1.1")));
+    assert!(requests
+        .iter()
+        .all(|request| request.contains("authorization: Bearer primary-key")));
+    assert!(requests
+        .iter()
+        .all(|request| !request.contains("POST /v1/messages HTTP/1.1")));
+    assert!(request_rx.recv_timeout(Duration::from_millis(200)).is_err());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("fallback-key"), "stderr: {stderr}");
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(repo): seed");
+}
+
+#[test]
 fn default_openai_batch_queues_all_file_prompts_before_committing() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
@@ -1253,6 +1440,8 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
     assert!(requests[0].contains("POST /files HTTP/1.1"));
     assert!(requests[0].contains("alpha.py"));
     assert!(requests[0].contains("beta.py"));
+    assert!(requests[0].contains("Return only the commit message"));
+    assert!(requests[0].contains("Prefer a single subject line for simple diffs"));
     assert!(requests[0].contains("print('alpha changed')"));
     assert!(requests[0].contains("print('beta changed')"));
     assert!(!requests.iter().any(|request| {
@@ -1262,6 +1451,21 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
     assert!(requests[1].contains("POST /batches HTTP/1.1"));
     assert!(requests[2].contains("GET /batches/batch_1 HTTP/1.1"));
     assert!(requests[3].contains("GET /files/output_1/content HTTP/1.1"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("kcmt progress: mode=batch stage=start total=2"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("stage=queued") && stderr.contains("file=alpha.py"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("stage=results")
+            && stderr.contains("completed=2")
+            && stderr.contains("failed=0"),
+        "stderr: {stderr}"
+    );
 
     let log = git(&repo, &["log", "--pretty=%s"]);
     let subjects: Vec<&str> = log.lines().collect();
@@ -1272,6 +1476,77 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
     let snapshot = raw_status_snapshot(&repo, &config_home);
     assert_eq!(telemetry_stage_items(&snapshot, "diff_preparation"), 2);
     assert_eq!(telemetry_stage_items(&snapshot, "llm_enqueue"), 2);
+}
+
+#[test]
+fn default_openai_batch_reports_partial_invalid_outputs_without_leaking_keys() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    let (endpoint, request_rx) = spawn_openai_partial_batch_response();
+    fs::write(repo.join("alpha.py"), "print('alpha')\n").expect("alpha seed");
+    fs::write(repo.join("beta.py"), "print('beta')\n").expect("beta seed");
+    git(&repo, &["add", "alpha.py", "beta.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("alpha.py"), "print('alpha changed')\n").expect("alpha change");
+    fs::write(repo.join("beta.py"), "print('beta changed')\n").expect("beta change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-direct",
+            "--batch",
+            "--batch-model",
+            "gpt-batch",
+            "--batch-timeout",
+            "900",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("fix(alpha): batch alpha"));
+    assert!(stdout.contains("LLM output missing conventional commit header"));
+    assert!(!stdout.contains("test-key"));
+    assert!(!stderr.contains("test-key"));
+
+    let requests: Vec<String> = (0..4)
+        .map(|_| request_rx.recv_timeout(Duration::from_secs(2)).unwrap())
+        .collect();
+    assert!(requests[0].contains("alpha.py"));
+    assert!(requests[0].contains("beta.py"));
+    assert!(requests[1].contains("POST /batches HTTP/1.1"));
+
+    let log = git(&repo, &["log", "--pretty=%s"]);
+    let subjects: Vec<&str> = log.lines().collect();
+    assert!(subjects.contains(&"fix(alpha): batch alpha"));
+    assert!(!subjects.contains(&"This is not conventional"));
+    let status = git(&repo, &["status", "--short"]);
+    assert!(status.contains("beta.py"));
+    assert!(!status.contains("alpha.py"));
+    let snapshot = raw_status_snapshot(&repo, &config_home);
+    assert_eq!(snapshot["counts"]["commit_success"], 1);
+    assert_eq!(snapshot["counts"]["commit_failure"], 1);
+    let raw_snapshot = serde_json::to_string(&snapshot).expect("snapshot json");
+    assert!(!raw_snapshot.contains("test-key"));
+    assert!(raw_snapshot.contains("OPENAI_TEST_KEY"));
 }
 
 #[test]

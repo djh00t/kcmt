@@ -82,8 +82,8 @@ const PROVIDER_DEFAULTS: &[ProviderDefaults] = &[
     },
     ProviderDefaults {
         provider: "anthropic",
-        model: "claude-3-5-haiku-latest",
-        endpoint: "https://api.anthropic.com/v1",
+        model: "claude-sonnet-4-20250514",
+        endpoint: "https://api.anthropic.com",
         api_key_env: "ANTHROPIC_API_KEY",
     },
     ProviderDefaults {
@@ -116,25 +116,32 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
 
     let provider = selected_provider(overrides, persisted.as_ref(), &detected);
     let defaults = provider_defaults(&provider).unwrap_or(PROVIDER_DEFAULTS[0]);
+    let persisted_for_provider = persisted.as_ref().filter(|cfg| cfg.provider == provider);
+    let persisted_provider_entry = persisted
+        .as_ref()
+        .and_then(|cfg| cfg.providers.get(&provider));
 
     let model = overrides
         .model
         .clone()
         .or_else(|| env::var("KLINGON_CMT_LLM_MODEL").ok())
-        .or_else(|| persisted.as_ref().map(|cfg| cfg.model.clone()))
+        .or_else(|| persisted_for_provider.map(|cfg| cfg.model.clone()))
+        .or_else(|| persisted_provider_entry.and_then(|entry| entry.preferred_model.clone()))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| defaults.model.to_string());
     let llm_endpoint = overrides
         .endpoint
         .clone()
         .or_else(|| env::var("KLINGON_CMT_LLM_ENDPOINT").ok())
-        .or_else(|| persisted.as_ref().map(|cfg| cfg.llm_endpoint.clone()))
+        .or_else(|| persisted_for_provider.map(|cfg| cfg.llm_endpoint.clone()))
+        .or_else(|| persisted_provider_entry.and_then(|entry| entry.endpoint.clone()))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| defaults.endpoint.to_string());
     let api_key_env = overrides
         .api_key_env
         .clone()
-        .or_else(|| persisted.as_ref().map(|cfg| cfg.api_key_env.clone()))
+        .or_else(|| persisted_for_provider.map(|cfg| cfg.api_key_env.clone()))
+        .or_else(|| persisted_provider_entry.and_then(|entry| entry.api_key_env.clone()))
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| selected_api_key_env(&provider, &detected).to_string());
     let git_repo_path = overrides
@@ -179,7 +186,7 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
                 .map(|value| is_truthy(&value))
         })
         .unwrap_or(false);
-    if provider != "openai" {
+    if !matches!(provider.as_str(), "openai" | "xai") {
         use_batch = false;
     }
     let batch_model = overrides
@@ -188,7 +195,7 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
         .or_else(|| env::var("KCMT_BATCH_MODEL").ok())
         .or_else(|| persisted.as_ref().and_then(|cfg| cfg.batch_model.clone()))
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| provider_defaults("openai").map(|defaults| defaults.model.to_string()));
+        .or_else(|| default_batch_model(&provider).map(str::to_string));
     let batch_timeout_seconds = overrides
         .batch_timeout_seconds
         .or_else(|| {
@@ -201,16 +208,24 @@ pub fn load_config(repo_root: &Path, overrides: &ConfigOverrides) -> Result<Work
         .unwrap_or(DEFAULT_BATCH_TIMEOUT_SECONDS)
         .max(BATCH_TIMEOUT_MIN_SECONDS);
     let providers = merged_provider_entries(persisted.as_ref());
-    let model_priority = persisted
-        .as_ref()
-        .map(|cfg| cfg.model_priority.clone())
-        .filter(|priority| !priority.is_empty())
-        .unwrap_or_else(|| {
-            vec![ModelPreference {
-                provider: provider.clone(),
-                model: model.clone(),
-            }]
-        });
+    let explicit_primary = overrides.provider.is_some() || overrides.model.is_some();
+    let model_priority = if explicit_primary {
+        vec![ModelPreference {
+            provider: provider.clone(),
+            model: model.clone(),
+        }]
+    } else {
+        persisted
+            .as_ref()
+            .map(|cfg| cfg.model_priority.clone())
+            .filter(|priority| !priority.is_empty())
+            .unwrap_or_else(|| {
+                vec![ModelPreference {
+                    provider: provider.clone(),
+                    model: model.clone(),
+                }]
+            })
+    };
 
     let config = WorkflowConfig {
         provider,
@@ -325,6 +340,14 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
         .iter()
         .copied()
         .find(|defaults| defaults.provider == provider)
+}
+
+fn default_batch_model(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("gpt-5-mini-2025-08-07"),
+        "xai" => Some("grok-4.3"),
+        _ => None,
+    }
 }
 
 fn detect_available_providers() -> HashMap<String, Vec<String>> {
@@ -520,5 +543,60 @@ mod tests {
         assert_eq!(cfg.api_key_env, "XAI_SECRET");
         assert_eq!(cfg.max_commit_length, 80);
         assert!(cfg.git_repo_path.ends_with("nested"));
+    }
+
+    #[test]
+    fn provider_override_uses_matching_provider_defaults_not_persisted_top_level() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        clear_test_env();
+        let repo = unique_temp_dir("provider-override");
+        let cfg_home = unique_temp_dir("cfg-home-provider-override");
+        std::env::set_var("KCMT_CONFIG_HOME", &cfg_home);
+        std::env::set_var("OPENAI_API_KEY", "sk-test");
+        let config_path = config_home().join("config.json");
+        fs::create_dir_all(config_path.parent().expect("config parent")).expect("config dir");
+        fs::write(
+            &config_path,
+            r#"{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-20250514",
+  "llm_endpoint": "https://api.anthropic.com",
+  "api_key_env": "ANTHROPIC_API_KEY",
+  "git_repo_path": ".",
+  "max_commit_length": 72,
+  "providers": {
+    "openai": {
+      "endpoint": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "preferred_model": "gpt-5-mini-2025-08-07"
+    },
+    "anthropic": {
+      "endpoint": "https://api.anthropic.com",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "preferred_model": "claude-sonnet-4-20250514"
+    }
+  },
+  "model_priority": [
+    {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+    {"provider": "openai", "model": "gpt-5-mini-2025-08-07"}
+  ]
+}"#,
+        )
+        .expect("persisted config");
+        let overrides = ConfigOverrides {
+            provider: Some("openai".to_string()),
+            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            ..ConfigOverrides::default()
+        };
+
+        let cfg = load_config(&repo, &overrides).expect("config");
+
+        assert_eq!(cfg.provider, "openai");
+        assert_eq!(cfg.model, "gpt-5-mini-2025-08-07");
+        assert_eq!(cfg.llm_endpoint, "https://api.openai.com/v1");
+        assert_eq!(cfg.api_key_env, "OPENAI_API_KEY");
+        assert_eq!(cfg.model_priority.len(), 1);
+        assert_eq!(cfg.model_priority[0].provider, "openai");
+        assert_eq!(cfg.model_priority[0].model, "gpt-5-mini-2025-08-07");
     }
 }

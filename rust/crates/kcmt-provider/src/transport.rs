@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 use reqwest::header::HeaderMap;
 use reqwest::multipart;
 use reqwest::Client;
+use reqwest::Response;
 use serde_json::Value;
 use tokio::time::sleep;
 
@@ -62,17 +63,9 @@ impl AsyncTransport {
                         sleep(self.retry_policy.base_backoff * attempt as u32).await;
                         continue;
                     }
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
+                    return provider_status_error(resp).await;
                 }
-                Ok(resp) => {
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
-                }
+                Ok(resp) => return provider_status_error(resp).await,
                 Err(err) if attempt < self.retry_policy.max_attempts => {
                     sleep(self.retry_policy.base_backoff * attempt as u32).await;
                     tracing::warn!("transient transport error (attempt {attempt}): {err}");
@@ -95,17 +88,9 @@ impl AsyncTransport {
                         sleep(self.retry_policy.base_backoff * attempt as u32).await;
                         continue;
                     }
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
+                    return provider_status_error(resp).await;
                 }
-                Ok(resp) => {
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
-                }
+                Ok(resp) => return provider_status_error(resp).await,
                 Err(err) if attempt < self.retry_policy.max_attempts => {
                     sleep(self.retry_policy.base_backoff * attempt as u32).await;
                     tracing::warn!("transient transport error (attempt {attempt}): {err}");
@@ -128,17 +113,9 @@ impl AsyncTransport {
                         sleep(self.retry_policy.base_backoff * attempt as u32).await;
                         continue;
                     }
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
+                    return provider_status_error(resp).await;
                 }
-                Ok(resp) => {
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
-                }
+                Ok(resp) => return provider_status_error(resp).await,
                 Err(err) if attempt < self.retry_policy.max_attempts => {
                     sleep(self.retry_policy.base_backoff * attempt as u32).await;
                     tracing::warn!("transient transport error (attempt {attempt}): {err}");
@@ -179,17 +156,9 @@ impl AsyncTransport {
                         sleep(self.retry_policy.base_backoff * attempt as u32).await;
                         continue;
                     }
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
+                    return provider_status_error(resp).await;
                 }
-                Ok(resp) => {
-                    return Err(anyhow!(
-                        "provider request failed with status {}",
-                        resp.status()
-                    ));
-                }
+                Ok(resp) => return provider_status_error(resp).await,
                 Err(err) if attempt < self.retry_policy.max_attempts => {
                     sleep(self.retry_policy.base_backoff * attempt as u32).await;
                     tracing::warn!("transient transport error (attempt {attempt}): {err}");
@@ -198,6 +167,37 @@ impl AsyncTransport {
             }
         }
     }
+}
+
+async fn provider_status_error<T>(resp: Response) -> Result<T> {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    let excerpt = redact_provider_error_body(&body);
+    if excerpt.is_empty() {
+        Err(anyhow!("provider request failed with status {status}"))
+    } else {
+        Err(anyhow!(
+            "provider request failed with status {status}: {excerpt}"
+        ))
+    }
+}
+
+fn redact_provider_error_body(body: &str) -> String {
+    let mut redacted = body.to_string();
+    for marker in ["sk-", "sk_live_", "sk_test_"] {
+        while let Some(start) = redacted.find(marker) {
+            let end = redacted[start..]
+                .find(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | '}'))
+                .map(|offset| start + offset)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(start..end, "[redacted]");
+        }
+    }
+    redacted
+        .chars()
+        .filter(|ch| !ch.is_control() || *ch == '\n' || *ch == '\t')
+        .take(1000)
+        .collect::<String>()
 }
 
 #[cfg(test)]
@@ -248,6 +248,37 @@ mod tests {
             .all(|request| request.contains("{\"prompt\":\"alpha\"}")));
     }
 
+    #[tokio::test]
+    async fn post_json_reports_redacted_error_body() {
+        let (endpoint, _received) = spawn_single_response_server(
+            "400 Bad Request",
+            r#"{"error":{"message":"invalid model","api_key":"sk-test-secret"}}"#,
+        );
+        let transport = AsyncTransport::new(
+            Duration::from_secs(2),
+            RetryPolicy {
+                max_attempts: 1,
+                base_backoff: Duration::from_millis(1),
+            },
+        )
+        .expect("transport");
+
+        let err = transport
+            .post_json(
+                &endpoint,
+                HeaderMap::new(),
+                &serde_json::json!({"prompt":"alpha"}),
+            )
+            .await
+            .expect_err("status should fail");
+        let message = err.to_string();
+
+        assert!(message.contains("400 Bad Request"), "{message}");
+        assert!(message.contains("invalid model"), "{message}");
+        assert!(!message.contains("sk-test-secret"), "{message}");
+        assert!(message.contains("[redacted]"), "{message}");
+    }
+
     fn spawn_retrying_multipart_server() -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let endpoint = format!(
@@ -280,6 +311,33 @@ mod tests {
                     .write_all(response.as_bytes())
                     .expect("write response");
             }
+        });
+
+        (endpoint, receiver)
+    }
+
+    fn spawn_single_response_server(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let endpoint = format!("http://{}/chat", listener.local_addr().expect("local addr"));
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0_u8; 16384];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            sender.send(request).expect("send captured request");
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
         });
 
         (endpoint, receiver)
