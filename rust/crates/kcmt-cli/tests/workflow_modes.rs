@@ -825,6 +825,66 @@ fn gix_commit_backend_commits_tracked_file_without_stage_path() {
 }
 
 #[test]
+fn debug_mode_prints_workflow_telemetry() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_GIT_COMMIT_BACKEND", "gix")
+        .args(["--debug", "--file", "tracked.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("tracked.py"), "stdout: {stdout}");
+    assert!(stdout.contains("[kcmt-profile] arg_parse:"), "stdout: {stdout}");
+    assert!(stdout.contains("[kcmt-profile] workflow_total:"), "stdout: {stdout}");
+}
+
+#[test]
+fn default_workflow_discovers_repo_from_nested_current_directory() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    let nested = repo.join("src").join("nested");
+    fs::create_dir_all(&nested).expect("nested dir");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .current_dir(&nested)
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_GIT_COMMIT_BACKEND", "gix")
+        .args(["--debug", "--no-auto-push"])
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("tracked.py"), "stdout: {stdout}");
+    assert!(stdout.contains("[kcmt-profile] repo_discovery:"), "stdout: {stdout}");
+    assert_eq!(git(&repo, &["status", "--short"]), "");
+}
+
+#[test]
 fn gix_commit_backend_commits_untracked_file_without_stage_path() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
