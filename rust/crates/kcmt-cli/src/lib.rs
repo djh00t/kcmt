@@ -50,8 +50,8 @@ fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
 fn output_options(args: &CliArgs) -> WorkflowOutputOptions {
     WorkflowOutputOptions {
         compact: args.compact,
-        verbose: args.verbose,
-        profile_startup: args.profile_startup,
+        verbose: args.verbose || args.debug,
+        profile_startup: args.profile_startup || args.debug,
         startup_stages: Vec::new(),
     }
 }
