@@ -20,7 +20,16 @@ pub struct CliGitRepository<R: CommandRunner> {
 }
 
 pub fn find_git_repo_root(start_path: impl AsRef<Path>) -> Option<PathBuf> {
-    let mut path = start_path.as_ref().to_path_buf();
+    let start_path = start_path.as_ref();
+    let mut path = fs::canonicalize(start_path).unwrap_or_else(|_| {
+        if start_path.is_absolute() {
+            start_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(start_path))
+                .unwrap_or_else(|_| start_path.to_path_buf())
+        }
+    });
     if path.is_file() {
         path = path.parent()?.to_path_buf();
     }
@@ -399,6 +408,17 @@ mod tests {
         let found_canonical = fs::canonicalize(found).expect("found path canonical");
         let repo_canonical = fs::canonicalize(repo).expect("repo path canonical");
         assert_eq!(found_canonical, repo_canonical);
+    }
+
+    #[test]
+    fn finds_top_level_repo_from_relative_current_directory() {
+        let found = find_git_repo_root(".").expect("current repo root should be found");
+        let found_canonical = fs::canonicalize(found).expect("found path canonical");
+        let expected = git_output(Path::new("."), &["rev-parse", "--show-toplevel"]);
+        let expected_canonical =
+            fs::canonicalize(expected.trim()).expect("git top level canonical");
+
+        assert_eq!(found_canonical, expected_canonical);
     }
 
     #[test]
