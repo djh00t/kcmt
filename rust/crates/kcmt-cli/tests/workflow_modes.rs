@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -135,11 +135,26 @@ fn spawn_provider_responses(
     response_bodies: Vec<&'static str>,
 ) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("mock provider listener");
+    listener
+        .set_nonblocking(true)
+        .expect("mock provider listener should become nonblocking");
     let address = listener.local_addr().expect("mock provider address");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         for response_body in response_bodies {
-            let (mut stream, _) = listener.accept().expect("mock provider connection");
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("mock provider connection failed: {err}"),
+                }
+            };
             let mut buffer = [0_u8; 32768];
             let bytes = stream.read(&mut buffer).expect("mock provider read");
             sender

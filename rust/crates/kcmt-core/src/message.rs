@@ -221,6 +221,9 @@ fn looks_like_text_file(file_path: &str) -> bool {
     TEXT_EXTENSIONS
         .iter()
         .any(|extension| lower.ends_with(extension))
+        || ["src/", "lib/", "app/", "kcmt/"]
+            .iter()
+            .any(|directory| lower.starts_with(directory))
         || ["/src/", "/lib/", "/app/", "/kcmt/"]
             .iter()
             .any(|directory| lower.contains(directory))
@@ -324,6 +327,15 @@ mod tests {
     fn prepare_diff_preserves_text_file_binary_markers() {
         let diff = "Binary files a/src/generated.py and b/src/generated.py differ";
         let prepared = prepare_diff_for_prompt(diff, "File: src/generated.py");
+
+        assert!(!prepared.contains("Binary diff detected."));
+        assert_eq!(prepared, diff);
+    }
+
+    #[test]
+    fn prepare_diff_treats_extensionless_code_dir_files_as_text() {
+        let diff = "Binary files a/src/tool and b/src/tool differ";
+        let prepared = prepare_diff_for_prompt(diff, "File: src/tool");
 
         assert!(!prepared.contains("Binary diff detected."));
         assert_eq!(prepared, diff);

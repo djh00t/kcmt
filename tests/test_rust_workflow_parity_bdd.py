@@ -281,6 +281,11 @@ def _start_direct_provider(
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+def _stop_server(server: HTTPServer) -> None:
+    server.shutdown()
+    server.server_close()
+
+
 def _rust_bin(binary: str) -> Path:
     subprocess.run(
         [
@@ -1137,28 +1142,30 @@ def rust_kcmt_commits_binary_file_with_mocked_provider(
 ) -> None:
     env = _clean_env(workflow_context["config_home"])
     env["OPENAI_TEST_KEY"] = "bdd-openai-key"
-    output = _run(
-        [
-            str(_rust_bin("kcmt")),
-            "--file",
-            "assets/logo.png",
-            "--provider",
-            "openai",
-            "--endpoint",
-            workflow_context["endpoint"],
-            "--api-key-env",
-            "OPENAI_TEST_KEY",
-            "--model",
-            "gpt-bdd",
-            "--no-auto-push",
-            "--repo-path",
-            str(workflow_context["repo"]),
-        ],
-        REPO_ROOT,
-        env=env,
-    )
-    workflow_context["output"] = output
-    workflow_context["direct_server"].shutdown()
+    try:
+        output = _run(
+            [
+                str(_rust_bin("kcmt")),
+                "--file",
+                "assets/logo.png",
+                "--provider",
+                "openai",
+                "--endpoint",
+                workflow_context["endpoint"],
+                "--api-key-env",
+                "OPENAI_TEST_KEY",
+                "--model",
+                "gpt-bdd",
+                "--no-auto-push",
+                "--repo-path",
+                str(workflow_context["repo"]),
+            ],
+            REPO_ROOT,
+            env=env,
+        )
+        workflow_context["output"] = output
+    finally:
+        _stop_server(workflow_context["direct_server"])
 
 
 @when(
@@ -1169,28 +1176,30 @@ def rust_kcmt_commits_file_with_malformed_then_valid_provider_output(
 ) -> None:
     env = _clean_env(workflow_context["config_home"])
     env["OPENAI_TEST_KEY"] = "bdd-openai-key"
-    output = _run(
-        [
-            str(_rust_bin("kcmt")),
-            "--file",
-            "tracked.py",
-            "--provider",
-            "openai",
-            "--endpoint",
-            workflow_context["endpoint"],
-            "--api-key-env",
-            "OPENAI_TEST_KEY",
-            "--model",
-            "gpt-bdd",
-            "--no-auto-push",
-            "--repo-path",
-            str(workflow_context["repo"]),
-        ],
-        REPO_ROOT,
-        env=env,
-    )
-    workflow_context["output"] = output
-    workflow_context["direct_server"].shutdown()
+    try:
+        output = _run(
+            [
+                str(_rust_bin("kcmt")),
+                "--file",
+                "tracked.py",
+                "--provider",
+                "openai",
+                "--endpoint",
+                workflow_context["endpoint"],
+                "--api-key-env",
+                "OPENAI_TEST_KEY",
+                "--model",
+                "gpt-bdd",
+                "--no-auto-push",
+                "--repo-path",
+                str(workflow_context["repo"]),
+            ],
+            REPO_ROOT,
+            env=env,
+        )
+        workflow_context["output"] = output
+    finally:
+        _stop_server(workflow_context["direct_server"])
 
 
 @when("the Rust kcmt command receives invalid provider output")
