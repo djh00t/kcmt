@@ -217,7 +217,7 @@ fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> 
         .map_err(|err| KcmtError::Message(format!("gix status failed: {err}")))?
         .untracked_files(gix::status::UntrackedFiles::Files)
         .index_worktree_submodules(None)
-        .tree_index_track_renames(gix::status::tree_index::TrackRenames::Disabled)
+        .tree_index_track_renames(gix::status::tree_index::TrackRenames::AsConfigured)
         .index_worktree_options_mut(|opts| {
             opts.sorting = Some(
                 gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive,
@@ -260,31 +260,41 @@ fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> 
                         }
                     }
                     Item::Rewrite {
+                        source,
                         dirwalk_entry,
                         copy,
                         ..
                     } => {
                         let status = if copy { " C" } else { " R" };
                         let path = dirwalk_entry.rela_path.as_bstr().to_str_lossy();
-                        rows.push(format!("{status} {path}"));
+                        let source_path = source.rela_path().as_bstr().to_str_lossy();
+                        rows.push(format!("{status} {source_path} -> {path}"));
                     }
                 }
             }
             gix::status::Item::TreeIndex(change) => {
-                let path = change.location().to_str_lossy();
-                let status = match change {
-                    gix::diff::index::Change::Addition { .. } => "A ",
-                    gix::diff::index::Change::Deletion { .. } => "D ",
-                    gix::diff::index::Change::Modification { .. } => "M ",
-                    gix::diff::index::Change::Rewrite { copy, .. } => {
-                        if copy {
-                            "C "
+                let path = change.location().to_str_lossy().to_string();
+                let (status, source_path) = match &change {
+                    gix::diff::index::Change::Addition { .. } => ("A ", None),
+                    gix::diff::index::Change::Deletion { .. } => ("D ", None),
+                    gix::diff::index::Change::Modification { .. } => ("M ", None),
+                    gix::diff::index::Change::Rewrite {
+                        copy,
+                        source_location,
+                        ..
+                    } => {
+                        if *copy {
+                            ("C ", Some(source_location.to_str_lossy().to_string()))
                         } else {
-                            "R "
+                            ("R ", Some(source_location.to_str_lossy().to_string()))
                         }
                     }
                 };
-                rows.push(format!("{status} {path}"));
+                if let Some(source_path) = source_path {
+                    rows.push(format!("{status} {source_path} -> {path}"));
+                } else {
+                    rows.push(format!("{status} {path}"));
+                }
             }
         }
     }
@@ -312,10 +322,9 @@ fn render_porcelain_lines(raw: &str) -> String {
             entry[2..].to_string()
         };
 
-        let is_rename_or_copy = status.contains('R') || status.contains('C');
-        if is_rename_or_copy {
-            if let Some(renamed_path) = entries.next() {
-                path = renamed_path.to_string();
+        if status.contains('R') || status.contains('C') {
+            if let Some(source_path) = entries.next() {
+                path = format!("{source_path} -> {path}");
             }
         }
 
@@ -428,6 +437,34 @@ mod tests {
         let rendered = render_porcelain_lines(raw);
 
         assert_eq!(rendered, "?? src/app.py\n?? src/lib/util.py\n");
+    }
+
+    #[test]
+    fn render_porcelain_lines_keeps_rename_and_copy_destinations() {
+        let raw = "R  new_name.py\0old_name.py\0 C copied.py\0template.py\0";
+
+        let rendered = render_porcelain_lines(raw);
+
+        assert_eq!(
+            rendered,
+            "R  old_name.py -> new_name.py\n C template.py -> copied.py\n"
+        );
+    }
+
+    #[test]
+    fn cli_status_keeps_renamed_destination_path() {
+        let repo = unique_temp_dir("status-rename");
+        init_repo(&repo);
+        fs::write(repo.join("old_name.py"), "print('seed')\n").expect("old seed");
+        git(&repo, &["add", "old_name.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        git(&repo, &["mv", "old_name.py", "new_name.py"]);
+
+        let status = CliGitRepository::from_path(&repo)
+            .status_porcelain_cli()
+            .expect("status should render");
+
+        assert_eq!(status, "R  old_name.py -> new_name.py\n");
     }
 
     #[test]

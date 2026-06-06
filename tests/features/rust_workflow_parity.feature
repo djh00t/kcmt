@@ -13,6 +13,13 @@ Feature: Rust workflow parity
     Then both changed files are committed separately
     And the repository worktree is clean
 
+  Scenario: Default workflow skips ignored files and expands untracked directories
+    Given a git repository with ignored files and an untracked directory
+    When the Rust kcmt command runs in default workflow mode
+    Then the untracked directory files are committed separately
+    And ignored files are not committed
+    And the repository worktree is clean
+
   Scenario: Worker override is recorded in runtime telemetry
     Given a git repository with two changed tracked files
     When the Rust kcmt command runs in default workflow mode with two workers
