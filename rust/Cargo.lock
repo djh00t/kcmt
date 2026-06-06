@@ -1963,6 +1963,8 @@ dependencies = [
  "anyhow",
  "crossterm 0.29.0",
  "ratatui",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

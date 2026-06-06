@@ -200,6 +200,12 @@ Feature: Rust workflow parity
     When the Rust kcmt command runs in oneshot mode
     Then the Rust stats command reports usage telemetry
 
+  Scenario: Explicit Rust workflow TUI exports a state model
+    Given a git repository with one changed tracked file
+    When the Rust kcmt command runs default workflow with explicit TUI model export
+    Then the Rust workflow TUI model records the committed file
+    And the Rust preferences remember the workflow screen
+
   Scenario: Rust list-models shows supported default models
     Given an empty runtime configuration home
     When the Rust kcmt command lists models

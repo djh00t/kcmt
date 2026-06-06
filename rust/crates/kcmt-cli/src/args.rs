@@ -348,6 +348,7 @@ mod tests {
         let args = CliArgs::parse_from([
             "kcmt",
             "--oneshot",
+            "--tui",
             "--no-progress",
             "--limit",
             "2",
@@ -363,6 +364,7 @@ mod tests {
             "--compact",
         ]);
 
+        assert!(args.tui);
         assert!(args.no_progress);
         assert_eq!(args.limit, Some(2));
         assert_eq!(args.workers, Some(4));
@@ -372,6 +374,14 @@ mod tests {
         assert_eq!(args.max_retries, Some(5));
         assert_eq!(args.github_token.as_deref(), Some("gh-test"));
         assert!(args.compact);
+    }
+
+    #[test]
+    fn parses_configure_tui_flag() {
+        let args = CliArgs::parse_from(["kcmt", "--configure", "--tui"]);
+
+        assert!(args.configure);
+        assert!(args.tui);
     }
 
     #[test]

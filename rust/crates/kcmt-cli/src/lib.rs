@@ -11,8 +11,8 @@ use std::time::Instant;
 use kcmt_core::config::loader::ConfigOverrides;
 use kcmt_core::git::repo::find_git_repo_root;
 use kcmt_core::preferences::{
-    default_keychain_account, save_keychain_secret, KeychainProtection, KeychainSaveMode,
-    OsKeychainStore,
+    default_keychain_account, load_preferences, save_keychain_secret, save_preferences,
+    KeychainProtection, KeychainSaveMode, OsKeychainStore,
 };
 
 use args::{CliArgs, CliCommand, StatusArgs};
@@ -59,6 +59,8 @@ fn output_options(args: &CliArgs) -> WorkflowOutputOptions {
         compact: args.compact,
         verbose: args.verbose || args.debug,
         no_progress: args.no_progress,
+        tui: args.tui,
+        tui_model_export: args.tui && env_truthy("KCMT_TUI_MODEL_EXPORT"),
         profile_startup: args.profile_startup || args.debug,
         startup_stages: Vec::new(),
     }
@@ -194,6 +196,10 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             commands::benchmark::run_benchmark_command(repo_path, benchmark)
         }
         None => {
+            let workflow_tui_active = match prepare_workflow_tui(&args) {
+                Ok(active) => active,
+                Err(code) => return code,
+            };
             if let Some(path) = args.file.clone() {
                 let repo_path = match repo_discovery.found_repo_path.clone() {
                     Some(repo_path) => repo_path,
@@ -207,6 +213,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
+                output_options.tui = workflow_tui_active;
                 add_dispatch_telemetry(
                     &mut output_options,
                     &repo_discovery,
@@ -242,6 +249,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
+                output_options.tui = workflow_tui_active;
                 add_dispatch_telemetry(
                     &mut output_options,
                     &repo_discovery,
@@ -275,6 +283,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             };
             let overrides = config_overrides(&args, repo_path.clone());
             let mut output_options = output_options(&args);
+            output_options.tui = workflow_tui_active;
             add_dispatch_telemetry(
                 &mut output_options,
                 &repo_discovery,
@@ -293,6 +302,43 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             }
         }
     }
+}
+
+fn prepare_workflow_tui(args: &CliArgs) -> std::result::Result<bool, i32> {
+    if !args.tui {
+        return Ok(false);
+    }
+    if env_truthy("KCMT_TUI_MODEL_EXPORT") {
+        persist_tui_last_screen("workflow");
+        return Ok(true);
+    }
+    if kcmt_tui::should_enable_tui(false) {
+        persist_tui_last_screen("workflow");
+        return Ok(true);
+    }
+    eprintln!(
+        "--tui workflow mode requires an interactive terminal; omit --tui for non-interactive CLI use"
+    );
+    Err(1)
+}
+
+fn persist_tui_last_screen(screen: &str) {
+    let mut preferences = load_preferences().unwrap_or_default();
+    preferences.tui.last_screen = Some(screen.to_string());
+    if let Err(err) = save_preferences(&preferences) {
+        eprintln!("warning: failed to save TUI preferences: {err}");
+    }
+}
+
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn read_secret_from_stdin() -> Option<String> {
