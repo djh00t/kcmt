@@ -149,6 +149,62 @@ def _start_partial_batch_provider() -> tuple[str, type[_BatchHandler], HTTPServe
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+class _XaiBatchHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, str, str]] = []
+
+    def _record(self) -> str:
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "ignore") if length else ""
+        self.__class__.requests.append((self.command, self.path, body))
+        return body
+
+    def _json(self, body: str) -> None:
+        payload = body.encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._record()
+        if self.path == "/batches":
+            self._json('{"batch_id":"batch_1"}')
+        elif self.path == "/batches/batch_1/requests":
+            self._json('{"status":"accepted"}')
+        else:
+            self.send_error(404)
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._record()
+        if self.path == "/batches/batch_1":
+            self._json(
+                '{"status":"completed","state":{"num_pending":0,"num_requests":2}}'
+            )
+        elif self.path == "/batches/batch_1/results?limit=100":
+            self._json(
+                '{"results":['
+                '{"batch_request_id":"alpha.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(alpha): batch alpha."}}]}}}},'
+                '{"batch_request_id":"beta.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(beta): batch beta."}}]}}}}'
+                "]}"
+            )
+        else:
+            self.send_error(404)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+
+def _start_xai_batch_provider() -> tuple[str, type[_XaiBatchHandler], HTTPServer]:
+    class Handler(_XaiBatchHandler):
+        requests: list[tuple[str, str, str]] = []
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
 class _FallbackHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str, str]] = []
 
@@ -375,6 +431,21 @@ def git_repository_with_two_changed_files_and_partial_batch_provider(
     context["endpoint"] = endpoint
     context["batch_handler"] = handler
     context["batch_server"] = server
+    return context
+
+
+@given(
+    "a git repository with two changed tracked files and a mocked xAI batch provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_two_changed_files_and_mocked_xai_batch_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_two_changed_tracked_files(tmp_path)
+    endpoint, handler, server = _start_xai_batch_provider()
+    context["xai_batch_endpoint"] = endpoint
+    context["xai_batch_handler"] = handler
+    context["xai_batch_server"] = server
     return context
 
 
@@ -816,6 +887,39 @@ def rust_kcmt_runs_in_default_batch_mode(workflow_context: dict[str, Any]) -> No
     )
     workflow_context["output"] = output
     workflow_context["batch_server"].shutdown()
+
+
+@when("the Rust kcmt command runs in default xAI batch mode")
+def rust_kcmt_runs_in_default_xai_batch_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["XAI_TEST_KEY"] = "test-key"
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--provider",
+            "xai",
+            "--endpoint",
+            workflow_context["xai_batch_endpoint"],
+            "--api-key-env",
+            "XAI_TEST_KEY",
+            "--model",
+            "grok-code-fast",
+            "--batch",
+            "--batch-model",
+            "grok-4.3",
+            "--batch-timeout",
+            "900",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+    workflow_context["xai_batch_server"].shutdown()
 
 
 @when("the Rust kcmt command commits the file using configured provider fallback")
@@ -1706,6 +1810,26 @@ def batch_provider_receives_both_file_prompts_before_commits_are_written(
     assert "beta.py" in upload_body
     assert "print('alpha updated')" in upload_body
     assert "print('beta updated')" in upload_body
+    assert all(request[1] != "/chat/completions" for request in requests)
+
+
+@then("the xAI batch provider receives both file prompts before commits are written")
+def xai_batch_provider_receives_both_file_prompts_before_commits_are_written(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["xai_batch_handler"].requests
+    assert [request[1] for request in requests] == [
+        "/batches",
+        "/batches/batch_1/requests",
+        "/batches/batch_1",
+        "/batches/batch_1/results?limit=100",
+    ]
+    requests_body = requests[1][2]
+    assert "alpha.py" in requests_body
+    assert "beta.py" in requests_body
+    assert "print('alpha updated')" in requests_body
+    assert "print('beta updated')" in requests_body
+    assert '"model":"grok-4.3"' in requests_body
     assert all(request[1] != "/chat/completions" for request in requests)
 
 
