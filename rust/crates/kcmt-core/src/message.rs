@@ -49,13 +49,62 @@ pub fn selected_prompt_profile(preferences: &Preferences) -> PromptProfile {
 }
 
 pub fn build_prompt_with_profile(diff: &str, context: &str, profile: &PromptProfile) -> String {
-    let mut prompt = build_prompt(diff, context, "conventional");
+    build_prompt_with_profile_style(diff, context, "conventional", profile)
+}
+
+pub fn build_prompt_with_profile_style(
+    diff: &str,
+    context: &str,
+    style: &str,
+    profile: &PromptProfile,
+) -> String {
+    let prepared_diff = prepare_diff_for_prompt(diff, context);
+    let mut prompt = build_prompt(&prepared_diff, context, style);
     let instruction = profile.user_instruction.trim();
     if !instruction.is_empty() {
         prompt.push_str("\n\nUSER PREFERENCES:\n");
         prompt.push_str(instruction);
     }
     prompt
+}
+
+pub fn prepare_diff_for_prompt(diff: &str, context: &str) -> String {
+    let file_path_hint = context
+        .split_once("File:")
+        .map(|(_, value)| value.trim())
+        .unwrap_or_default();
+    let mut diff_for_prompt = diff.to_string();
+    let binary_summary = if is_binary_diff(diff) && !looks_like_text_file(file_path_hint) {
+        let snippet = diff.chars().take(400).collect::<String>();
+        Some(format!(
+            "Binary diff detected.\nFile hint: {}\nGit reported: {}",
+            if file_path_hint.is_empty() {
+                "unknown"
+            } else {
+                file_path_hint
+            },
+            if snippet.trim().is_empty() {
+                "<no additional details>"
+            } else {
+                snippet.trim()
+            }
+        ))
+    } else {
+        None
+    };
+
+    if diff_for_prompt.len() > 12_000 {
+        let head = take_chars(&diff_for_prompt, 8_000);
+        let tail = take_last_chars(&diff_for_prompt, 2_000);
+        diff_for_prompt = format!("{head}\n...\n{tail}");
+    }
+
+    let cleaned_diff = clean_diff_for_llm(&diff_for_prompt);
+    if let Some(summary) = binary_summary {
+        format!("{summary}\n\n{cleaned_diff}").trim().to_string()
+    } else {
+        cleaned_diff
+    }
 }
 
 pub fn sanitize_commit_output(raw: &str) -> Result<String, String> {
@@ -150,6 +199,59 @@ fn clean_candidate_header(line: &str) -> String {
     stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn is_binary_diff(diff: &str) -> bool {
+    diff.lines().any(|line| {
+        (line.starts_with("Binary files") && line.contains(" differ"))
+            || line.contains("GIT binary patch")
+    })
+}
+
+fn looks_like_text_file(file_path: &str) -> bool {
+    if file_path.is_empty() {
+        return false;
+    }
+    const TEXT_EXTENSIONS: &[&str] = &[
+        ".py", ".pyi", ".pyx", ".pxd", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".sass",
+        ".less", ".html", ".htm", ".xml", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".md",
+        ".rst", ".txt", ".csv", ".tsv", ".java", ".c", ".cpp", ".h", ".hpp", ".go", ".rs", ".rb",
+        ".php", ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd", ".gradle", ".make", ".mk",
+        ".cmake",
+    ];
+    let lower = file_path.to_ascii_lowercase();
+    TEXT_EXTENSIONS
+        .iter()
+        .any(|extension| lower.ends_with(extension))
+        || ["/src/", "/lib/", "/app/", "/kcmt/"]
+            .iter()
+            .any(|directory| lower.contains(directory))
+}
+
+fn clean_diff_for_llm(diff: &str) -> String {
+    diff.trim()
+        .lines()
+        .map(|line| {
+            if line.contains("--- /dev/null") {
+                "--- (new file)"
+            } else if line.contains("+++ /dev/null") {
+                "+++ (deleted)"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn take_chars(value: &str, count: usize) -> String {
+    value.chars().take(count).collect()
+}
+
+fn take_last_chars(value: &str, count: usize) -> String {
+    let mut tail = value.chars().rev().take(count).collect::<Vec<_>>();
+    tail.reverse();
+    tail.into_iter().collect()
+}
+
 fn is_conventional_type(value: &str) -> bool {
     CONVENTIONAL_TYPES.contains(&value)
 }
@@ -161,7 +263,7 @@ fn is_wrapped(value: &str, delimiter: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_prompt, build_prompt_with_profile, sanitize_commit_output,
+        build_prompt, build_prompt_with_profile, prepare_diff_for_prompt, sanitize_commit_output,
         validate_conventional_commit,
     };
     use crate::preferences::PromptProfile;
@@ -204,6 +306,37 @@ mod tests {
 
         assert!(prompt.contains("STRICT REQUIREMENTS"));
         assert!(prompt.contains("USER PREFERENCES:\nPrefer repo-specific scopes."));
+    }
+
+    #[test]
+    fn prepare_diff_summarizes_binary_changes_for_prompt() {
+        let prepared = prepare_diff_for_prompt(
+            "Binary files a/assets/logo.png and b/assets/logo.png differ",
+            "File: assets/logo.png",
+        );
+
+        assert!(prepared.contains("Binary diff detected."));
+        assert!(prepared.contains("File hint: assets/logo.png"));
+        assert!(prepared.contains("Git reported: Binary files"));
+    }
+
+    #[test]
+    fn prepare_diff_preserves_text_file_binary_markers() {
+        let diff = "Binary files a/src/generated.py and b/src/generated.py differ";
+        let prepared = prepare_diff_for_prompt(diff, "File: src/generated.py");
+
+        assert!(!prepared.contains("Binary diff detected."));
+        assert_eq!(prepared, diff);
+    }
+
+    #[test]
+    fn prepare_diff_truncates_large_diffs_and_cleans_null_paths() {
+        let large = format!("--- /dev/null\n+++ b/generated.txt\n{}", "x".repeat(13_000));
+        let prepared = prepare_diff_for_prompt(&large, "File: generated.txt");
+
+        assert!(prepared.len() < large.len());
+        assert!(prepared.contains("--- (new file)"));
+        assert!(prepared.contains("\n...\n"));
     }
 
     #[test]

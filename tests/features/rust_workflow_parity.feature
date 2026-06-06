@@ -47,6 +47,18 @@ Feature: Rust workflow parity
     When the Rust kcmt command commits the file with wrapped provider output
     Then the latest commit uses the sanitized provider message
 
+  Scenario: File workflow summarizes binary diffs for provider prompts
+    Given a git repository with one changed binary file and a mocked OpenAI provider
+    When the Rust kcmt command commits the binary file with the mocked provider
+    Then the mocked provider prompt includes the binary diff summary
+    And the latest commit uses the binary provider message
+
+  Scenario: File workflow retries malformed provider output with a simplified prompt
+    Given a git repository with one changed tracked file and a malformed-then-valid OpenAI provider
+    When the Rust kcmt command commits the file with malformed then valid provider output
+    Then the mocked provider receives a simplified retry prompt
+    And the latest commit uses the simplified retry provider message
+
   Scenario: File workflow rejects invalid provider output
     Given a git repository with one changed tracked file
     When the Rust kcmt command receives invalid provider output

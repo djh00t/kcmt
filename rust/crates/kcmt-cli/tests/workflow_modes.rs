@@ -131,6 +131,33 @@ fn spawn_provider_response(response_body: &'static str) -> (String, mpsc::Receiv
     (format!("http://{address}"), receiver)
 }
 
+fn spawn_provider_responses(
+    response_bodies: Vec<&'static str>,
+) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("mock provider listener");
+    let address = listener.local_addr().expect("mock provider address");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for response_body in response_bodies {
+            let (mut stream, _) = listener.accept().expect("mock provider connection");
+            let mut buffer = [0_u8; 32768];
+            let bytes = stream.read(&mut buffer).expect("mock provider read");
+            sender
+                .send(String::from_utf8_lossy(&buffer[..bytes]).to_string())
+                .expect("request should be recorded");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("mock provider write");
+        }
+    });
+    (format!("http://{address}"), receiver)
+}
+
 fn spawn_provider_status_response(
     status: u16,
     response_body: &'static str,
@@ -1548,6 +1575,109 @@ fn default_openai_batch_reports_partial_invalid_outputs_without_leaking_keys() {
     let raw_snapshot = serde_json::to_string(&snapshot).expect("snapshot json");
     assert!(!raw_snapshot.contains("test-key"));
     assert!(raw_snapshot.contains("OPENAI_TEST_KEY"));
+}
+
+#[test]
+fn file_mode_summarizes_binary_diff_in_provider_prompt() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"choices":[{"message":{"content":"chore(assets): update logo."}}]}"#,
+    );
+    fs::create_dir_all(repo.join("assets")).expect("assets dir");
+    fs::write(repo.join("assets/logo.png"), b"\0PNG seed").expect("binary seed");
+    git(&repo, &["add", "assets/logo.png"]);
+    git(&repo, &["commit", "-m", "chore(assets): seed logo"]);
+    fs::write(repo.join("assets/logo.png"), b"\0PNG changed").expect("binary change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "assets/logo.png",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-direct",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be recorded");
+    assert!(request.contains("Binary diff detected."));
+    assert!(request.contains("File hint: assets/logo.png"));
+    assert!(request.contains("Git reported:"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "chore(assets): update logo");
+}
+
+#[test]
+fn file_mode_retries_invalid_output_with_simple_prompt() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    let (endpoint, request_rx) = spawn_provider_responses(vec![
+        r#"{"choices":[{"message":{"content":"This changes a few files"}}]}"#,
+        r#"{"choices":[{"message":{"content":"fix(core): retry simplified prompt."}}]}"#,
+    ]);
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-direct",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let first_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first provider request should be recorded");
+    let retry_request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("retry provider request should be recorded");
+    assert!(first_request.contains("STRICT REQUIREMENTS"));
+    assert!(retry_request.contains("Keep it simple but include mandatory scope."));
+    assert!(!retry_request.contains("STRICT REQUIREMENTS"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "fix(core): retry simplified prompt");
 }
 
 #[test]
