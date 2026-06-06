@@ -43,7 +43,7 @@ jobs:
       - name: Build Rust candidate
         shell: bash
         run: |
-          cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+          cargo build --locked --release --manifest-path rust/Cargo.toml -p kcmt-cli
 
       - name: Run canary probe scenarios
         shell: bash
