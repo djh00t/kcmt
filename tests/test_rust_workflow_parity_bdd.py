@@ -347,6 +347,7 @@ def _rust_bin(binary: str) -> Path:
         [
             "cargo",
             "build",
+            "--locked",
             "--manifest-path",
             str(RUST_MANIFEST),
             "-p",
