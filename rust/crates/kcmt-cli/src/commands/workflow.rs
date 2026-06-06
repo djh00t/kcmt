@@ -33,6 +33,8 @@ use kcmt_provider::clients::{
 use kcmt_provider::error_map::normalize_error;
 use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
 use serde_json::json;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use super::history::snapshot_path;
 use super::model_discovery::{cached_or_static_catalog_for_config, catalog_to_selector_candidates};
@@ -1969,6 +1971,20 @@ fn workflow_summary(
     parts.join(". ")
 }
 
+fn timestamp_utc() -> Result<String> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|err| KcmtError::Message(format!("failed to format UTC timestamp: {err}")))
+}
+
+fn commits_per_second(commits: usize, duration_seconds: f64) -> f64 {
+    if commits == 0 || duration_seconds <= 0.0 {
+        0.0
+    } else {
+        commits as f64 / duration_seconds
+    }
+}
+
 fn unstage_path(repo_path: &Path, file_path: &str) {
     let _ = Command::new("git")
         .current_dir(repo_path)
@@ -2021,12 +2037,27 @@ fn persist_run_snapshot(
         deletions_success,
         deletions_failure,
     );
+    let timestamp = timestamp_utc()?;
     if runtime_benchmark_enabled() {
         telemetry.record_since("snapshot", snapshot_start, 1);
         telemetry.record_since("workflow_total", workflow_start, total_entries);
+        let duration_seconds = workflow_start.elapsed().as_secs_f64();
+        let rate_commits_per_sec = commits_per_second(overall_success, duration_seconds);
+        let stats = json!({
+            "total_files": total_entries,
+            "diffs_built": prepared_count,
+            "requests": prepared_count,
+            "responses": prepared_count,
+            "prepared": prepared_count,
+            "processed": commits.len() + failures.len(),
+            "successes": overall_success,
+            "failures": overall_failure,
+            "elapsed": duration_seconds,
+            "rate": rate_commits_per_sec
+        });
         let snapshot = json!({
             "schema_version": 1,
-            "timestamp": "",
+            "timestamp": timestamp,
             "repo_path": repo_path.display().to_string(),
             "provider": config.provider,
             "model": config.model,
@@ -2048,8 +2079,8 @@ fn persist_run_snapshot(
                 "batch_model": config.batch_model,
                 "batch_timeout_seconds": config.batch_timeout_seconds
             },
-            "duration_seconds": 0.0,
-            "rate_commits_per_sec": 0.0,
+            "duration_seconds": duration_seconds,
+            "rate_commits_per_sec": rate_commits_per_sec,
             "summary": summary,
             "counts": {
                 "files_total": total_entries,
@@ -2071,7 +2102,7 @@ fn persist_run_snapshot(
             "commits": [],
             "deletions": [],
             "subjects": subjects,
-            "stats": {},
+            "stats": stats,
             "telemetry": {
                 "schema_version": 1,
                 "prepare_workers": telemetry.prepare_workers,
@@ -2126,10 +2157,24 @@ fn persist_run_snapshot(
     }
     telemetry.record_since("snapshot", snapshot_start, 1);
     telemetry.record_since("workflow_total", workflow_start, total_entries);
+    let duration_seconds = workflow_start.elapsed().as_secs_f64();
+    let rate_commits_per_sec = commits_per_second(overall_success, duration_seconds);
+    let stats = json!({
+        "total_files": total_entries,
+        "diffs_built": prepared_count,
+        "requests": prepared_count,
+        "responses": prepared_count,
+        "prepared": prepared_count,
+        "processed": commits.len() + failures.len(),
+        "successes": overall_success,
+        "failures": overall_failure,
+        "elapsed": duration_seconds,
+        "rate": rate_commits_per_sec
+    });
 
     let snapshot = json!({
         "schema_version": 1,
-        "timestamp": "",
+        "timestamp": timestamp,
         "repo_path": repo_path.display().to_string(),
         "provider": config.provider,
         "model": config.model,
@@ -2151,8 +2196,8 @@ fn persist_run_snapshot(
             "batch_model": config.batch_model,
             "batch_timeout_seconds": config.batch_timeout_seconds
         },
-        "duration_seconds": 0.0,
-        "rate_commits_per_sec": 0.0,
+        "duration_seconds": duration_seconds,
+        "rate_commits_per_sec": rate_commits_per_sec,
         "counts": {
             "files_total": total_entries,
             "prepared_total": prepared_count,
@@ -2174,7 +2219,7 @@ fn persist_run_snapshot(
         "commits": commit_records,
         "deletions": deletion_records,
         "subjects": subjects,
-        "stats": {},
+        "stats": stats,
         "telemetry": {
             "schema_version": 1,
             "prepare_workers": telemetry.prepare_workers,

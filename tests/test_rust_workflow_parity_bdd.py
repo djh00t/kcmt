@@ -1740,6 +1740,50 @@ def raw_status_snapshot_records_two_prepare_workers(
     )
     snapshot = json.loads(raw_status)
     assert snapshot["telemetry"]["prepare_workers"] == 2
+    assert snapshot["schema_version"] == 1
+    assert snapshot["timestamp"]
+    assert snapshot["duration_seconds"] >= 0
+    assert snapshot["rate_commits_per_sec"] >= 0
+    assert snapshot["stats"]["total_files"] == 2
+    assert snapshot["stats"]["prepared"] == 2
+    assert snapshot["stats"]["processed"] == 2
+    assert snapshot["stats"]["successes"] == 2
+    assert snapshot["stats"]["failures"] == 0
+    assert snapshot["stats"]["elapsed"] >= 0
+    assert snapshot["stats"]["rate"] >= 0
+    stages = snapshot["telemetry"]["stages"]
+    assert stages
+    assert all("duration_ms" in stage for stage in stages)
+
+
+@then("the Rust status command reports status and telemetry parity")
+def rust_status_command_reports_status_and_telemetry_parity(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "status",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    assert "kcmt status ::" in output
+    assert "Schema version: 1" in output
+    assert "Provider: openai" in output
+    assert "Duration " in output
+    assert "Rate " in output
+    assert "Auto-push: not triggered" in output
+    assert "Preparation status" in output
+    assert "Files: 2" in output
+    assert "Prepared: 2" in output
+    assert "Commit status" in output
+    assert "Overall success: 2" in output
+    assert "Telemetry stages" in output
+    assert "Duration ms" in output
 
 
 @then("the compact workflow output includes summary and commit details")
@@ -2255,11 +2299,31 @@ def rust_stats_command_reports_usage_telemetry(
         env=env,
     )
     payload = json.loads(output)
+    assert payload["schema_version"] == 1
     assert payload["aggregates"]
     aggregate = payload["aggregates"][0]
     assert aggregate["runs"] >= 1
-    assert "provider" in aggregate
-    assert "model" in aggregate
+    assert aggregate["successes"] >= 1
+    assert aggregate["failures"] == 0
+    assert aggregate["avg_latency_ms"] >= 0
+    assert aggregate["fallback_count"] >= 0
+    assert aggregate["request_count"] >= 1
+    assert aggregate["provider"]
+    assert aggregate["model"]
+
+    pretty = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "stats",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    assert "kcmt usage statistics" in pretty
+    assert "schema_version\t1" in pretty
+    assert "provider\tmodel\truns\tsuccesses\tfailures" in pretty
 
 
 @then("the model list includes all supported providers")

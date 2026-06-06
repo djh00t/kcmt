@@ -407,6 +407,7 @@ mod tests {
                 fallback_count: 0,
                 request_count: 3,
             }],
+            ..UsageSummary::default()
         };
 
         let selected = select_model(

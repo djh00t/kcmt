@@ -162,7 +162,19 @@ fn spawn_provider_responses(
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .expect("mock provider stream should have read timeout");
             let mut buffer = [0_u8; 32768];
-            let bytes = stream.read(&mut buffer).expect("mock provider read");
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let bytes = loop {
+                match stream.read(&mut buffer) {
+                    Ok(bytes) => break bytes,
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            panic!("mock provider read timed out");
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("mock provider read failed: {err}"),
+                }
+            };
             sender
                 .send(String::from_utf8_lossy(&buffer[..bytes]).to_string())
                 .expect("request should be recorded");
@@ -424,6 +436,34 @@ fn oneshot_mode_persists_single_selected_file_snapshot() {
     assert_eq!(snapshot["counts"]["files_total"], 1);
     assert_eq!(snapshot["counts"]["commit_success"], 1);
     assert_eq!(snapshot["counts"]["overall_success"], 1);
+    assert!(snapshot["timestamp"]
+        .as_str()
+        .expect("timestamp")
+        .contains('T'));
+    assert!(
+        snapshot["duration_seconds"]
+            .as_f64()
+            .expect("duration seconds")
+            >= 0.0
+    );
+    assert!(
+        snapshot["rate_commits_per_sec"]
+            .as_f64()
+            .expect("rate commits per sec")
+            >= 0.0
+    );
+    assert_eq!(snapshot["stats"]["total_files"], 1);
+    assert_eq!(snapshot["stats"]["prepared"], 1);
+    assert_eq!(snapshot["stats"]["processed"], 1);
+    assert_eq!(snapshot["stats"]["successes"], 1);
+    assert_eq!(snapshot["stats"]["failures"], 0);
+    assert!(
+        snapshot["stats"]["elapsed"]
+            .as_f64()
+            .expect("stats elapsed")
+            >= 0.0
+    );
+    assert!(snapshot["stats"]["rate"].as_f64().expect("stats rate") >= 0.0);
     assert_eq!(snapshot["telemetry"]["schema_version"], 1);
     let stages: Vec<&str> = snapshot["telemetry"]["stages"]
         .as_array()
@@ -443,6 +483,24 @@ fn oneshot_mode_persists_single_selected_file_snapshot() {
         snapshot["commits"].as_array().expect("commits array").len(),
         1
     );
+
+    let pretty_status = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["status", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt status should run");
+    assert!(pretty_status.status.success());
+    let pretty_stdout = String::from_utf8_lossy(&pretty_status.stdout);
+    assert!(pretty_stdout.contains("Schema version: 1"));
+    assert!(pretty_stdout.contains("Provider: openai"));
+    assert!(pretty_stdout.contains("Rate "));
+    assert!(pretty_stdout.contains("Auto-push: not triggered"));
+    assert!(pretty_stdout.contains("Preparation status"));
+    assert!(pretty_stdout.contains("Overall success: 1"));
+    assert!(pretty_stdout.contains("Latest commit"));
+    assert!(pretty_stdout.contains("Telemetry stages"));
+    assert!(pretty_stdout.contains("Duration ms"));
 }
 
 #[test]
