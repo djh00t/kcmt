@@ -75,10 +75,10 @@ test-ink:
 	npm --prefix kcmt/ui/ink test
 
 test-rust:
-	cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+	cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
 
 test-llm-matrix:
-	KCMT_LIVE_LLM_MATRIX=1 cargo test --manifest-path rust/Cargo.toml -p kcmt-cli --test live_llm_matrix -- --ignored --nocapture
+	KCMT_LIVE_LLM_MATRIX=1 cargo test --locked --manifest-path rust/Cargo.toml -p kcmt-cli --test live_llm_matrix -- --ignored --nocapture
 
 test-verbose:
 	$(PYTEST) -v
