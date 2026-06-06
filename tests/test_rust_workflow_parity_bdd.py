@@ -1269,6 +1269,7 @@ def rust_kcmt_configures_all_providers_with_anthropic_overrides(
     )
     workflow_context["output"] = output
 
+
 @when("the Rust kcmt command tries to save an Anthropic API key from stdin")
 def rust_kcmt_tries_to_save_anthropic_api_key_from_stdin(
     workflow_context: dict[str, Any],
