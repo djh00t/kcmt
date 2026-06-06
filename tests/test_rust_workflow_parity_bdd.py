@@ -53,6 +53,7 @@ def _clean_env(config_home: Path) -> dict[str, str]:
     }
     env["KCMT_CONFIG_HOME"] = str(config_home)
     env["KCMT_ALLOW_LOCAL_SYNTHESIS"] = "1"
+    env["KCMT_DISABLE_KEYCHAIN"] = "1"
     return env
 
 

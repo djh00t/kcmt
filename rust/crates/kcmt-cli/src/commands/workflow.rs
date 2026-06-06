@@ -597,7 +597,7 @@ fn run_entries_workflow(
                 .model_selection
                 .rule_applied
                 .as_ref()
-                .map(|rule| format!("{rule:?}").to_ascii_lowercase()),
+                .map(|rule| rule.as_str().to_string()),
             success: failures.is_empty() && !commits.is_empty(),
             latency_ms: workflow_start.elapsed().as_secs_f64() * 1000.0,
             fallback_count: u64::from(runtime.model_selection.fallback_reason.is_some()),

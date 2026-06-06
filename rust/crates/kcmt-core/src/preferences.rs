@@ -84,6 +84,20 @@ pub enum ProviderRulePreset {
     ExcludeBeta,
 }
 
+impl ProviderRulePreset {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::PinExactModel => "pin_exact_model",
+            Self::LatestFamily => "latest_family",
+            Self::LatestHaiku => "latest_haiku",
+            Self::CheapestCodeModel => "cheapest_code_model",
+            Self::FastestCodeModel => "fastest_code_model",
+            Self::ExcludeBeta => "exclude_beta",
+        }
+    }
+}
+
 impl Default for ProviderRulePreset {
     fn default() -> Self {
         Self::None
@@ -168,6 +182,7 @@ pub trait SecretStore {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OsKeychainStore;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SecretStore for OsKeychainStore {
     fn get_secret(&self, account: &str) -> std::result::Result<Option<String>, String> {
         let entry =
@@ -184,6 +199,17 @@ impl SecretStore for OsKeychainStore {
         let entry =
             keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|err| err.to_string())?;
         entry.set_password(secret).map_err(|err| err.to_string())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+impl SecretStore for OsKeychainStore {
+    fn get_secret(&self, _account: &str) -> std::result::Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    fn set_secret(&self, _account: &str, _secret: &str) -> std::result::Result<(), String> {
+        Err("OS keychain is not available on this platform".to_string())
     }
 }
 
@@ -237,16 +263,18 @@ pub fn resolve_credential(
         }));
     }
 
-    let account = request
-        .keychain_account
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| default_keychain_account(&request.provider));
-    if let Ok(Some(secret)) = store.get_secret(&account) {
-        return Ok(Some(Credential {
-            secret,
-            source: CredentialSource::Keychain,
-        }));
+    if !keychain_disabled() {
+        let account = request
+            .keychain_account
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_keychain_account(&request.provider));
+        if let Ok(Some(secret)) = store.get_secret(&account) {
+            return Ok(Some(Credential {
+                secret,
+                source: CredentialSource::Keychain,
+            }));
+        }
     }
 
     if let Ok(secret) = env::var(&request.env_var) {
@@ -260,6 +288,16 @@ pub fn resolve_credential(
     }
 
     Ok(None)
+}
+
+fn keychain_disabled() -> bool {
+    env::var("KCMT_DISABLE_KEYCHAIN")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
 }
 
 pub fn default_keychain_account(provider: &str) -> String {
@@ -309,6 +347,7 @@ mod tests {
     #[test]
     fn credential_resolution_prefers_cli_then_keychain_then_env() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
         std::env::set_var("KCMT_TEST_API_KEY", "env-secret");
         let mut store = FakeStore::default();
         store.secrets.insert(
@@ -346,5 +385,32 @@ mod tests {
         assert_eq!(from_env.source, CredentialSource::Environment);
         assert_eq!(from_env.secret, "env-secret");
         std::env::remove_var("KCMT_TEST_API_KEY");
+    }
+
+    #[test]
+    fn credential_resolution_can_disable_keychain_for_hermetic_runs() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::set_var("KCMT_DISABLE_KEYCHAIN", "1");
+        std::env::set_var("KCMT_TEST_API_KEY", "env-secret");
+        let mut store = FakeStore::default();
+        store.secrets.insert(
+            "provider/openai/default".to_string(),
+            "keychain-secret".to_string(),
+        );
+        let request = CredentialRequest {
+            provider: "openai".to_string(),
+            explicit_secret: None,
+            keychain_account: None,
+            env_var: "KCMT_TEST_API_KEY".to_string(),
+        };
+
+        let credential = resolve_credential(&request, &store)
+            .expect("credential")
+            .expect("present");
+
+        assert_eq!(credential.source, CredentialSource::Environment);
+        assert_eq!(credential.secret, "env-secret");
+        std::env::remove_var("KCMT_TEST_API_KEY");
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
     }
 }

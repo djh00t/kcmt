@@ -24,6 +24,7 @@ fn kcmt_command() -> Command {
             command.env(key, value);
         }
     }
+    command.env("KCMT_DISABLE_KEYCHAIN", "1");
     command
 }
 

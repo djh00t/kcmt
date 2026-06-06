@@ -190,7 +190,7 @@ test -n "$OPENAI_API_KEY" && \
 | Provider  | Default model             | Default endpoint                         |
 |-----------|---------------------------|------------------------------------------|
 | OpenAI    | `gpt-5-mini-2025-08-07`   | `https://api.openai.com/v1`              |
-| Anthropic | `claude-sonnet-4-20250514` | `https://api.anthropic.com`             |
+| Anthropic | `claude-3-5-haiku-latest`  | `https://api.anthropic.com`             |
 | xAI       | `grok-code-fast`          | `https://api.x.ai/v1`                   |
 | GitHub    | `openai/gpt-4.1-mini`     | `https://models.github.ai/inference`    |
 
@@ -223,6 +223,7 @@ Additional LLM behaviour environment variables:
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
 - `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
 - `KCMT_FAST_LOCAL_FOR_SMALL_DIFFS` – opt-in local conventional subject for tiny diffs (<=3 changed lines)
+- `KCMT_DISABLE_KEYCHAIN=1` – skip OS keychain lookup for hermetic CI/test runs
 - `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
 
 ## List models and pricing

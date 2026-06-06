@@ -117,9 +117,15 @@ fn live_models_for_provider(
     endpoint: &str,
     api_key_env: &str,
 ) -> Option<Vec<String>> {
+    let explicit_provider = std::env::var("KCMT_EXPLICIT_API_KEY_PROVIDER").ok();
+    let explicit_secret = if explicit_provider.as_deref().unwrap_or(provider) == provider {
+        std::env::var("KCMT_EXPLICIT_API_KEY").ok()
+    } else {
+        None
+    };
     let request = CredentialRequest {
         provider: provider.to_string(),
-        explicit_secret: None,
+        explicit_secret,
         keychain_account: Some(default_keychain_account(provider)),
         env_var: api_key_env.to_string(),
     };
