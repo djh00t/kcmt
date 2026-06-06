@@ -9,10 +9,27 @@ use sha2::{Digest, Sha256};
 use crate::config::loader::config_home;
 use crate::error::{KcmtError, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub const USAGE_SUMMARY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct UsageSummary {
+    #[serde(default = "default_usage_summary_schema_version")]
+    pub schema_version: u32,
     pub aggregates: Vec<TelemetryAggregate>,
+}
+
+fn default_usage_summary_schema_version() -> u32 {
+    USAGE_SUMMARY_SCHEMA_VERSION
+}
+
+impl Default for UsageSummary {
+    fn default() -> Self {
+        Self {
+            schema_version: USAGE_SUMMARY_SCHEMA_VERSION,
+            aggregates: Vec::new(),
+        }
+    }
 }
 
 impl UsageSummary {
@@ -195,9 +212,17 @@ mod tests {
                 .join("usage_summary.json"),
         )
         .expect("summary");
+        assert!(raw.contains("\"schema_version\": 1"));
         assert!(raw.contains("latest_haiku"));
         assert!(!raw.contains("DIFF:"));
         assert!(!raw.contains("Generate a conventional commit"));
         std::env::remove_var("KCMT_CONFIG_HOME");
+    }
+
+    #[test]
+    fn usage_summary_defaults_schema_version_for_legacy_files() {
+        let summary: super::UsageSummary =
+            serde_json::from_str(r#"{"aggregates":[]}"#).expect("legacy summary");
+        assert_eq!(summary.schema_version, super::USAGE_SUMMARY_SCHEMA_VERSION);
     }
 }

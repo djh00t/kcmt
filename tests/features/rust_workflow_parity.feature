@@ -25,6 +25,7 @@ Feature: Rust workflow parity
     When the Rust kcmt command runs in default workflow mode with two workers
     Then both changed files are committed separately
     And the raw status snapshot records two prepare workers
+    And the Rust status command reports status and telemetry parity
 
   Scenario: Compact verbose profile flags control workflow output
     Given a git repository with one changed tracked file

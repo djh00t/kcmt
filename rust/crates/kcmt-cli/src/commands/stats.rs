@@ -18,6 +18,7 @@ pub fn render_stats_command(repo_path: PathBuf, args: StatsArgs) -> i32 {
         },
         Ok(summary) => {
             println!("kcmt usage statistics");
+            println!("schema_version\t{}", summary.schema_version);
             if summary.aggregates.is_empty() {
                 println!("No usage telemetry recorded for this repository.");
                 return 0;
