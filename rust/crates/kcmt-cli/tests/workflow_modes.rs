@@ -187,7 +187,7 @@ fn explicit_tui_workflow_exports_model_and_persists_screen() {
 }
 
 #[test]
-fn explicit_tui_workflow_exports_prepare_failure_model() {
+fn explicit_tui_workflow_exports_repaired_model() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
@@ -212,15 +212,23 @@ fn explicit_tui_workflow_exports_prepare_failure_model() {
         .output()
         .expect("kcmt binary should run");
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let model = tui_model_from_text(&stderr);
-    assert_eq!(model["current_phase"], "complete_with_failures");
-    assert_eq!(model["committed"], 0);
-    assert_eq!(model["failed"], 1);
-    assert_eq!(model["files"]["tracked.py"]["status"], "failed");
-    assert_eq!(model["files"]["tracked.py"]["stage"], "prepare_failed");
-    assert_eq!(git(&repo, &["status", "--short"]), "M tracked.py");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model = tui_model_from_stdout(&output.stdout);
+    assert_eq!(model["current_phase"], "complete");
+    assert_eq!(model["committed"], 1);
+    assert_eq!(model["failed"], 0);
+    assert_eq!(model["files"]["tracked.py"]["status"], "committed");
+    assert_eq!(model["files"]["tracked.py"]["stage"], "done");
+    assert_eq!(
+        model["files"]["tracked.py"]["subject"],
+        "chore(repo): update tracked"
+    );
+    assert_eq!(git(&repo, &["status", "--short"]), "");
 }
 
 fn init_bare_remote() -> PathBuf {
@@ -729,7 +737,7 @@ fn default_mode_commits_rename_source_and_destination_together() {
 }
 
 #[test]
-fn default_mode_records_prepare_failure_without_blocking_deletion_commit() {
+fn default_mode_repairs_invalid_provider_output_without_blocking_deletion_commit() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     fs::write(repo.join("delete_me.txt"), "delete me\n").expect("delete seed");
@@ -757,13 +765,16 @@ fn default_mode_records_prepare_failure_without_blocking_deletion_commit() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("✓ delete_me.txt"));
-    assert!(stdout.contains("✗ tracked.py"));
-    assert!(stdout.contains("missing conventional commit header"));
+    assert!(stdout.contains("✓ tracked.py"));
+    assert!(!stdout.contains("✗ tracked.py"));
+    assert!(!stdout.contains("missing conventional commit header"));
 
-    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
-    assert_eq!(log, "chore(delete_me-txt): file deleted");
+    let log = git(&repo, &["log", "--pretty=%s"]);
+    let subjects: Vec<&str> = log.lines().collect();
+    assert!(subjects.contains(&"chore(delete_me-txt): file deleted"));
+    assert!(subjects.contains(&"chore(repo): update tracked"));
     let status = git(&repo, &["status", "--short"]);
-    assert_eq!(status, "M tracked.py");
+    assert!(status.is_empty(), "unexpected dirty status: {status}");
 
     let status_output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
         .env("KCMT_CONFIG_HOME", &config_home)
@@ -776,16 +787,16 @@ fn default_mode_records_prepare_failure_without_blocking_deletion_commit() {
     let snapshot: serde_json::Value =
         serde_json::from_slice(&status_output.stdout).expect("raw status is json");
     assert_eq!(snapshot["counts"]["files_total"], 2);
-    assert_eq!(snapshot["counts"]["prepared_total"], 1);
+    assert_eq!(snapshot["counts"]["prepared_total"], 2);
     assert_eq!(snapshot["counts"]["processed_total"], 2);
-    assert_eq!(snapshot["counts"]["prepared_failures"], 1);
-    assert_eq!(snapshot["counts"]["commit_success"], 0);
-    assert_eq!(snapshot["counts"]["commit_failure"], 1);
+    assert_eq!(snapshot["counts"]["prepared_failures"], 0);
+    assert_eq!(snapshot["counts"]["commit_success"], 1);
+    assert_eq!(snapshot["counts"]["commit_failure"], 0);
     assert_eq!(snapshot["counts"]["deletions_total"], 1);
     assert_eq!(snapshot["counts"]["deletions_success"], 1);
-    assert_eq!(snapshot["counts"]["overall_success"], 1);
-    assert_eq!(snapshot["counts"]["overall_failure"], 1);
-    assert_eq!(snapshot["commits"][0]["success"], false);
+    assert_eq!(snapshot["counts"]["overall_success"], 2);
+    assert_eq!(snapshot["counts"]["overall_failure"], 0);
+    assert_eq!(snapshot["commits"][0]["success"], true);
     assert_eq!(snapshot["commits"][0]["file_path"], "tracked.py");
     assert_eq!(snapshot["deletions"][0]["success"], true);
     assert_eq!(snapshot["deletions"][0]["file_path"], "delete_me.txt");
@@ -1954,7 +1965,7 @@ fn default_openai_batch_queues_all_file_prompts_before_committing() {
 }
 
 #[test]
-fn default_openai_batch_reports_partial_invalid_outputs_without_leaking_keys() {
+fn default_openai_batch_repairs_partial_invalid_outputs_without_leaking_keys() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
     let (endpoint, request_rx) = spawn_openai_partial_batch_response();
@@ -1998,7 +2009,8 @@ fn default_openai_batch_reports_partial_invalid_outputs_without_leaking_keys() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("fix(alpha): batch alpha"));
-    assert!(stdout.contains("LLM output missing conventional commit header"));
+    assert!(stdout.contains("chore(repo): update beta"));
+    assert!(!stdout.contains("LLM output missing conventional commit header"));
     assert!(!stdout.contains("test-key"));
     assert!(!stderr.contains("test-key"));
 
@@ -2012,13 +2024,12 @@ fn default_openai_batch_reports_partial_invalid_outputs_without_leaking_keys() {
     let log = git(&repo, &["log", "--pretty=%s"]);
     let subjects: Vec<&str> = log.lines().collect();
     assert!(subjects.contains(&"fix(alpha): batch alpha"));
-    assert!(!subjects.contains(&"This is not conventional"));
+    assert!(subjects.contains(&"chore(repo): update beta"));
     let status = git(&repo, &["status", "--short"]);
-    assert!(status.contains("beta.py"));
-    assert!(!status.contains("alpha.py"));
+    assert!(status.is_empty(), "unexpected dirty status: {status}");
     let snapshot = raw_status_snapshot(&repo, &config_home);
-    assert_eq!(snapshot["counts"]["commit_success"], 1);
-    assert_eq!(snapshot["counts"]["commit_failure"], 1);
+    assert_eq!(snapshot["counts"]["commit_success"], 2);
+    assert_eq!(snapshot["counts"]["commit_failure"], 0);
     let raw_snapshot = serde_json::to_string(&snapshot).expect("snapshot json");
     assert!(!raw_snapshot.contains("test-key"));
     assert!(raw_snapshot.contains("OPENAI_TEST_KEY"));
@@ -2128,7 +2139,7 @@ fn file_mode_retries_invalid_output_with_simple_prompt() {
 }
 
 #[test]
-fn file_mode_aborts_on_invalid_provider_response() {
+fn file_mode_repairs_invalid_provider_response() {
     let repo = init_repo();
     fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
     git(&repo, &["add", "tracked.py"]);
@@ -2143,14 +2154,20 @@ fn file_mode_aborts_on_invalid_provider_response() {
         .output()
         .expect("kcmt binary should run");
 
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("missing conventional commit header"));
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ tracked.py"));
+    assert!(!stdout.contains("missing conventional commit header"));
 
     let status = git(&repo, &["status", "--short"]);
-    assert!(status.contains("tracked.py"));
+    assert!(status.is_empty(), "unexpected dirty status: {status}");
     let log = git(&repo, &["log", "--pretty=%s", "-1"]);
-    assert_eq!(log, "chore(repo): seed");
+    assert_eq!(log, "chore(repo): update tracked");
 }
 
 #[test]
