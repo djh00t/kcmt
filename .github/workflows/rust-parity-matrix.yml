@@ -86,12 +86,12 @@ jobs:
       - name: Build Rust candidate
         shell: bash
         run: |
-          cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
+          cargo build --locked --release --manifest-path rust/Cargo.toml -p kcmt-cli
 
       - name: Rust workspace tests
         shell: bash
         run: |
-          cargo test --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+          cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
 
       - name: Python wrapper and BDD parity tests
         shell: bash
