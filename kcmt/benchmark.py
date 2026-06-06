@@ -1196,6 +1196,7 @@ class _RuntimeBenchmarkScenario:
     workflow_contract_id: str
     command_label: str
     expected_stdout_fragment: str
+    file_target: str | None = None
 
 
 def _runtime_benchmark_repo_root() -> Path:
@@ -1265,6 +1266,7 @@ def _runtime_benchmark_scenarios(
             workflow_contract_id="file-repo-path",
             command_label=f"kcmt --file {target} --repo-path <repo>",
             expected_stdout_fragment="✓ ",
+            file_target=target,
         ),
     ]
     if not _is_large_untracked_runtime_corpus(metadata):
@@ -1277,6 +1279,24 @@ def _runtime_benchmark_scenarios(
                 expected_stdout_fragment="✓ ",
             ),
         )
+    file_targets = metadata.get("file_targets")
+    if isinstance(file_targets, list):
+        for file_target in file_targets:
+            if not isinstance(file_target, dict):
+                continue
+            target_id = str(file_target.get("id") or "").strip()
+            target_path = str(file_target.get("path") or "").strip()
+            if not target_id or not target_path:
+                continue
+            scenarios.append(
+                _RuntimeBenchmarkScenario(
+                    scenario_id=f"{metadata['id']}:file-{target_id}",
+                    workflow_contract_id="file-repo-path",
+                    command_label=f"kcmt --file {target_path} --repo-path <repo>",
+                    expected_stdout_fragment="✓ ",
+                    file_target=target_path,
+                )
+            )
     return scenarios
 
 
@@ -1441,7 +1461,7 @@ def _scenario_command(
         return [*base, "--oneshot", "--repo-path", str(repo_path)]
     if scenario.workflow_contract_id == "default-repo-path":
         return [*base, "--repo-path", str(repo_path)]
-    target = _runtime_benchmark_target_file(repo_path, metadata)
+    target = scenario.file_target or _runtime_benchmark_target_file(repo_path, metadata)
     return [*base, "--file", target, "--repo-path", str(repo_path)]
 
 
@@ -1821,21 +1841,18 @@ def _runtime_scenario_comparison(
 def _build_runtime_scenario_matrix(
     results: list[RuntimeBenchmarkResult],
 ) -> list[RuntimeScenarioMatrixRow]:
-    keys: list[tuple[str, str]] = []
+    scenario_ids: list[str] = []
     for result in results:
-        key = (result.corpus_id, result.workflow_contract_id)
-        if key not in keys:
-            keys.append(key)
+        if result.scenario_id not in scenario_ids:
+            scenario_ids.append(result.scenario_id)
 
     rows: list[RuntimeScenarioMatrixRow] = []
-    for corpus_id, workflow_contract_id in keys:
+    for scenario_id in scenario_ids:
         python = next(
             (
                 item
                 for item in results
-                if item.corpus_id == corpus_id
-                and item.workflow_contract_id == workflow_contract_id
-                and item.runtime == "python"
+                if item.scenario_id == scenario_id and item.runtime == "python"
             ),
             None,
         )
@@ -1843,9 +1860,7 @@ def _build_runtime_scenario_matrix(
             (
                 item
                 for item in results
-                if item.corpus_id == corpus_id
-                and item.workflow_contract_id == workflow_contract_id
-                and item.runtime == "rust"
+                if item.scenario_id == scenario_id and item.runtime == "rust"
             ),
             None,
         )
@@ -1854,9 +1869,9 @@ def _build_runtime_scenario_matrix(
             continue
         rows.append(
             RuntimeScenarioMatrixRow(
-                scenario_id=f"{corpus_id}:{workflow_contract_id}",
-                workflow_contract_id=workflow_contract_id,
-                corpus_id=corpus_id,
+                scenario_id=scenario_id,
+                workflow_contract_id=exemplar.workflow_contract_id,
+                corpus_id=exemplar.corpus_id,
                 command_label=exemplar.command_label,
                 python=_runtime_matrix_cell(python),
                 rust=_runtime_matrix_cell(rust),
@@ -2087,7 +2102,7 @@ def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
         )
         stage_delta_text = ", ".join(
             f"{stage.stage}:{stage.delta_ms:.2f}"
-            for stage in row.comparison.stage_deltas[:6]
+            for stage in row.comparison.stage_deltas
             if stage.delta_ms is not None
         )
         lines.append(

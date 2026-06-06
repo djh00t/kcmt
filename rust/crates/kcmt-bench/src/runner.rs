@@ -179,39 +179,26 @@ fn runtime_snapshot_id(timestamp: &str, corpora: &[String]) -> String {
 }
 
 fn build_scenario_matrix(results: &[RuntimeBenchmarkResult]) -> Vec<RuntimeScenarioMatrixRow> {
-    let mut keys = Vec::<(String, String)>::new();
+    let mut scenario_ids = Vec::<String>::new();
     for result in results {
-        let key = (
-            result.corpus_id.clone(),
-            result.workflow_contract_id.clone(),
-        );
-        if !keys.contains(&key) {
-            keys.push(key);
+        if !scenario_ids.contains(&result.scenario_id) {
+            scenario_ids.push(result.scenario_id.clone());
         }
     }
 
-    keys.into_iter()
-        .filter_map(|(corpus_id, workflow_contract_id)| {
-            let python = find_runtime_result(
-                results,
-                &corpus_id,
-                &workflow_contract_id,
-                RuntimeKind::Python,
-            );
-            let rust = find_runtime_result(
-                results,
-                &corpus_id,
-                &workflow_contract_id,
-                RuntimeKind::Rust,
-            );
+    scenario_ids
+        .into_iter()
+        .filter_map(|scenario_id| {
+            let python = find_runtime_result(results, &scenario_id, RuntimeKind::Python);
+            let rust = find_runtime_result(results, &scenario_id, RuntimeKind::Rust);
             let exemplar = python.or(rust)?;
             let python_cell = matrix_cell(python);
             let rust_cell = matrix_cell(rust);
             let comparison = scenario_comparison(python, rust);
             Some(RuntimeScenarioMatrixRow {
-                scenario_id: format!("{corpus_id}:{workflow_contract_id}"),
-                workflow_contract_id,
-                corpus_id,
+                scenario_id,
+                workflow_contract_id: exemplar.workflow_contract_id.clone(),
+                corpus_id: exemplar.corpus_id.clone(),
                 command_label: exemplar.command_label.clone(),
                 python: python_cell,
                 rust: rust_cell,
@@ -223,15 +210,12 @@ fn build_scenario_matrix(results: &[RuntimeBenchmarkResult]) -> Vec<RuntimeScena
 
 fn find_runtime_result<'a>(
     results: &'a [RuntimeBenchmarkResult],
-    corpus_id: &str,
-    workflow_contract_id: &str,
+    scenario_id: &str,
     runtime: RuntimeKind,
 ) -> Option<&'a RuntimeBenchmarkResult> {
-    results.iter().find(|result| {
-        result.corpus_id == corpus_id
-            && result.workflow_contract_id == workflow_contract_id
-            && result.runtime == runtime
-    })
+    results
+        .iter()
+        .find(|result| result.scenario_id == scenario_id && result.runtime == runtime)
 }
 
 fn matrix_cell(result: Option<&RuntimeBenchmarkResult>) -> RuntimeScenarioMatrixCell {

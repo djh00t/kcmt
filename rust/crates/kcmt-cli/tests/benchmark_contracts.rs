@@ -231,6 +231,50 @@ fn runtime_benchmark_both_emits_side_by_side_matrix_and_snapshot() {
 }
 
 #[test]
+fn runtime_benchmark_matrix_keeps_distinct_file_target_scenarios() {
+    let _guard = runtime_benchmark_lock()
+        .lock()
+        .expect("runtime benchmark lock");
+    let repo = init_repo();
+    seed_runtime_corpus_with_extra_file_target(&repo, "pytest-runtime-file-targets");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_PYTHON_BIN", python_bin())
+        .args(["benchmark", "runtime", "--repo-path"])
+        .arg(&repo)
+        .args(["--runtime", "python", "--iterations", "1", "--json"])
+        .output()
+        .expect("kcmt benchmark runtime should run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("runtime benchmark json");
+    let results = payload["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 5);
+    let matrix = payload["scenario_matrix"]
+        .as_array()
+        .expect("scenario matrix");
+    assert_eq!(matrix.len(), 5);
+    let scenario_ids: Vec<&str> = matrix
+        .iter()
+        .map(|row| row["scenario_id"].as_str().expect("scenario id"))
+        .collect();
+    assert!(scenario_ids.contains(&"pytest-runtime-file-targets:file-repo-path"));
+    assert!(scenario_ids.contains(&"pytest-runtime-file-targets:file-modified-extra"));
+    let file_rows = matrix
+        .iter()
+        .filter(|row| row["workflow_contract_id"] == "file-repo-path")
+        .count();
+    assert_eq!(file_rows, 2);
+}
+
+#[test]
 fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
     let _guard = runtime_benchmark_lock()
         .lock()
@@ -526,6 +570,34 @@ fn seed_runtime_corpus(repo: &Path, corpus_id: &str) {
         "def greet() -> str:\n    return 'hello runtime'\n",
     )
     .expect("modified source");
+}
+
+fn seed_runtime_corpus_with_extra_file_target(repo: &Path, corpus_id: &str) {
+    let source_file = repo.join("src").join("app.py");
+    let extra_file = repo.join("src").join("extra.py");
+    fs::create_dir_all(source_file.parent().expect("source parent"))
+        .expect("source dir should be created");
+    fs::write(&source_file, "def greet() -> str:\n    return 'hello'\n").expect("source file");
+    fs::write(&extra_file, "def extra() -> str:\n    return 'hello'\n").expect("extra file");
+    fs::write(
+        repo.join(".kcmt-runtime-corpus.json"),
+        format!(
+            "{{\"id\":\"{corpus_id}\",\"kind\":\"synthetic\",\"file_count\":2,\"git_history_state\":\"seeded-history\",\"change_shape\":[\"modified\",\"nested-paths\"],\"default_file_target\":\"src/app.py\",\"file_targets\":[{{\"id\":\"modified-extra\",\"path\":\"src/extra.py\"}}]}}"
+        ),
+    )
+    .expect("metadata file");
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(
+        source_file,
+        "def greet() -> str:\n    return 'hello runtime'\n",
+    )
+    .expect("modified source");
+    fs::write(
+        extra_file,
+        "def extra() -> str:\n    return 'hello target'\n",
+    )
+    .expect("modified extra");
 }
 
 fn benchmark_snapshots(config_home: &Path) -> Vec<PathBuf> {

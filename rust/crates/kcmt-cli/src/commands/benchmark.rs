@@ -748,7 +748,6 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
             .stage_deltas
             .iter()
             .filter_map(|stage| stage.delta_ms.map(|delta| (stage.stage.as_str(), delta)))
-            .take(6)
             .map(|(stage, delta)| format!("{stage}:{delta:.2}"))
             .collect::<Vec<_>>()
             .join(", ");

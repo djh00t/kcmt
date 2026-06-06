@@ -2040,4 +2040,6 @@ def runtime_benchmark_snapshot_is_persisted(
     assert len(snapshots) == 1
     payload = json.loads(snapshots[0].read_text())
     assert payload["snapshot"]["benchmark_kind"] == "runtime"
-    assert len(payload["scenario_matrix"]) == 4
+    output_payload = json.loads(workflow_context["output"])
+    assert len(payload["scenario_matrix"]) == len(output_payload["scenario_matrix"])
+    assert len(payload["scenario_matrix"]) >= 4
