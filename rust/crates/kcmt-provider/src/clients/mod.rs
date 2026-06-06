@@ -99,6 +99,13 @@ impl ProviderClient for OpenAiClient {
 }
 
 impl OpenAiClient {
+    pub fn requires_responses(model: &str) -> bool {
+        model
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("gpt-5.1-codex")
+    }
+
     pub fn build_chat_request(
         endpoint: &str,
         api_key: &str,
@@ -108,8 +115,35 @@ impl OpenAiClient {
         build_openai_compatible_request(endpoint, api_key, model, messages)
     }
 
+    pub fn build_responses_request(
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> ProviderRequest {
+        let mut headers = BTreeMap::new();
+        headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        ProviderRequest {
+            url: format!("{}/responses", trim_endpoint(endpoint)),
+            headers,
+            payload: json!({
+                "model": model,
+                "input": messages.iter().map(|message| json!({
+                    "role": message.role,
+                    "content": message.content,
+                })).collect::<Vec<_>>(),
+            }),
+        }
+    }
+
     pub fn parse_chat_response(payload: &Value) -> Result<String, String> {
         parse_openai_compatible_response(payload)
+    }
+
+    pub fn parse_responses_response(payload: &Value) -> Result<String, String> {
+        parse_responses_compatible_response(payload)
     }
 
     pub async fn invoke_chat(
@@ -124,6 +158,34 @@ impl OpenAiClient {
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
         Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+    }
+
+    pub async fn invoke_responses(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<String> {
+        let request = Self::build_responses_request(endpoint, api_key, model, messages);
+        let response = transport
+            .post_json(&request.url, request.header_map()?, &request.payload)
+            .await?;
+        Self::parse_responses_response(&response).map_err(|err| anyhow!(err))
+    }
+
+    pub async fn invoke_model(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<String> {
+        if Self::requires_responses(model) {
+            Self::invoke_responses(transport, endpoint, api_key, model, messages).await
+        } else {
+            Self::invoke_chat(transport, endpoint, api_key, model, messages).await
+        }
     }
 
     pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
@@ -847,6 +909,70 @@ fn parse_openai_compatible_models_response(payload: &Value) -> Result<Vec<Listed
     }
 }
 
+fn parse_responses_compatible_response(payload: &Value) -> Result<String, String> {
+    for key in ["output_text", "content", "text"] {
+        if let Some(text) = payload
+            .get(key)
+            .and_then(provider_content_text)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(text);
+        }
+    }
+
+    let Some(output) = payload.get("output").and_then(Value::as_array) else {
+        return Err("provider responses output missing content".to_string());
+    };
+    let text = output
+        .iter()
+        .filter_map(responses_output_text)
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("");
+    if text.trim().is_empty() {
+        Err("provider responses output missing content".to_string())
+    } else {
+        Ok(text.trim().to_string())
+    }
+}
+
+fn responses_output_text(item: &Value) -> Option<String> {
+    if let Some(parts) = item.get("content").and_then(Value::as_array) {
+        let text = parts
+            .iter()
+            .filter_map(|part| {
+                part.get("text")
+                    .or_else(|| part.get("content"))
+                    .or_else(|| part.get("value"))
+                    .and_then(provider_content_text)
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+    if let Some(text) = item
+        .get("text")
+        .or_else(|| item.get("content"))
+        .or_else(|| item.get("value"))
+        .and_then(provider_content_text)
+    {
+        return Some(text);
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(provider_content_text)
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .filter(|text| !text.trim().is_empty())
+}
+
 fn provider_content_text(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.clone()),
@@ -929,6 +1055,51 @@ mod tests {
 
         assert_eq!(request.payload["max_completion_tokens"], 4096);
         assert!(request.payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn openai_responses_models_build_responses_request_and_extract_output_text() {
+        let request = OpenAiClient::build_responses_request(
+            "https://api.openai.com/v1/",
+            "sk-test",
+            "gpt-5.1-codex",
+            &[
+                ProviderMessage::system("system"),
+                ProviderMessage::user("prompt"),
+            ],
+        );
+
+        assert!(OpenAiClient::requires_responses("gpt-5.1-codex-mini"));
+        assert_eq!(request.url, "https://api.openai.com/v1/responses");
+        assert_eq!(request.headers["Authorization"], "Bearer sk-test");
+        assert_eq!(request.payload["model"], "gpt-5.1-codex");
+        assert_eq!(request.payload["input"][0]["role"], "system");
+        assert_eq!(request.payload["input"][1]["content"], "prompt");
+        assert!(request.payload.get("messages").is_none());
+
+        let content = OpenAiClient::parse_responses_response(&json!({
+            "output_text": "fix(openai): use responses api"
+        }))
+        .expect("output_text should parse");
+        assert_eq!(content, "fix(openai): use responses api");
+    }
+
+    #[test]
+    fn openai_responses_parser_extracts_nested_text_parts() {
+        let content = OpenAiClient::parse_responses_response(&json!({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "fix(openai): parse nested"},
+                        {"type": "output_text", "text": " response"}
+                    ]
+                }
+            ]
+        }))
+        .expect("nested responses content should parse");
+
+        assert_eq!(content, "fix(openai): parse nested response");
     }
 
     #[test]
@@ -1237,6 +1408,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn openai_invoke_model_posts_responses_payload_for_responses_only_model() {
+        let (endpoint, received) =
+            spawn_json_server(r#"{"output_text":"fix(openai): invoke responses"}"#);
+        let transport =
+            AsyncTransport::new(Duration::from_secs(2), RetryPolicy::default()).unwrap();
+
+        let content = OpenAiClient::invoke_model(
+            &transport,
+            &endpoint,
+            "sk-test",
+            "gpt-5.1-codex",
+            &[ProviderMessage::user("prompt")],
+        )
+        .await
+        .expect("responses invoke should parse provider response");
+
+        assert_eq!(content, "fix(openai): invoke responses");
+        let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(request.contains("POST /responses HTTP/1.1"));
+        assert!(request.contains("authorization: Bearer sk-test"));
+        assert!(request.contains(r#""model":"gpt-5.1-codex""#));
+        assert!(request.contains(r#""input":["#));
+        assert!(request.contains(r#""role":"user""#));
+        assert!(request.contains(r#""content":"prompt""#));
+        assert!(!request.contains("/chat/completions"));
+    }
+
+    #[tokio::test]
     async fn anthropic_invoke_messages_posts_payload_and_parses_text_chunks() {
         let (endpoint, received) = spawn_json_server(
             r#"{"content":[{"type":"text","text":"feat(core): invoke anthropic"}]}"#,
@@ -1311,6 +1510,53 @@ mod tests {
         assert!(requests[3].contains("GET /files/output_1/content HTTP/1.1"));
     }
 
+    #[tokio::test]
+    async fn xai_invoke_batch_creates_polls_and_downloads_results() {
+        let (endpoint, received) = spawn_xai_batch_server();
+        let transport =
+            AsyncTransport::new(Duration::from_secs(2), RetryPolicy::default()).unwrap();
+
+        let output = XaiClient::invoke_batch(
+            &transport,
+            &endpoint,
+            "xai-test",
+            "grok-4.3",
+            &[
+                OpenAiBatchJob {
+                    custom_id: "alpha.py".to_string(),
+                    messages: vec![ProviderMessage::user("prompt alpha")],
+                },
+                OpenAiBatchJob {
+                    custom_id: "beta.py".to_string(),
+                    messages: vec![ProviderMessage::user("prompt beta")],
+                },
+            ],
+            Duration::from_secs(2),
+            Duration::from_millis(5),
+        )
+        .await
+        .expect("xAI batch should complete");
+
+        assert_eq!(output.results.len(), 2);
+        assert!(output.failures.is_empty());
+        assert_eq!(output.results[0].custom_id, "alpha.py");
+        assert_eq!(output.results[0].content, "fix(alpha): batch alpha");
+        assert_eq!(output.results[1].custom_id, "beta.py");
+        assert_eq!(output.results[1].content, "fix(beta): batch beta");
+
+        let requests: Vec<String> = (0..4)
+            .map(|_| received.recv_timeout(Duration::from_secs(2)).unwrap())
+            .collect();
+        assert!(requests[0].contains("POST /batches HTTP/1.1"));
+        assert!(requests[0].contains("authorization: Bearer xai-test"));
+        assert!(requests[1].contains("POST /batches/batch_1/requests HTTP/1.1"));
+        assert!(requests[1].contains(r#""model":"grok-4.3""#));
+        assert!(requests[1].contains("prompt alpha"));
+        assert!(requests[1].contains("prompt beta"));
+        assert!(requests[2].contains("GET /batches/batch_1 HTTP/1.1"));
+        assert!(requests[3].contains("GET /batches/batch_1/results?limit=100 HTTP/1.1"));
+    }
+
     fn spawn_json_server(body: &'static str) -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
@@ -1330,6 +1576,38 @@ mod tests {
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
+        });
+
+        (endpoint, receiver)
+    }
+
+    fn spawn_xai_batch_server() -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local addr"));
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let responses = [
+                r#"{"batch_id":"batch_1"}"#,
+                r#"{"status":"accepted"}"#,
+                r#"{"status":"completed","state":{"num_pending":0,"num_requests":2}}"#,
+                r#"{"results":[{"batch_request_id":"alpha.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(alpha): batch alpha"}}]}}}},{"batch_request_id":"beta.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(beta): batch beta"}}]}}}}]}"#,
+            ];
+            for body in responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut buffer = [0_u8; 16384];
+                let read = stream.read(&mut buffer).expect("read request");
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                sender.send(request).expect("send captured request");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+            }
         });
 
         (endpoint, receiver)
