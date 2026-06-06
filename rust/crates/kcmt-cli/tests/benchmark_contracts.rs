@@ -23,9 +23,11 @@ fn runtime_benchmark_rust_missing_binary_is_reported_as_excluded_json() {
         .lock()
         .expect("runtime benchmark lock");
     let repo = init_repo();
+    let config_home = unique_temp_dir("runtime-rust-missing-config-home");
     seed_runtime_corpus(&repo, "pytest-runtime-rust-missing");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
         .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
         .args([
@@ -72,9 +74,11 @@ fn runtime_benchmark_python_emits_passing_results_json() {
         .lock()
         .expect("runtime benchmark lock");
     let repo = init_repo();
+    let config_home = unique_temp_dir("runtime-python-config-home");
     seed_runtime_corpus(&repo, "pytest-runtime-python");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
         .env("KCMT_PYTHON_BIN", python_bin())
         .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
@@ -236,9 +240,11 @@ fn runtime_benchmark_matrix_keeps_distinct_file_target_scenarios() {
         .lock()
         .expect("runtime benchmark lock");
     let repo = init_repo();
+    let config_home = unique_temp_dir("runtime-file-targets-config-home");
     seed_runtime_corpus_with_extra_file_target(&repo, "pytest-runtime-file-targets");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
         .env("KCMT_PYTHON_BIN", python_bin())
         .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
@@ -280,9 +286,11 @@ fn runtime_benchmark_rust_ingests_snapshot_stage_timings_json() {
         .lock()
         .expect("runtime benchmark lock");
     let repo = init_repo();
+    let config_home = unique_temp_dir("runtime-rust-telemetry-config-home");
     seed_runtime_corpus(&repo, "pytest-runtime-rust-telemetry");
 
     let output = Command::new(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
         .args(["benchmark", "runtime", "--repo-path"])
         .arg(&repo)
         .args([
