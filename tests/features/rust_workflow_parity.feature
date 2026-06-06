@@ -113,6 +113,12 @@ Feature: Rust workflow parity
     And only the valid batch file is committed
     And provider output and status remain secret-free
 
+  Scenario: Default xAI batch queues all file prompts before committing
+    Given a git repository with two changed tracked files and a mocked xAI batch provider
+    When the Rust kcmt command runs in default xAI batch mode
+    Then the xAI batch provider receives both file prompts before commits are written
+    And both files are committed with the batch provider messages
+
   Scenario: File workflow falls back to the next configured provider
     Given a git repository with one changed tracked file and a fallback provider chain
     When the Rust kcmt command commits the file using configured provider fallback
@@ -208,7 +214,9 @@ Feature: Rust workflow parity
     Then the benchmark output includes leaderboard JSON and CSV sections
     And the provider benchmark snapshot is persisted
 
-  Scenario: Runtime benchmark reports Rust snapshot stage telemetry
+  Scenario: Runtime benchmark reports side-by-side runtime scoreboard
     Given a checked-in runtime benchmark corpus
     When the Rust kcmt runtime benchmark runs against the corpus
     Then the benchmark report includes Rust workflow stage timings
+    And the benchmark report compares Python and Rust runtime stages
+    And the runtime benchmark snapshot is persisted

@@ -149,6 +149,62 @@ def _start_partial_batch_provider() -> tuple[str, type[_BatchHandler], HTTPServe
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+class _XaiBatchHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, str, str]] = []
+
+    def _record(self) -> str:
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "ignore") if length else ""
+        self.__class__.requests.append((self.command, self.path, body))
+        return body
+
+    def _json(self, body: str) -> None:
+        payload = body.encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_POST(self) -> None:  # noqa: N802
+        self._record()
+        if self.path == "/batches":
+            self._json('{"batch_id":"batch_1"}')
+        elif self.path == "/batches/batch_1/requests":
+            self._json('{"status":"accepted"}')
+        else:
+            self.send_error(404)
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._record()
+        if self.path == "/batches/batch_1":
+            self._json(
+                '{"status":"completed","state":{"num_pending":0,"num_requests":2}}'
+            )
+        elif self.path == "/batches/batch_1/results?limit=100":
+            self._json(
+                '{"results":['
+                '{"batch_request_id":"alpha.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(alpha): batch alpha."}}]}}}},'
+                '{"batch_request_id":"beta.py","batch_result":{"response":{"chat_get_completion":{"choices":[{"message":{"content":"fix(beta): batch beta."}}]}}}}'
+                "]}"
+            )
+        else:
+            self.send_error(404)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+
+def _start_xai_batch_provider() -> tuple[str, type[_XaiBatchHandler], HTTPServer]:
+    class Handler(_XaiBatchHandler):
+        requests: list[tuple[str, str, str]] = []
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
 class _FallbackHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str, str]] = []
 
@@ -291,6 +347,7 @@ def _rust_bin(binary: str) -> Path:
         [
             "cargo",
             "build",
+            "--locked",
             "--manifest-path",
             str(RUST_MANIFEST),
             "-p",
@@ -375,6 +432,21 @@ def git_repository_with_two_changed_files_and_partial_batch_provider(
     context["endpoint"] = endpoint
     context["batch_handler"] = handler
     context["batch_server"] = server
+    return context
+
+
+@given(
+    "a git repository with two changed tracked files and a mocked xAI batch provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_two_changed_files_and_mocked_xai_batch_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_two_changed_tracked_files(tmp_path)
+    endpoint, handler, server = _start_xai_batch_provider()
+    context["xai_batch_endpoint"] = endpoint
+    context["xai_batch_handler"] = handler
+    context["xai_batch_server"] = server
     return context
 
 
@@ -862,6 +934,39 @@ def rust_kcmt_runs_in_default_batch_mode(workflow_context: dict[str, Any]) -> No
     workflow_context["batch_server"].shutdown()
 
 
+@when("the Rust kcmt command runs in default xAI batch mode")
+def rust_kcmt_runs_in_default_xai_batch_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["XAI_TEST_KEY"] = "test-key"
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--provider",
+            "xai",
+            "--endpoint",
+            workflow_context["xai_batch_endpoint"],
+            "--api-key-env",
+            "XAI_TEST_KEY",
+            "--model",
+            "grok-code-fast",
+            "--batch",
+            "--batch-model",
+            "grok-4.3",
+            "--batch-timeout",
+            "900",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+    workflow_context["xai_batch_server"].shutdown()
+
+
 @when("the Rust kcmt command commits the file using configured provider fallback")
 def rust_kcmt_commits_file_using_configured_provider_fallback(
     workflow_context: dict[str, Any],
@@ -1257,7 +1362,7 @@ def rust_kcmt_runtime_benchmark_runs_against_the_corpus(
             "--repo-path",
             str(workflow_context["repo"]),
             "--runtime",
-            "rust",
+            "both",
             "--iterations",
             "1",
             "--rust-bin",
@@ -1880,6 +1985,26 @@ def batch_provider_receives_both_file_prompts_before_commits_are_written(
     assert all(request[1] != "/chat/completions" for request in requests)
 
 
+@then("the xAI batch provider receives both file prompts before commits are written")
+def xai_batch_provider_receives_both_file_prompts_before_commits_are_written(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["xai_batch_handler"].requests
+    assert [request[1] for request in requests] == [
+        "/batches",
+        "/batches/batch_1/requests",
+        "/batches/batch_1",
+        "/batches/batch_1/results?limit=100",
+    ]
+    requests_body = requests[1][2]
+    assert "alpha.py" in requests_body
+    assert "beta.py" in requests_body
+    assert "print('alpha updated')" in requests_body
+    assert "print('beta updated')" in requests_body
+    assert '"model":"grok-4.3"' in requests_body
+    assert all(request[1] != "/chat/completions" for request in requests)
+
+
 @then("both files are committed with the batch provider messages")
 def both_files_are_committed_with_the_batch_provider_messages(
     workflow_context: dict[str, Any],
@@ -2231,3 +2356,48 @@ def benchmark_report_includes_rust_workflow_stage_timings(
     }.issubset(stage_names)
     assert all(isinstance(stage["duration_ms"], int | float) for stage in stages)
     assert all(isinstance(stage["items"], int) for stage in stages)
+
+
+@then("the benchmark report compares Python and Rust runtime stages")
+def benchmark_report_compares_python_and_rust_runtime_stages(
+    workflow_context: dict[str, Any],
+) -> None:
+    payload = json.loads(workflow_context["output"])
+    assert payload["snapshot"]["benchmark_kind"] == "runtime"
+    assert payload["snapshot"]["provider_benchmark_kind"] == "provider"
+    assert payload["scorecard"]["provider_throughput_included"] is False
+    assert "pre-LLM Rust heuristic" in payload["scorecard"]["measurement_basis"]
+    matrix = payload["scenario_matrix"]
+    assert {row["workflow_contract_id"] for row in matrix} == {
+        "status-repo-path",
+        "oneshot-repo-path",
+        "default-repo-path",
+        "file-repo-path",
+    }
+    file_row = next(
+        row for row in matrix if row["workflow_contract_id"] == "file-repo-path"
+    )
+    assert file_row["python"]["status"] == "passed"
+    assert file_row["rust"]["status"] == "passed"
+    assert file_row["comparison"]["comparable"] is True
+    assert any(
+        stage["stage"] == "workflow_total"
+        for stage in file_row["comparison"]["stage_deltas"]
+    )
+
+
+@then("the runtime benchmark snapshot is persisted")
+def runtime_benchmark_snapshot_is_persisted(
+    workflow_context: dict[str, Any],
+) -> None:
+    repo = workflow_context["repo"].resolve()
+    digest = __import__("hashlib").sha256(str(repo).encode("utf-8")).hexdigest()[:8]
+    namespace = f"{repo.name}-{digest}"
+    benchmark_dir = workflow_context["config_home"] / "repos" / namespace / "benchmarks"
+    snapshots = sorted(benchmark_dir.glob("runtime-*.json"))
+    assert len(snapshots) == 1
+    payload = json.loads(snapshots[0].read_text())
+    assert payload["snapshot"]["benchmark_kind"] == "runtime"
+    output_payload = json.loads(workflow_context["output"])
+    assert len(payload["scenario_matrix"]) == len(output_payload["scenario_matrix"])
+    assert len(payload["scenario_matrix"]) >= 4
