@@ -1852,9 +1852,7 @@ fn file_content_diff(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
 fn deletion_commit_message(file_path: &str, max_commit_length: usize) -> String {
     let scope = sanitize_deletion_scope(file_path);
     let mut message = format!("chore({scope}): file deleted");
-    if message.len() > max_commit_length {
-        message.truncate(max_commit_length);
-    }
+    truncate_to_char_boundary(&mut message, max_commit_length);
     message
 }
 
@@ -1868,7 +1866,7 @@ fn limit_subject(message: String, max_commit_length: usize) -> String {
     }
 
     let mut limited = subject.to_string();
-    limited.truncate(max_commit_length);
+    truncate_to_char_boundary(&mut limited, max_commit_length);
     let body = lines.collect::<Vec<_>>().join("\n");
     if body.trim().is_empty() {
         limited
@@ -1905,10 +1903,20 @@ fn heuristic_commit_message(file_path: &str, max_commit_length: usize) -> String
         .filter(|name| !name.is_empty())
         .unwrap_or("repo");
     let mut message = format!("chore({scope}): update {stem}");
-    if message.len() > max_commit_length {
-        message.truncate(max_commit_length);
-    }
+    truncate_to_char_boundary(&mut message, max_commit_length);
     message
+}
+
+fn truncate_to_char_boundary(message: &mut String, max_len: usize) {
+    if message.len() <= max_len {
+        return;
+    }
+
+    let mut boundary = max_len;
+    while boundary > 0 && !message.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    message.truncate(boundary);
 }
 
 fn auto_push_if_configured(
@@ -2666,6 +2674,13 @@ mod tests {
             heuristic_commit_message("src/very_long_filename_here.py", 18).len(),
             18
         );
+    }
+
+    #[test]
+    fn truncates_heuristic_message_on_char_boundary() {
+        let message = heuristic_commit_message("src/café.py", "chore(src): update café".len() - 1);
+
+        assert_eq!(message, "chore(src): update caf");
     }
 
     #[test]
