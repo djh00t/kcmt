@@ -13,4 +13,6 @@ path = "src/lib.rs"
 anyhow.workspace = true
 crossterm = "0.29"
 ratatui = "0.29"
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -32,6 +33,7 @@ use kcmt_provider::clients::{
 };
 use kcmt_provider::error_map::normalize_error;
 use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
+use kcmt_tui::{WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiState};
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -167,22 +169,38 @@ struct PreparationResult {
 #[derive(Debug, Clone)]
 struct WorkflowProgress {
     enabled: bool,
+    tui_echo: bool,
     mode: &'static str,
     total: usize,
     queued: Arc<AtomicUsize>,
     completed: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
+    tui_state: Option<Arc<Mutex<WorkflowTuiState>>>,
 }
 
 impl WorkflowProgress {
-    fn new(mode: &'static str, total: usize, options: &WorkflowOutputOptions) -> Self {
+    fn new(
+        mode: &'static str,
+        total: usize,
+        options: &WorkflowOutputOptions,
+        context: WorkflowTuiContext,
+    ) -> Self {
+        let tui_state = if options.tui || options.tui_model_export {
+            let mut state = WorkflowTuiState::new(context);
+            state.apply(WorkflowTuiEvent::Discovered { total_files: total });
+            Some(Arc::new(Mutex::new(state)))
+        } else {
+            None
+        };
         let progress = Self {
             enabled: progress_enabled(options) && total > 0,
+            tui_echo: options.tui && !options.tui_model_export,
             mode,
             total,
             queued: Arc::new(AtomicUsize::new(0)),
             completed: Arc::new(AtomicUsize::new(0)),
             failed: Arc::new(AtomicUsize::new(0)),
+            tui_state,
         };
         progress.summary("start");
         progress
@@ -190,21 +208,88 @@ impl WorkflowProgress {
 
     fn queued(&self, stage: &'static str, file_path: &str) {
         self.queued.fetch_add(1, Ordering::Relaxed);
+        self.apply_tui(WorkflowTuiEvent::Queued {
+            file_path: file_path.to_string(),
+            stage: stage.to_string(),
+        });
         self.render(stage, Some(file_path), None);
     }
 
     fn event(&self, stage: &'static str, file_path: &str) {
+        if stage == "llm" {
+            self.apply_tui(WorkflowTuiEvent::RequestSent {
+                file_path: file_path.to_string(),
+            });
+        }
         self.render(stage, Some(file_path), None);
     }
 
-    fn completed(&self, file_path: &str) {
+    fn prepared(&self, file_path: &str, subject: &str) {
         self.completed.fetch_add(1, Ordering::Relaxed);
+        self.apply_tui(WorkflowTuiEvent::Prepared {
+            file_path: file_path.to_string(),
+            subject: subject.to_string(),
+        });
         self.render("done", Some(file_path), Some("ok"));
     }
 
-    fn failed(&self, file_path: &str) {
+    fn prepare_failed(&self, file_path: &str, error: &str) {
         self.failed.fetch_add(1, Ordering::Relaxed);
+        self.apply_tui(WorkflowTuiEvent::PrepareFailed {
+            file_path: file_path.to_string(),
+            error: error.to_string(),
+        });
         self.render("done", Some(file_path), Some("failed"));
+    }
+
+    fn commit_started(&self, file_path: &str) {
+        self.apply_tui(WorkflowTuiEvent::CommitStarted {
+            file_path: file_path.to_string(),
+        });
+        self.render("commit", Some(file_path), None);
+    }
+
+    fn commit_succeeded(&self, file_path: &str, subject: &str, commit_hash: Option<&str>) {
+        self.apply_tui(WorkflowTuiEvent::CommitSucceeded {
+            file_path: file_path.to_string(),
+            subject: subject.to_string(),
+            commit_hash: commit_hash.map(str::to_string),
+        });
+        self.render("committed", Some(file_path), Some("ok"));
+    }
+
+    fn commit_failed(&self, file_path: &str, error: &str) {
+        self.apply_tui(WorkflowTuiEvent::CommitFailed {
+            file_path: file_path.to_string(),
+            error: error.to_string(),
+        });
+        self.render("committed", Some(file_path), Some("failed"));
+    }
+
+    fn push_started(&self) {
+        self.apply_tui(WorkflowTuiEvent::PushStarted);
+        self.summary("push");
+    }
+
+    fn push_finished(&self, state: &str) {
+        self.apply_tui(WorkflowTuiEvent::PushFinished {
+            state: state.to_string(),
+        });
+        self.summary("push");
+    }
+
+    fn finished(&self) {
+        self.apply_tui(WorkflowTuiEvent::Finished);
+        self.summary("finished");
+    }
+
+    fn snapshot_json(&self) -> Option<String> {
+        self.tui_state.as_ref().and_then(|state| {
+            state
+                .lock()
+                .ok()
+                .and_then(|state| state.to_json_line().ok())
+        })
     }
 
     fn summary(&self, stage: &'static str) {
@@ -230,6 +315,22 @@ impl WorkflowProgress {
             line.push_str(&format!(" file={file_path}"));
         }
         eprintln!("{line}");
+    }
+
+    fn apply_tui(&self, event: WorkflowTuiEvent) {
+        let Some(state) = &self.tui_state else {
+            return;
+        };
+        let Ok(mut state) = state.lock() else {
+            return;
+        };
+        state.apply(event);
+        if self.tui_echo {
+            let lines = state.render_lines();
+            if let Some(summary) = lines.get(1) {
+                eprintln!("kcmt tui: {summary}");
+            }
+        }
     }
 }
 
@@ -282,6 +383,8 @@ pub struct WorkflowOutputOptions {
     pub compact: bool,
     pub verbose: bool,
     pub no_progress: bool,
+    pub tui: bool,
+    pub tui_model_export: bool,
     pub profile_startup: bool,
     pub startup_stages: Vec<WorkflowStageTiming>,
 }
@@ -500,7 +603,19 @@ fn run_entries_workflow(
     } else {
         "direct"
     };
-    let progress = WorkflowProgress::new(progress_mode, entries.len(), &output_options);
+    let progress = WorkflowProgress::new(
+        progress_mode,
+        entries.len(),
+        &output_options,
+        WorkflowTuiContext {
+            repo_path: repo_path.display().to_string(),
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            mode: progress_mode.to_string(),
+            total_files: entries.len(),
+            last_screen: preferences.tui.last_screen.clone(),
+        },
+    );
     let wait_start = Instant::now();
     let preparation = prepare_messages_for_entries(
         &repo_path,
@@ -509,7 +624,7 @@ fn run_entries_workflow(
         &runtime,
         max_attempts,
         prepare_workers,
-        progress,
+        progress.clone(),
     )?;
     telemetry.record_duration(
         "diff_preparation",
@@ -560,6 +675,7 @@ fn run_entries_workflow(
         let entry = prepared_entry.entry;
         let message = prepared_entry.message;
         let staging = entry.commit_staging();
+        progress.commit_started(&entry.path);
         let commit_outcome = match gix_session.as_mut() {
             Some(session) => session.commit_path(&entry.path, &message, staging),
             None if entry.source_path.is_some() => {
@@ -575,6 +691,7 @@ fn run_entries_workflow(
                     unstage_path(&repo_path, source_path);
                 }
                 unstage_path(&repo_path, &entry.path);
+                progress.commit_failed(&entry.path, &err.to_string());
                 failures.push(WorkflowFailure::commit(&entry, err.to_string()));
                 continue;
             }
@@ -594,6 +711,7 @@ fn run_entries_workflow(
             commit_hash
         };
 
+        progress.commit_succeeded(&entry.path, &message, commit_hash.as_deref());
         commits.push(WorkflowCommit {
             file_path: entry.path,
             message,
@@ -621,7 +739,9 @@ fn run_entries_workflow(
     telemetry.record_since("commit", commit_start, commits.len());
 
     let push_start = Instant::now();
+    progress.push_started();
     let push_outcome = auto_push_if_configured(&repo_path, config, !commits.is_empty());
+    progress.push_finished(push_outcome.state);
     telemetry.record_since("push", push_start, usize::from(push_outcome.pushed));
     telemetry.record_empty("output_render");
 
@@ -655,6 +775,8 @@ fn run_entries_workflow(
 
     if commits.is_empty() && total_entries <= 1 {
         if let Some(failure) = failures.first() {
+            progress.finished();
+            emit_tui_model_to_stderr(&progress, &output_options);
             return Err(KcmtError::Message(failure.error.clone()));
         }
     }
@@ -662,6 +784,11 @@ fn run_entries_workflow(
     if commits.is_empty() && total_entries <= 1 {
         Ok("No changes to commit.\n".to_string())
     } else {
+        progress.finished();
+        let tui_model_json = output_options
+            .tui_model_export
+            .then(|| progress.snapshot_json())
+            .flatten();
         Ok(render_workflow_output(
             config,
             &commits,
@@ -669,7 +796,16 @@ fn run_entries_workflow(
             &push_outcome,
             &telemetry,
             output_options,
+            tui_model_json.as_deref(),
         ))
+    }
+}
+
+fn emit_tui_model_to_stderr(progress: &WorkflowProgress, output_options: &WorkflowOutputOptions) {
+    if output_options.tui_model_export {
+        if let Some(model_json) = progress.snapshot_json() {
+            eprintln!("[kcmt-tui-model] {model_json}");
+        }
     }
 }
 
@@ -717,6 +853,7 @@ fn render_workflow_output(
     push_outcome: &PushOutcome,
     telemetry: &WorkflowTelemetry,
     options: WorkflowOutputOptions,
+    tui_model_json: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
     if options.compact {
@@ -759,6 +896,11 @@ fn render_workflow_output(
                 stage.stage, stage.duration_ms, stage.items
             ));
         }
+    }
+
+    if let Some(model_json) = tui_model_json {
+        lines.push(String::new());
+        lines.push(format!("[kcmt-tui-model] {model_json}"));
     }
 
     let mut output = lines.join("\n");
@@ -934,12 +1076,13 @@ fn prepare_messages_for_entries(
                 progress.event("llm", &entry.path);
                 match commit_message_for_entry(repo_path, &entry, config, runtime, max_attempts) {
                     Ok(message) => {
-                        progress.completed(&entry.path);
+                        progress.prepared(&entry.path, &message);
                         Ok(PreparedEntry { entry, message })
                     }
                     Err(err) => {
-                        progress.failed(&entry.path);
-                        Err(WorkflowFailure::prepare(&entry, err.to_string()))
+                        let error = err.to_string();
+                        progress.prepare_failed(&entry.path, &error);
+                        Err(WorkflowFailure::prepare(&entry, error))
                     }
                 }
             })
@@ -1004,12 +1147,13 @@ fn prepare_messages_in_workers(
                             max_attempts,
                         ) {
                             Ok(message) => {
-                                progress.completed(&entry.path);
+                                progress.prepared(&entry.path, &message);
                                 Ok(PreparedEntry { entry, message })
                             }
                             Err(err) => {
-                                progress.failed(&entry.path);
-                                Err(WorkflowFailure::prepare(&entry, err.to_string()))
+                                let error = err.to_string();
+                                progress.prepare_failed(&entry.path, &error);
+                                Err(WorkflowFailure::prepare(&entry, error))
                             }
                         };
                         (index, outcome)
@@ -1088,7 +1232,7 @@ fn prepare_provider_batch_messages(
         if entry.is_deletion() {
             let message = deletion_commit_message(&entry.path, config.max_commit_length);
             progress.queued("local", &entry.path);
-            progress.completed(&entry.path);
+            progress.prepared(&entry.path, &message);
             outcomes.push(Ok(PreparedEntry { entry, message }));
             continue;
         }
@@ -1100,8 +1244,9 @@ fn prepare_provider_batch_messages(
             Err(err) => {
                 telemetry.diff_preparation_ms += diff_start.elapsed().as_secs_f64() * 1000.0;
                 telemetry.diff_preparation_items += 1;
-                progress.failed(&entry.path);
-                outcomes.push(Err(WorkflowFailure::prepare(&entry, err.to_string())));
+                let error = err.to_string();
+                progress.prepare_failed(&entry.path, &error);
+                outcomes.push(Err(WorkflowFailure::prepare(&entry, error)));
                 continue;
             }
         };
@@ -1236,7 +1381,7 @@ fn prepare_provider_batch_messages(
             }
             let error = provider_error_message("provider batch request failed", &err.to_string());
             outcomes.extend(batch_entries.into_iter().map(|entry| {
-                progress.failed(&entry.path);
+                progress.prepare_failed(&entry.path, &error);
                 Err(WorkflowFailure::prepare(&entry, error.clone()))
             }));
             progress.summary("results");
@@ -1270,17 +1415,15 @@ fn prepare_provider_batch_messages(
 
     for entry in batch_entries {
         if let Some(message) = messages_by_id.remove(&entry.path) {
-            progress.completed(&entry.path);
+            progress.prepared(&entry.path, &message);
             outcomes.push(Ok(PreparedEntry { entry, message }));
         } else if let Some(error) = errors_by_id.remove(&entry.path) {
-            progress.failed(&entry.path);
+            progress.prepare_failed(&entry.path, &error);
             outcomes.push(Err(WorkflowFailure::prepare(&entry, error)));
         } else {
-            progress.failed(&entry.path);
-            outcomes.push(Err(WorkflowFailure::prepare(
-                &entry,
-                format!("batch response missing {}", entry.path),
-            )));
+            let error = format!("batch response missing {}", entry.path);
+            progress.prepare_failed(&entry.path, &error);
+            outcomes.push(Err(WorkflowFailure::prepare(&entry, error)));
         }
     }
     progress.summary("results");

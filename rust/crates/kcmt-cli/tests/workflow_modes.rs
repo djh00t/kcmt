@@ -90,6 +90,19 @@ fn raw_status_snapshot(repo: &Path, config_home: &Path) -> serde_json::Value {
     serde_json::from_slice(&status_output.stdout).expect("raw status is json")
 }
 
+fn tui_model_from_stdout(stdout: &[u8]) -> serde_json::Value {
+    let stdout = String::from_utf8_lossy(stdout);
+    tui_model_from_text(&stdout)
+}
+
+fn tui_model_from_text(output: &str) -> serde_json::Value {
+    let model_line = output
+        .lines()
+        .find_map(|line| line.strip_prefix("[kcmt-tui-model] "))
+        .unwrap_or_else(|| panic!("missing TUI model line in output: {output}"));
+    serde_json::from_str(model_line).expect("TUI model line is json")
+}
+
 fn telemetry_stage_items(snapshot: &serde_json::Value, stage_name: &str) -> u64 {
     snapshot["telemetry"]["stages"]
         .as_array()
@@ -100,6 +113,114 @@ fn telemetry_stage_items(snapshot: &serde_json::Value, stage_name: &str) -> u64 
         .get("items")
         .and_then(serde_json::Value::as_u64)
         .expect("stage items should be an integer")
+}
+
+#[test]
+fn explicit_tui_workflow_rejects_non_tty_without_committing() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    let initial_head = git(&repo, &["rev-parse", "HEAD"]);
+
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--tui", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--tui workflow mode requires an interactive terminal"),
+        "stderr: {stderr}"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), initial_head);
+    assert_eq!(git(&repo, &["status", "--short"]), "M tracked.py");
+}
+
+#[test]
+fn explicit_tui_workflow_exports_model_and_persists_screen() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_TUI_MODEL_EXPORT", "1")
+        .args(["--tui", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model = tui_model_from_stdout(&output.stdout);
+    assert_eq!(model["screen"], "workflow");
+    assert_eq!(model["provider"], "openai");
+    assert_eq!(model["model"], "gpt-5-mini-2025-08-07");
+    assert_eq!(model["current_phase"], "complete");
+    assert_eq!(model["total_files"], 1);
+    assert_eq!(model["committed"], 1);
+    assert_eq!(model["files"]["tracked.py"]["status"], "committed");
+    assert_eq!(
+        model["files"]["tracked.py"]["subject"],
+        "chore(repo): update tracked"
+    );
+
+    let preferences: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_home.join("preferences.json")).unwrap())
+            .expect("preferences json");
+    assert_eq!(preferences["tui"]["last_screen"], "workflow");
+}
+
+#[test]
+fn explicit_tui_workflow_exports_prepare_failure_model() {
+    let repo = init_repo();
+    let config_home = unique_temp_dir("config-home");
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("KCMT_TUI_MODEL_EXPORT", "1")
+        .env("KCMT_ALLOW_PROVIDER_RESPONSE_FIXTURE", "1")
+        .env("KCMT_PROVIDER_RESPONSE", "not a conventional commit")
+        .args([
+            "--tui",
+            "--file",
+            "tracked.py",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let model = tui_model_from_text(&stderr);
+    assert_eq!(model["current_phase"], "complete_with_failures");
+    assert_eq!(model["committed"], 0);
+    assert_eq!(model["failed"], 1);
+    assert_eq!(model["files"]["tracked.py"]["status"], "failed");
+    assert_eq!(model["files"]["tracked.py"]["stage"], "prepare_failed");
+    assert_eq!(git(&repo, &["status", "--short"]), "M tracked.py");
 }
 
 fn init_bare_remote() -> PathBuf {

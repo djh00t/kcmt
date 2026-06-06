@@ -822,6 +822,26 @@ def rust_kcmt_command_runs_in_default_workflow_mode(
     workflow_context["output"] = output
 
 
+@when("the Rust kcmt command runs default workflow with explicit TUI model export")
+def rust_kcmt_command_runs_default_workflow_with_explicit_tui_model_export(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_TUI_MODEL_EXPORT"] = "1"
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--tui",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
 @when("the Rust kcmt command runs in default workflow mode with two workers")
 def rust_kcmt_command_runs_in_default_workflow_mode_with_two_workers(
     workflow_context: dict[str, Any],
@@ -1837,6 +1857,28 @@ def compact_workflow_output_includes_profile_timings(
     assert "[kcmt-profile] snapshot:" in output
 
 
+@then("the Rust workflow TUI model records the committed file")
+def rust_workflow_tui_model_records_the_committed_file(
+    workflow_context: dict[str, Any],
+) -> None:
+    output = workflow_context["output"]
+    model_line = next(
+        line.removeprefix("[kcmt-tui-model] ")
+        for line in output.splitlines()
+        if line.startswith("[kcmt-tui-model] ")
+    )
+    model = json.loads(model_line)
+    assert model["screen"] == "workflow"
+    assert model["provider"] == "openai"
+    assert model["mode"] == "direct"
+    assert model["current_phase"] == "complete"
+    assert model["total_files"] == 1
+    assert model["committed"] == 1
+    assert model["failed"] == 0
+    assert model["files"]["tracked.py"]["status"] == "committed"
+    assert model["files"]["tracked.py"]["subject"] == "chore(repo): update tracked"
+
+
 @then("the raw status snapshot records the config overrides")
 def raw_status_snapshot_records_the_config_overrides(
     workflow_context: dict[str, Any],
@@ -2295,7 +2337,6 @@ def rust_preferences_file_contains_default_selector_preferences(
     assert preferences["provider_rules"]["xai"]["preset"] == "none"
     assert preferences["provider_rules"]["github"]["preset"] == "none"
 
-
 @then("the keychain save response does not print the API key")
 def keychain_save_response_does_not_print_api_key(
     workflow_context: dict[str, Any],
@@ -2316,6 +2357,15 @@ def no_saved_configuration_file_contains_api_key(
     for path in config_home.rglob("*"):
         if path.is_file():
             assert workflow_context["secret"] not in path.read_text(errors="ignore")
+
+@then("the Rust preferences remember the workflow screen")
+def rust_preferences_remember_the_workflow_screen(
+    workflow_context: dict[str, Any],
+) -> None:
+    preferences = json.loads(
+        (workflow_context["config_home"] / "preferences.json").read_text()
+    )
+    assert preferences["tui"]["last_screen"] == "workflow"
 
 
 @then("the Anthropic provider receives the latest Haiku model")
