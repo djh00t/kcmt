@@ -1787,6 +1787,7 @@ dependencies = [
  "kcmt-core",
  "kcmt-provider",
  "kcmt-tui",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",

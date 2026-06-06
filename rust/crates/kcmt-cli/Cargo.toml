@@ -28,6 +28,7 @@ kcmt-bench = { path = "../kcmt-bench" }
 kcmt-core = { path = "../kcmt-core" }
 kcmt-provider = { path = "../kcmt-provider" }
 kcmt-tui = { path = "../kcmt-tui" }
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true

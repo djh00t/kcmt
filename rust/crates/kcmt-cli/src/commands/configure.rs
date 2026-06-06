@@ -1,48 +1,13 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use kcmt_core::config::loader::{config_file_path, load_config, ConfigOverrides};
 use kcmt_core::model::{ModelPreference, ProviderConfigEntry};
-use kcmt_core::preferences::{
-    default_keychain_account, load_preferences, resolve_credential, save_preferences,
-    CredentialRequest, OsKeychainStore,
-};
-use kcmt_provider::clients::{AnthropicClient, GitHubModelsClient, OpenAiClient, XaiClient};
-use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
+use kcmt_core::preferences::{load_preferences, save_preferences};
 use serde_json::json;
 
-const PROVIDERS: &[(&str, &str, &str, &str, &str)] = &[
-    (
-        "openai",
-        "OpenAI",
-        "gpt-5-mini-2025-08-07",
-        "https://api.openai.com/v1",
-        "OPENAI_API_KEY",
-    ),
-    (
-        "anthropic",
-        "Anthropic",
-        "claude-3-5-haiku-latest",
-        "https://api.anthropic.com",
-        "ANTHROPIC_API_KEY",
-    ),
-    (
-        "xai",
-        "X.AI",
-        "grok-code-fast",
-        "https://api.x.ai/v1",
-        "XAI_API_KEY",
-    ),
-    (
-        "github",
-        "GitHub Models",
-        "openai/gpt-4.1-mini",
-        "https://models.github.ai/inference",
-        "GITHUB_TOKEN",
-    ),
-];
+use super::model_discovery::{default_provider_definitions, discover_model_catalog};
 
 pub fn run_configure(repo_path: PathBuf, overrides: ConfigOverrides) -> i32 {
     match write_config(repo_path, overrides) {
@@ -58,27 +23,10 @@ pub fn run_configure(repo_path: PathBuf, overrides: ConfigOverrides) -> i32 {
 }
 
 pub fn run_list_models(debug: bool) -> i32 {
-    let provider_models = resolved_provider_models();
+    let preferences = load_preferences().unwrap_or_default();
+    let catalog = discover_model_catalog(&preferences);
     if debug {
-        let payload = PROVIDERS
-            .iter()
-            .map(|(provider, name, model, endpoint, api_key_env)| {
-                let models = provider_models
-                    .get(*provider)
-                    .cloned()
-                    .unwrap_or_else(|| vec![(*model).to_string()]);
-                json!({
-                    "provider": provider,
-                    "display_name": name,
-                    "models": models.into_iter().map(|model_id| json!({
-                        "id": model_id,
-                        "endpoint": endpoint,
-                        "api_key_env": api_key_env
-                    })).collect::<Vec<_>>()
-                })
-            })
-            .collect::<Vec<_>>();
-        match serde_json::to_string_pretty(&payload) {
+        match serde_json::to_string_pretty(&catalog) {
             Ok(rendered) => println!("{rendered}"),
             Err(err) => {
                 eprintln!("{err}");
@@ -88,87 +36,31 @@ pub fn run_list_models(debug: bool) -> i32 {
         return 0;
     }
 
-    for (provider, _name, model, endpoint, _api_key_env) in PROVIDERS {
-        let models = provider_models
-            .get(*provider)
-            .cloned()
-            .unwrap_or_else(|| vec![(*model).to_string()]);
-        for model in models {
-            println!("{provider}\t{model}\t{endpoint}");
+    for provider in catalog {
+        for model in provider.models {
+            println!("{}\t{}\t{}", provider.provider, model.id, provider.endpoint);
         }
     }
     0
 }
 
-fn resolved_provider_models() -> HashMap<String, Vec<String>> {
-    PROVIDERS
-        .iter()
-        .map(|(provider, _name, model, endpoint, api_key_env)| {
-            let models = live_models_for_provider(provider, endpoint, api_key_env)
-                .filter(|models| !models.is_empty())
-                .unwrap_or_else(|| vec![(*model).to_string()]);
-            ((*provider).to_string(), models)
-        })
-        .collect()
-}
-
-fn live_models_for_provider(
-    provider: &str,
-    endpoint: &str,
-    api_key_env: &str,
-) -> Option<Vec<String>> {
-    let explicit_provider = std::env::var("KCMT_EXPLICIT_API_KEY_PROVIDER").ok();
-    let explicit_secret = if explicit_provider.as_deref().unwrap_or(provider) == provider {
-        std::env::var("KCMT_EXPLICIT_API_KEY").ok()
-    } else {
-        None
-    };
-    let request = CredentialRequest {
-        provider: provider.to_string(),
-        explicit_secret,
-        keychain_account: Some(default_keychain_account(provider)),
-        env_var: api_key_env.to_string(),
-    };
-    let api_key = resolve_credential(&request, &OsKeychainStore)
-        .ok()
-        .flatten()?
-        .secret;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .ok()?;
-    let transport = AsyncTransport::new(
-        Duration::from_secs(5),
-        RetryPolicy {
-            max_attempts: 1,
-            base_backoff: Duration::from_millis(100),
-        },
-    )
-    .ok()?;
-    runtime
-        .block_on(async {
-            match provider {
-                "anthropic" => AnthropicClient::list_models(&transport, endpoint, &api_key).await,
-                "xai" => XaiClient::list_models(&transport, endpoint, &api_key).await,
-                "github" => GitHubModelsClient::list_models(&transport, endpoint, &api_key).await,
-                _ => OpenAiClient::list_models(&transport, endpoint, &api_key).await,
-            }
-        })
-        .ok()
-        .map(|models| models.into_iter().map(|model| model.id).collect())
-}
-
 pub fn run_verify_keys() -> i32 {
     println!("API Key Verification");
     println!("provider\tenv_var\tpresent\tdetected");
-    for (provider, _name, _model, _endpoint, api_key_env) in PROVIDERS {
-        let present = std::env::var(api_key_env)
+    for definition in default_provider_definitions() {
+        let present = std::env::var(&definition.api_key_env)
             .ok()
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false);
-        let detected = if present { *api_key_env } else { "-" };
+        let detected = if present {
+            definition.api_key_env.as_str()
+        } else {
+            "-"
+        };
         println!(
-            "{provider}\t{api_key_env}\t{}\t{detected}",
+            "{}\t{}\t{}\t{detected}",
+            definition.provider,
+            definition.api_key_env,
             if present { "yes" } else { "no" }
         );
     }
@@ -178,30 +70,32 @@ pub fn run_verify_keys() -> i32 {
 fn write_config(repo_path: PathBuf, overrides: ConfigOverrides) -> anyhow::Result<PathBuf> {
     let cfg = load_config(&repo_path, &overrides)?;
     let mut providers: HashMap<String, ProviderConfigEntry> = cfg.providers.clone();
-    for (provider, name, model, endpoint, api_key_env) in PROVIDERS {
+    for definition in default_provider_definitions() {
         providers
-            .entry((*provider).to_string())
+            .entry(definition.provider.to_string())
             .and_modify(|entry| {
-                entry.name.get_or_insert_with(|| (*name).to_string());
+                entry
+                    .name
+                    .get_or_insert_with(|| definition.display_name.to_string());
                 entry
                     .endpoint
-                    .get_or_insert_with(|| (*endpoint).to_string());
+                    .get_or_insert_with(|| definition.endpoint.to_string());
                 entry
                     .api_key_env
-                    .get_or_insert_with(|| (*api_key_env).to_string());
+                    .get_or_insert_with(|| definition.api_key_env.to_string());
                 entry
                     .keychain_account
-                    .get_or_insert_with(|| format!("provider/{provider}/default"));
+                    .get_or_insert_with(|| format!("provider/{}/default", definition.provider));
                 entry
                     .preferred_model
-                    .get_or_insert_with(|| (*model).to_string());
+                    .get_or_insert_with(|| definition.default_model.to_string());
             })
             .or_insert_with(|| ProviderConfigEntry {
-                name: Some((*name).to_string()),
-                endpoint: Some((*endpoint).to_string()),
-                api_key_env: Some((*api_key_env).to_string()),
-                keychain_account: Some(format!("provider/{provider}/default")),
-                preferred_model: Some((*model).to_string()),
+                name: Some(definition.display_name.to_string()),
+                endpoint: Some(definition.endpoint.to_string()),
+                api_key_env: Some(definition.api_key_env.to_string()),
+                keychain_account: Some(format!("provider/{}/default", definition.provider)),
+                preferred_model: Some(definition.default_model.to_string()),
             });
     }
 

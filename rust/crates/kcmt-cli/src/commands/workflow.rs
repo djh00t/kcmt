@@ -25,7 +25,7 @@ use kcmt_core::preferences::{
     default_keychain_account, load_preferences, resolve_credential, CredentialRequest,
     CredentialSource, OsKeychainStore, Preferences, PromptProfile,
 };
-use kcmt_core::selector::{default_models_for_provider, select_model, ModelSelection};
+use kcmt_core::selector::{select_model, ModelSelection};
 use kcmt_core::telemetry::{load_usage_summary, record_usage, TelemetryRunRecord};
 use kcmt_provider::clients::{
     AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderMessage, XaiClient,
@@ -35,6 +35,7 @@ use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
 use serde_json::json;
 
 use super::history::snapshot_path;
+use super::model_discovery::{cached_or_static_catalog_for_config, catalog_to_selector_candidates};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatusEntry {
@@ -463,10 +464,8 @@ fn run_entries_workflow(
     let mut failures = Vec::new();
     let preferences = load_preferences().unwrap_or_else(|_| Preferences::default());
     let usage_summary = load_usage_summary(&repo_path).unwrap_or_default();
-    let model_catalog = provider_candidates(config)
-        .iter()
-        .flat_map(|candidate| default_models_for_provider(&candidate.provider))
-        .collect::<Vec<_>>();
+    let model_catalog =
+        catalog_to_selector_candidates(&cached_or_static_catalog_for_config(config, &preferences));
     let available = available_providers(config);
     let mut model_selection = select_model(
         config,
@@ -1389,7 +1388,14 @@ fn credential_for_candidate(candidate: &ProviderCandidate) -> Option<(String, Cr
 }
 
 fn available_providers(config: &kcmt_core::model::WorkflowConfig) -> Vec<String> {
-    provider_candidates(config)
+    let candidates = provider_candidates(config);
+    if fixture_provider_response().is_some() || runtime_benchmark_enabled() {
+        return candidates
+            .into_iter()
+            .map(|candidate| candidate.provider)
+            .collect();
+    }
+    candidates
         .into_iter()
         .filter(|candidate| credential_for_candidate(candidate).is_some())
         .map(|candidate| candidate.provider)
