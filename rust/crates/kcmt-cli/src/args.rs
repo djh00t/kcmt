@@ -328,6 +328,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_biometric_keychain_opt_out_flag() {
+        let args = CliArgs::parse_from([
+            "kcmt",
+            "--configure",
+            "--api-key-stdin",
+            "--save-api-key",
+            "--no-biometric-keychain",
+        ]);
+
+        assert!(args.configure);
+        assert!(args.api_key_stdin);
+        assert!(args.save_api_key);
+        assert!(args.no_biometric_keychain);
+    }
+
+    #[test]
     fn parses_legacy_non_tui_control_flags() {
         let args = CliArgs::parse_from([
             "kcmt",

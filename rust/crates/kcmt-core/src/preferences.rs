@@ -365,14 +365,24 @@ pub fn save_keychain_secret(
     secret: &str,
     mode: KeychainSaveMode,
 ) -> std::result::Result<SecretSaveResult, String> {
-    if keychain_disabled() {
-        return Err("OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN".to_string());
+    if let Some(reason) = keychain_disabled_reason() {
+        return Err(reason.to_string());
     }
     store.set_secret_with_mode(account, secret, mode)
 }
 
 fn keychain_disabled() -> bool {
-    env_truthy("KCMT_DISABLE_KEYCHAIN") || env_truthy("KCMT_RUNTIME_BENCHMARK")
+    keychain_disabled_reason().is_some()
+}
+
+fn keychain_disabled_reason() -> Option<&'static str> {
+    if env_truthy("KCMT_DISABLE_KEYCHAIN") {
+        return Some("OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN");
+    }
+    if env_truthy("KCMT_RUNTIME_BENCHMARK") {
+        return Some("OS keychain access is disabled during KCMT_RUNTIME_BENCHMARK");
+    }
+    None
 }
 
 fn env_truthy(key: &str) -> bool {
@@ -711,5 +721,26 @@ mod tests {
             "OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN"
         );
         std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+    }
+
+    #[test]
+    fn keychain_save_reports_runtime_benchmark_disable_reason() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+        std::env::set_var("KCMT_RUNTIME_BENCHMARK", "1");
+        let store = CapturingStore::default();
+
+        let result = save_keychain_secret(
+            &store,
+            "provider/openai/default",
+            "secret-value",
+            KeychainSaveMode::BiometricPreferred,
+        );
+
+        assert_eq!(
+            result.expect_err("save should be disabled"),
+            "OS keychain access is disabled during KCMT_RUNTIME_BENCHMARK"
+        );
+        std::env::remove_var("KCMT_RUNTIME_BENCHMARK");
     }
 }
