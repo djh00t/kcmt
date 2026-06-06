@@ -853,6 +853,7 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
             config_home.display().to_string(),
         ),
         (RUNTIME_BENCHMARK_ENV.to_string(), "1".to_string()),
+        ("KCMT_DISABLE_KEYCHAIN".to_string(), "1".to_string()),
         ("KCMT_NO_SPINNER".to_string(), "1".to_string()),
         ("PYTHONIOENCODING".to_string(), "utf-8".to_string()),
         ("PYTHONUTF8".to_string(), "1".to_string()),
@@ -961,12 +962,17 @@ fn scenario_command(
         "oneshot-repo-path" => {
             command.extend([
                 "--oneshot".to_string(),
+                "--no-auto-push".to_string(),
                 "--repo-path".to_string(),
                 repo_path.display().to_string(),
             ]);
         }
         "default-repo-path" => {
-            command.extend(["--repo-path".to_string(), repo_path.display().to_string()]);
+            command.extend([
+                "--no-auto-push".to_string(),
+                "--repo-path".to_string(),
+                repo_path.display().to_string(),
+            ]);
         }
         _ => {
             let target = scenario
@@ -977,6 +983,7 @@ fn scenario_command(
             command.extend([
                 "--file".to_string(),
                 target,
+                "--no-auto-push".to_string(),
                 "--repo-path".to_string(),
                 repo_path.display().to_string(),
             ]);
