@@ -619,4 +619,11 @@ mod tests {
 
         assert_eq!(status, "MM tracked.py\n");
     }
+
+    #[test]
+    fn render_porcelain_lines_uses_destination_path_for_rename_records() {
+        let rendered = render_porcelain_lines("R  old.py\0new.py\0C  src.py\0dst.py\0");
+
+        assert_eq!(rendered, "R  new.py -> old.py\nC  dst.py -> src.py\n");
+    }
 }
