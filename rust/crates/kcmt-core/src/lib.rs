@@ -6,6 +6,9 @@ pub mod git;
 pub mod message;
 pub mod metrics;
 pub mod model;
+pub mod preferences;
+pub mod selector;
+pub mod telemetry;
 pub mod workflow;
 
 /// Returns the workspace package name for smoke checks.

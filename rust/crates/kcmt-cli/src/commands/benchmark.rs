@@ -83,6 +83,7 @@ pub fn run_provider_benchmark(repo_path: PathBuf, args: &CliArgs) -> i32 {
         model: args.model.clone(),
         endpoint: args.endpoint.clone(),
         api_key_env: args.api_key_env.clone(),
+        keychain_account: None,
         repo_path: Some(repo_path.clone()),
         max_commit_length: args.max_commit_length,
         auto_push: args.auto_push_override(),

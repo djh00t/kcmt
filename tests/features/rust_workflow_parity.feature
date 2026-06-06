@@ -126,6 +126,18 @@ Feature: Rust workflow parity
     Given an empty runtime configuration home
     When the Rust kcmt command configures Anthropic non-interactively
     Then the Rust configuration file contains the Anthropic provider settings
+    And the Rust preferences file contains default selector preferences
+
+  Scenario: Anthropic latest Haiku rule selects the Haiku model
+    Given a git repository with one changed tracked file and Anthropic latest Haiku preferences
+    When the Rust kcmt command commits the file with Anthropic preferences
+    Then the Anthropic provider receives the latest Haiku model
+    And the latest commit uses the Anthropic provider message
+
+  Scenario: Rust stats reports aggregate usage telemetry
+    Given a git repository with one changed tracked file
+    When the Rust kcmt command runs in oneshot mode
+    Then the Rust stats command reports usage telemetry
 
   Scenario: Rust list-models shows supported default models
     Given an empty runtime configuration home

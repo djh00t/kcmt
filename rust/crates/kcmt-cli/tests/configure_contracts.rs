@@ -125,9 +125,36 @@ fn list_models_prints_supported_provider_defaults() {
     assert!(stdout.contains("openai"));
     assert!(stdout.contains("gpt-5-mini-2025-08-07"));
     assert!(stdout.contains("anthropic"));
-    assert!(stdout.contains("claude-sonnet-4-20250514"));
+    assert!(stdout.contains("claude-3-5-haiku-latest"));
     assert!(stdout.contains("xai"));
     assert!(stdout.contains("github"));
+}
+
+#[test]
+fn configure_writes_default_preferences_file() {
+    let config_home = unique_temp_dir("home");
+    let repo = unique_temp_dir("repo");
+
+    let output = kcmt_command()
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args(["--configure", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt configure should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let preferences_path = config_home.join("preferences.json");
+    let preferences: serde_json::Value =
+        serde_json::from_slice(&fs::read(&preferences_path).expect("preferences file"))
+            .expect("preferences json");
+    assert_eq!(preferences["selection_policy"], "fastest_cheap");
+    assert_eq!(preferences["default_prompt_profile"], "conventional");
+    assert_eq!(preferences["prompt_profiles"][0]["id"], "conventional");
 }
 
 #[test]

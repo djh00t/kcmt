@@ -33,6 +33,15 @@ pub struct CliArgs {
     #[arg(long = "github-token")]
     pub github_token: Option<String>,
 
+    #[arg(long = "api-key")]
+    pub api_key: Option<String>,
+
+    #[arg(long = "save-api-key")]
+    pub save_api_key: bool,
+
+    #[arg(long = "api-key-stdin")]
+    pub api_key_stdin: bool,
+
     #[arg(long, alias = "summary")]
     pub compact: bool,
 
@@ -41,6 +50,9 @@ pub struct CliArgs {
 
     #[arg(long = "configure-all")]
     pub configure_all: bool,
+
+    #[arg(long = "tui")]
+    pub tui: bool,
 
     #[arg(long = "list-models")]
     pub list_models: bool,
@@ -128,6 +140,7 @@ impl CliArgs {
 #[derive(Debug, Subcommand, Clone)]
 pub enum CliCommand {
     Status(StatusArgs),
+    Stats(StatsArgs),
     Benchmark(BenchmarkArgs),
 }
 
@@ -135,6 +148,12 @@ pub enum CliCommand {
 pub struct StatusArgs {
     #[arg(long)]
     pub raw: bool,
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct StatsArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args, Clone, Default)]

@@ -25,6 +25,7 @@ tracing = "0.1"
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "macros"] }
 gix = { version = "0.73", default-features = false, features = ["status"] }
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [profile.release]
 panic = "abort"
