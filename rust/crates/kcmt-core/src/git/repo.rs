@@ -249,7 +249,7 @@ fn status_porcelain_gix(repo_path: &Path, patterns: Vec<gix::bstr::BString>) -> 
                         | EntryStatus::Change(Change::Type { .. }) => {
                             rows.push(format!(" M {}", rela_path.as_bstr().to_str_lossy()));
                         }
-                        EntryStatus::Conflict(_) => {
+                        EntryStatus::Conflict { .. } => {
                             rows.push(format!("UU {}", rela_path.as_bstr().to_str_lossy()));
                         }
                         EntryStatus::IntentToAdd | EntryStatus::NeedsUpdate(_) => {}
