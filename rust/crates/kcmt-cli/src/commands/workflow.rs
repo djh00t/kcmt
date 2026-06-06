@@ -13,8 +13,8 @@ use kcmt_core::config::loader::{load_config, ConfigOverrides};
 use kcmt_core::error::KcmtError;
 use kcmt_core::error::Result;
 use kcmt_core::git::commit_file::{
-    commit_file_with_staging, gix_commit_backend_enabled, recent_commit_hash, CommitStaging,
-    GixCommitSession,
+    commit_file_with_staging, commit_paths_with_staging, gix_commit_backend_enabled,
+    recent_commit_hash, CommitStaging, GixCommitSession,
 };
 use kcmt_core::git::repo::{CliGitRepository, GitRepository};
 use kcmt_core::message::{
@@ -39,15 +39,36 @@ use super::history::snapshot_path;
 struct StatusEntry {
     code: String,
     path: String,
+    source_path: Option<String>,
 }
 
 impl StatusEntry {
+    fn index_status(&self) -> char {
+        self.code.chars().next().unwrap_or(' ')
+    }
+
+    fn worktree_status(&self) -> char {
+        self.code.chars().nth(1).unwrap_or(' ')
+    }
+
     fn is_deletion(&self) -> bool {
         self.code.contains('D')
     }
 
-    fn is_new_file(&self) -> bool {
-        self.code == "??" || self.code.contains('A')
+    fn is_untracked(&self) -> bool {
+        self.code == "??"
+    }
+
+    fn is_rename_or_copy(&self) -> bool {
+        self.code.contains('R') || self.code.contains('C')
+    }
+
+    fn has_staged_changes(&self) -> bool {
+        self.index_status() != ' ' && self.index_status() != '?'
+    }
+
+    fn has_worktree_changes(&self) -> bool {
+        self.worktree_status() != ' ' && self.worktree_status() != '?'
     }
 
     fn commit_staging(&self) -> CommitStaging {
@@ -58,8 +79,20 @@ impl StatusEntry {
         }
     }
 
+    fn commit_pathspecs(&self) -> Vec<&str> {
+        let mut pathspecs = Vec::new();
+        if let Some(source_path) = self.source_path.as_deref() {
+            pathspecs.push(source_path);
+        }
+        pathspecs.push(self.path.as_str());
+        pathspecs
+    }
+
     fn requires_staging_before_commit(&self) -> bool {
-        self.code == "??" || self.code.contains('A') || self.code.contains('U')
+        self.code == "??"
+            || self.code.contains('A')
+            || self.code.contains('U')
+            || self.is_rename_or_copy()
     }
 }
 
@@ -500,7 +533,13 @@ fn run_entries_workflow(
     let mut commit_read_hash_ms = 0.0;
     let mut commit_hash_reads = 0;
     let mut commit_stage_path_invocations = 0;
-    let mut gix_session = if gix_commit_backend_enabled() {
+    let can_use_gix_session = prepared_outcomes.iter().all(|outcome| {
+        outcome
+            .as_ref()
+            .map(|prepared| prepared.entry.source_path.is_none())
+            .unwrap_or(true)
+    });
+    let mut gix_session = if gix_commit_backend_enabled() && can_use_gix_session {
         Some(GixCommitSession::open_with_deferred_index_writes(
             &repo_path,
             total_entries > 1,
@@ -521,11 +560,18 @@ fn run_entries_workflow(
         let staging = entry.commit_staging();
         let commit_outcome = match gix_session.as_mut() {
             Some(session) => session.commit_path(&entry.path, &message, staging),
+            None if entry.source_path.is_some() => {
+                let pathspecs = entry.commit_pathspecs();
+                commit_paths_with_staging(&repo_path, &pathspecs, &message, false, staging)
+            }
             None => commit_file_with_staging(&repo_path, &entry.path, &message, false, staging),
         };
         let commit_outcome = match commit_outcome {
             Ok(outcome) => outcome,
             Err(err) => {
+                if let Some(source_path) = &entry.source_path {
+                    unstage_path(&repo_path, source_path);
+                }
                 unstage_path(&repo_path, &entry.path);
                 failures.push(WorkflowFailure::commit(&entry, err.to_string()));
                 continue;
@@ -633,14 +679,33 @@ fn parse_status_entries(status: &str) -> Vec<StatusEntry> {
                 return None;
             }
             let code = line[0..2].to_string();
-            let path = line[3..].trim().to_string();
+            if code == "!!" {
+                return None;
+            }
+            let (path, source_path) = parse_porcelain_path(&line[3..]);
             if path.is_empty() {
                 None
             } else {
-                Some(StatusEntry { code, path })
+                Some(StatusEntry {
+                    code,
+                    path,
+                    source_path,
+                })
             }
         })
         .collect()
+}
+
+fn parse_porcelain_path(raw_path: &str) -> (String, Option<String>) {
+    let path = raw_path.trim();
+    if let Some((source, destination)) = path.rsplit_once(" -> ") {
+        (
+            destination.trim().to_string(),
+            Some(source.trim().to_string()).filter(|path| !path.is_empty()),
+        )
+    } else {
+        (path.to_string(), None)
+    }
 }
 
 fn render_workflow_output(
@@ -1491,22 +1556,55 @@ fn provider_status_from_error(raw_error: &str) -> Option<u16> {
 }
 
 fn diff_for_entry(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
-    if entry.is_new_file() {
+    if entry.is_untracked() {
         return file_content_diff(repo_path, entry);
     }
 
-    let output = Command::new("git")
-        .current_dir(repo_path)
-        .args(["diff", "--no-color", "--no-ext-diff", "--", &entry.path])
-        .output()?;
-    if output.status.success() {
-        let diff = String::from_utf8_lossy(&output.stdout).to_string();
-        if !diff.trim().is_empty() {
+    if entry.has_staged_changes() && !entry.has_worktree_changes() {
+        if let Some(diff) = git_diff_for_entry(repo_path, entry, &["--cached"])? {
             return Ok(diff);
         }
     }
 
+    if entry.has_staged_changes() && entry.has_worktree_changes() {
+        if let Some(diff) = git_diff_for_entry(repo_path, entry, &["HEAD"])? {
+            return Ok(diff);
+        }
+    }
+
+    if entry.has_worktree_changes() {
+        if let Some(diff) = git_diff_for_entry(repo_path, entry, &[])? {
+            return Ok(diff);
+        }
+    }
+
+    if let Some(diff) = git_diff_for_entry(repo_path, entry, &["HEAD"])? {
+        return Ok(diff);
+    }
+
     file_content_diff(repo_path, entry)
+}
+
+fn git_diff_for_entry(
+    repo_path: &Path,
+    entry: &StatusEntry,
+    extra_args: &[&str],
+) -> Result<Option<String>> {
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff"];
+    args.extend(extra_args);
+    args.extend(["--", entry.path.as_str()]);
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(args)
+        .output()?;
+    if output.status.success() {
+        let diff = String::from_utf8_lossy(&output.stdout).to_string();
+        if !diff.trim().is_empty() {
+            return Ok(Some(diff));
+        }
+    }
+
+    Ok(None)
 }
 
 fn file_content_diff(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
@@ -2085,18 +2183,42 @@ mod tests {
 
     #[test]
     fn parses_porcelain_entries() {
-        let entries = parse_status_entries(" M alpha.py\n?? beta.py\n");
+        let entries = parse_status_entries(" M alpha.py\n?? beta.py\n!! ignored.log\n");
 
         assert_eq!(
             entries,
             vec![
                 StatusEntry {
                     code: " M".to_string(),
-                    path: "alpha.py".to_string()
+                    path: "alpha.py".to_string(),
+                    source_path: None
                 },
                 StatusEntry {
                     code: "??".to_string(),
-                    path: "beta.py".to_string()
+                    path: "beta.py".to_string(),
+                    source_path: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_porcelain_rename_and_copy_destinations() {
+        let entries =
+            parse_status_entries("R  old_name.py -> new_name.py\n C template.py -> copied.py\n");
+
+        assert_eq!(
+            entries,
+            vec![
+                StatusEntry {
+                    code: "R ".to_string(),
+                    path: "new_name.py".to_string(),
+                    source_path: Some("old_name.py".to_string())
+                },
+                StatusEntry {
+                    code: " C".to_string(),
+                    path: "copied.py".to_string(),
+                    source_path: Some("template.py".to_string())
                 },
             ]
         );
@@ -2111,6 +2233,7 @@ mod tests {
             let entry = StatusEntry {
                 code: code.to_string(),
                 path: "new.md".to_string(),
+                source_path: None,
             };
             let diff = diff_for_entry(&repo, &entry).expect("new file diff");
 
@@ -2129,6 +2252,7 @@ mod tests {
         let entry = StatusEntry {
             code: " M".to_string(),
             path: "tracked.py".to_string(),
+            source_path: None,
         };
 
         let diff = diff_for_entry(&repo, &entry).expect("tracked diff");
@@ -2139,19 +2263,86 @@ mod tests {
     }
 
     #[test]
+    fn diff_for_staged_only_entry_uses_cached_diff() {
+        let repo = unique_temp_dir("staged-diff");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('staged')\n").expect("staged change");
+        git(&repo, &["add", "tracked.py"]);
+        let entry = StatusEntry {
+            code: "M ".to_string(),
+            path: "tracked.py".to_string(),
+            source_path: None,
+        };
+
+        let diff = diff_for_entry(&repo, &entry).expect("staged diff");
+
+        assert!(diff.starts_with("diff --git a/tracked.py b/tracked.py"));
+        assert!(diff.contains("-print('seed')"));
+        assert!(diff.contains("+print('staged')"));
+    }
+
+    #[test]
+    fn diff_for_mixed_entry_uses_head_diff() {
+        let repo = unique_temp_dir("mixed-diff");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("tracked.py"), "print('staged')\n").expect("staged change");
+        git(&repo, &["add", "tracked.py"]);
+        fs::write(repo.join("tracked.py"), "print('working')\n").expect("working change");
+        let entry = StatusEntry {
+            code: "MM".to_string(),
+            path: "tracked.py".to_string(),
+            source_path: None,
+        };
+
+        let diff = diff_for_entry(&repo, &entry).expect("mixed diff");
+
+        assert!(diff.starts_with("diff --git a/tracked.py b/tracked.py"));
+        assert!(diff.contains("-print('seed')"));
+        assert!(diff.contains("+print('working')"));
+    }
+
+    #[test]
+    fn diff_for_binary_tracked_entry_uses_git_binary_summary() {
+        let repo = unique_temp_dir("binary-diff");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("image.bin"), [0_u8, 159, 146, 150]).expect("binary seed");
+        git(&repo, &["add", "image.bin"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        fs::write(repo.join("image.bin"), [0_u8, 159, 146, 151]).expect("binary change");
+        let entry = StatusEntry {
+            code: " M".to_string(),
+            path: "image.bin".to_string(),
+            source_path: None,
+        };
+
+        let diff = diff_for_entry(&repo, &entry).expect("binary diff");
+
+        assert!(diff.contains("Binary files"));
+        assert!(diff.contains("image.bin"));
+    }
+
+    #[test]
     fn tracked_statuses_can_commit_directly_without_staging() {
         for code in [" M", " D", "M ", "D ", "MM", "MD", "DM"] {
             let entry = StatusEntry {
                 code: code.to_string(),
                 path: "tracked.py".to_string(),
+                source_path: None,
             };
             assert_eq!(entry.commit_staging(), CommitStaging::DirectPath, "{code}");
         }
 
-        for code in ["??", "A ", "AM", "UU"] {
+        for code in ["??", "A ", "AM", "UU", "R ", " C"] {
             let entry = StatusEntry {
                 code: code.to_string(),
                 path: "new.py".to_string(),
+                source_path: None,
             };
             assert_eq!(entry.commit_staging(), CommitStaging::StagePath, "{code}");
         }

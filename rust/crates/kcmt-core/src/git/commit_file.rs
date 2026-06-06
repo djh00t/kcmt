@@ -129,6 +129,76 @@ pub fn commit_file_with_staging(
     }
 }
 
+pub fn commit_paths_with_staging(
+    repo_path: &Path,
+    file_paths: &[&str],
+    message: &str,
+    dry_run: bool,
+    staging: CommitStaging,
+) -> Result<CommitFileOutcome> {
+    if dry_run {
+        return Ok(CommitFileOutcome::default());
+    }
+    if file_paths.is_empty() {
+        return Err(KcmtError::Message(
+            "cannot commit without pathspecs".to_string(),
+        ));
+    }
+
+    let (stage_path_ms, stage_path_invoked) = match staging {
+        CommitStaging::StagePath => {
+            let stage_start = Instant::now();
+            for file_path in file_paths {
+                let status = if repo_path.join(file_path).exists() {
+                    Command::new("git")
+                        .current_dir(repo_path)
+                        .args(["add", "-A", "--", file_path])
+                        .status()?
+                } else {
+                    Command::new("git")
+                        .current_dir(repo_path)
+                        .args(["update-index", "--force-remove", "--", file_path])
+                        .status()?
+                };
+                if !status.success() {
+                    return Err(KcmtError::Message(format!(
+                        "failed to stage path for commit: {file_path}"
+                    )));
+                }
+            }
+            let stage_path_ms = stage_start.elapsed().as_secs_f64() * 1000.0;
+            (stage_path_ms, true)
+        }
+        CommitStaging::DirectPath => (0.0, false),
+    };
+
+    let commit_start = Instant::now();
+    let mut commit = Command::new("git");
+    commit
+        .current_dir(repo_path)
+        .envs(commit_env())
+        .args(["commit", "-m", message, "--"]);
+    for file_path in file_paths {
+        commit.arg(file_path);
+    }
+    let commit_status = commit.status()?;
+    let create_commit_ms = commit_start.elapsed().as_secs_f64() * 1000.0;
+
+    if commit_status.success() {
+        Ok(CommitFileOutcome {
+            stage_path_ms,
+            stage_path_invoked,
+            create_commit_ms,
+            commit_hash: None,
+        })
+    } else {
+        Err(KcmtError::Message(format!(
+            "git commit failed for pathspecs {}",
+            file_paths.join(", ")
+        )))
+    }
+}
+
 pub struct GixCommitSession {
     repo_path: PathBuf,
     repo: gix::Repository,

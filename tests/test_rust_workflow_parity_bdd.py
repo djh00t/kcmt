@@ -285,6 +285,28 @@ def git_repository_with_two_changed_tracked_files(tmp_path: Path) -> dict[str, A
 
 
 @given(
+    "a git repository with ignored files and an untracked directory",
+    target_fixture="workflow_context",
+)
+def git_repository_with_ignored_files_and_untracked_directory(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    (repo / ".gitignore").write_text("ignored_dir/\n*.log\n")
+    nested = repo / "newpkg" / "sub"
+    nested.mkdir(parents=True)
+    (nested / "alpha.py").write_text("print('alpha')\n")
+    (nested / "beta.py").write_text("print('beta')\n")
+    ignored = repo / "ignored_dir"
+    ignored.mkdir()
+    (ignored / "skip.txt").write_text("skip\n")
+    (repo / "debug.log").write_text("skip\n")
+    return {"repo": repo, "config_home": tmp_path / "config-home"}
+
+
+@given(
     "a git repository with two changed tracked files and a mocked OpenAI batch provider",
     target_fixture="workflow_context",
 )
@@ -1136,6 +1158,28 @@ def both_changed_files_are_committed_separately(
     subjects = log.splitlines()
     assert "chore(repo): update alpha" in subjects
     assert "chore(repo): update beta" in subjects
+
+
+@then("the untracked directory files are committed separately")
+def untracked_directory_files_are_committed_separately(
+    workflow_context: dict[str, Any],
+) -> None:
+    output = workflow_context["output"]
+    assert "✓ newpkg/sub/alpha.py" in output
+    assert "✓ newpkg/sub/beta.py" in output
+    log = _git(workflow_context["repo"], ["log", "--name-only", "--pretty=%s"])
+    assert "newpkg/sub/alpha.py" in log
+    assert "newpkg/sub/beta.py" in log
+
+
+@then("ignored files are not committed")
+def ignored_files_are_not_committed(workflow_context: dict[str, Any]) -> None:
+    output = workflow_context["output"]
+    assert "ignored_dir" not in output
+    assert "debug.log" not in output
+    log = _git(workflow_context["repo"], ["log", "--name-only", "--pretty=%s"])
+    assert "ignored_dir/skip.txt" not in log
+    assert "debug.log" not in log
 
 
 @then("the repository worktree is clean")

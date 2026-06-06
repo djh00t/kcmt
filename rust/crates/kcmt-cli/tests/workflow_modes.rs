@@ -434,6 +434,77 @@ fn default_mode_commits_all_changed_files_separately() {
 }
 
 #[test]
+fn default_mode_skips_ignored_files_and_expands_untracked_directories() {
+    let repo = init_repo();
+    fs::write(repo.join(".gitignore"), "ignored_dir/\n*.log\n").expect("gitignore");
+    let nested = repo.join("newpkg").join("sub");
+    fs::create_dir_all(&nested).expect("nested dir");
+    fs::write(nested.join("alpha.py"), "print('alpha')\n").expect("alpha file");
+    fs::write(nested.join("beta.py"), "print('beta')\n").expect("beta file");
+    fs::create_dir_all(repo.join("ignored_dir")).expect("ignored dir");
+    fs::write(repo.join("ignored_dir").join("skip.txt"), "skip\n").expect("ignored file");
+    fs::write(repo.join("debug.log"), "skip\n").expect("ignored log");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args(["--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ .gitignore"));
+    assert!(stdout.contains("✓ newpkg/sub/alpha.py"));
+    assert!(stdout.contains("✓ newpkg/sub/beta.py"));
+    assert!(!stdout.contains("ignored_dir"));
+    assert!(!stdout.contains("debug.log"));
+
+    let log = git(&repo, &["log", "--pretty=%s"]);
+    assert_eq!(log.lines().count(), 3);
+    assert!(git(&repo, &["status", "--short"]).is_empty());
+}
+
+#[test]
+fn default_mode_commits_rename_source_and_destination_together() {
+    let repo = init_repo();
+    fs::write(repo.join("old_name.py"), "print('seed')\n").expect("old seed");
+    git(&repo, &["add", "old_name.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    git(&repo, &["mv", "old_name.py", "new_name.py"]);
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args(["--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ new_name.py"));
+    assert!(git(&repo, &["status", "--short"]).is_empty());
+    let committed = git(
+        &repo,
+        &["show", "--name-status", "--pretty=format:", "HEAD"],
+    );
+    assert!(
+        committed
+            .lines()
+            .any(|line| line.contains("old_name.py") && line.contains("new_name.py")),
+        "name-status: {committed}"
+    );
+}
+
+#[test]
 fn default_mode_records_prepare_failure_without_blocking_deletion_commit() {
     let repo = init_repo();
     let config_home = unique_temp_dir("config-home");
@@ -1111,6 +1182,89 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
     );
     let log = git(&repo, &["log", "--pretty=%s", "-1"]);
     assert_eq!(log, "fix(core): use provider message");
+}
+
+#[test]
+fn file_mode_provider_prompt_uses_staged_diff_for_staged_only_change() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"choices":[{"message":{"content":"fix(core): commit staged change."}}]}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('staged')\n").expect("staged change");
+    git(&repo, &["add", "tracked.py"]);
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-mock",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be sent");
+    assert!(request.contains("tracked.py"));
+    assert!(request.contains("-print('seed')"));
+    assert!(request.contains("+print('staged')"));
+    assert!(!request.contains("New or changed file: tracked.py"));
+
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "fix(core): commit staged change");
+    assert!(git(&repo, &["status", "--short"]).is_empty());
+}
+
+#[test]
+fn file_mode_pathspec_leaves_other_staged_file_uncommitted() {
+    let repo = init_repo();
+    fs::write(repo.join("target.py"), "print('target')\n").expect("target seed");
+    fs::write(repo.join("other.py"), "print('other')\n").expect("other seed");
+    git(&repo, &["add", "target.py", "other.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("target.py"), "print('target changed')\n").expect("target change");
+    fs::write(repo.join("other.py"), "print('other changed')\n").expect("other change");
+    git(&repo, &["add", "other.py"]);
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .args(["--file", "target.py", "--no-auto-push", "--repo-path"])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("✓ target.py"));
+    assert!(!stdout.contains("✓ other.py"));
+    let committed = git(&repo, &["show", "--name-only", "--pretty=format:", "HEAD"]);
+    assert!(committed.lines().any(|line| line == "target.py"));
+    assert!(!committed.lines().any(|line| line == "other.py"));
+    assert_eq!(git(&repo, &["status", "--short"]), "M  other.py");
 }
 
 #[test]
