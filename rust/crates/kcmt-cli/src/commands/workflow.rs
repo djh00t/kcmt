@@ -18,7 +18,8 @@ use kcmt_core::git::commit_file::{
 };
 use kcmt_core::git::repo::{CliGitRepository, GitRepository};
 use kcmt_core::message::{
-    build_prompt_with_profile, sanitize_commit_output, selected_prompt_profile,
+    build_prompt_with_profile, build_prompt_with_profile_style, sanitize_commit_output,
+    selected_prompt_profile,
 };
 use kcmt_core::preferences::{
     default_keychain_account, load_preferences, resolve_credential, CredentialRequest,
@@ -1432,12 +1433,7 @@ fn invoke_provider_with_fallback(
             runtime_context,
             max_attempts,
             config.max_commit_length,
-        )
-        .and_then(|raw| {
-            sanitize_commit_output(&raw)
-                .map(|message| limit_subject(message, config.max_commit_length))
-                .map_err(KcmtError::Message)
-        }) {
+        ) {
             Ok(message) => return Ok(message),
             Err(err) => last_error = Some(err),
         }
@@ -1458,7 +1454,6 @@ fn invoke_provider_candidate(
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
-    let prompt = build_prompt_with_profile(&diff, &context, &runtime_context.prompt_profile);
     let system = system_prompt_for_runtime(runtime_context, max_commit_length);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1474,16 +1469,65 @@ fn invoke_provider_candidate(
         },
     )
     .map_err(|err| KcmtError::Message(format!("failed to initialize provider transport: {err}")))?;
+    let raw = invoke_provider_candidate_with_style(
+        &runtime,
+        &transport,
+        candidate,
+        api_key,
+        runtime_context,
+        &diff,
+        &context,
+        &system,
+        "conventional",
+    )?;
+    match sanitize_commit_output(&raw) {
+        Ok(message) => Ok(limit_subject(message, max_commit_length)),
+        Err(first_error) => {
+            let retry_raw = invoke_provider_candidate_with_style(
+                &runtime,
+                &transport,
+                candidate,
+                api_key,
+                runtime_context,
+                &diff,
+                &context,
+                &system,
+                "simple",
+            )?;
+            sanitize_commit_output(&retry_raw)
+                .map(|message| limit_subject(message, max_commit_length))
+                .map_err(|retry_error| {
+                    KcmtError::Message(format!(
+                        "{first_error}; simplified prompt retry failed: {retry_error}"
+                    ))
+                })
+        }
+    }
+}
+
+fn invoke_provider_candidate_with_style(
+    runtime: &tokio::runtime::Runtime,
+    transport: &AsyncTransport,
+    candidate: &ProviderCandidate,
+    api_key: &str,
+    runtime_context: &WorkflowRuntime,
+    diff: &str,
+    context: &str,
+    system: &str,
+    style: &str,
+) -> Result<String> {
+    let prompt =
+        build_prompt_with_profile_style(diff, context, style, &runtime_context.prompt_profile);
     runtime
         .block_on(async {
             match candidate.provider.as_str() {
                 "openai" => {
                     let messages = vec![
-                        ProviderMessage::system(system.as_str()),
+                        ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
                     OpenAiClient::invoke_chat(
-                        &transport,
+                        transport,
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
@@ -1493,11 +1537,11 @@ fn invoke_provider_candidate(
                 }
                 "xai" => {
                     let messages = vec![
-                        ProviderMessage::system(system.as_str()),
+                        ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
                     XaiClient::invoke_chat(
-                        &transport,
+                        transport,
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
@@ -1507,11 +1551,11 @@ fn invoke_provider_candidate(
                 }
                 "github" => {
                     let messages = vec![
-                        ProviderMessage::system(system.as_str()),
+                        ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
                     GitHubModelsClient::invoke_chat(
-                        &transport,
+                        transport,
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
@@ -1521,11 +1565,11 @@ fn invoke_provider_candidate(
                 }
                 "anthropic" => {
                     AnthropicClient::invoke_messages(
-                        &transport,
+                        transport,
                         &candidate.endpoint,
                         api_key,
                         &candidate.model,
-                        system.as_str(),
+                        system,
                         &prompt,
                     )
                     .await

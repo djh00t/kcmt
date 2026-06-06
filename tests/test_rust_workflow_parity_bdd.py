@@ -244,6 +244,48 @@ def _start_retry_limited_provider() -> tuple[str, type[_RetryLimitHandler], HTTP
     return f"http://127.0.0.1:{server.server_port}", Handler, server
 
 
+class _DirectProviderHandler(BaseHTTPRequestHandler):
+    requests: list[tuple[str, str, str]] = []
+    responses: list[bytes] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("content-length", "0") or "0")
+        body = self.rfile.read(length).decode("utf-8", "ignore") if length else ""
+        self.__class__.requests.append((self.command, self.path, body))
+        payload = (
+            self.__class__.responses.pop(0)
+            if self.__class__.responses
+            else b'{"choices":[{"message":{"content":"fix(core): default response."}}]}'
+        )
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+
+def _start_direct_provider(
+    responses: list[bytes],
+) -> tuple[str, type[_DirectProviderHandler], HTTPServer]:
+    class Handler(_DirectProviderHandler):
+        requests: list[tuple[str, str, str]] = []
+
+    Handler.responses = responses.copy()
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return f"http://127.0.0.1:{server.server_port}", Handler, server
+
+
+def _stop_server(server: HTTPServer) -> None:
+    server.shutdown()
+    server.server_close()
+
+
 def _rust_bin(binary: str) -> Path:
     subprocess.run(
         [
@@ -386,6 +428,54 @@ def git_repository_with_one_changed_tracked_file(tmp_path: Path) -> dict[str, An
 
     (repo / "tracked.py").write_text("print('changed')\n")
     return {"repo": repo, "config_home": tmp_path / "config-home"}
+
+
+@given(
+    "a git repository with one changed binary file and a mocked OpenAI provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_one_changed_binary_file_and_mocked_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    assets = repo / "assets"
+    assets.mkdir()
+    (assets / "logo.png").write_bytes(b"\0PNG seed")
+    _git(repo, ["add", "assets/logo.png"])
+    _git(repo, ["commit", "-m", "chore(assets): seed logo"])
+    (assets / "logo.png").write_bytes(b"\0PNG changed")
+    endpoint, handler, server = _start_direct_provider(
+        [b'{"choices":[{"message":{"content":"chore(assets): update logo."}}]}']
+    )
+    return {
+        "repo": repo,
+        "config_home": tmp_path / "config-home",
+        "endpoint": endpoint,
+        "direct_handler": handler,
+        "direct_server": server,
+    }
+
+
+@given(
+    "a git repository with one changed tracked file and a malformed-then-valid OpenAI provider",
+    target_fixture="workflow_context",
+)
+def git_repository_with_malformed_then_valid_openai_provider(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_one_changed_tracked_file(tmp_path)
+    endpoint, handler, server = _start_direct_provider(
+        [
+            b'{"choices":[{"message":{"content":"This changes a few files"}}]}',
+            b'{"choices":[{"message":{"content":"fix(core): retry simplified prompt."}}]}',
+        ]
+    )
+    context["endpoint"] = endpoint
+    context["direct_handler"] = handler
+    context["direct_server"] = server
+    return context
 
 
 @given(
@@ -1068,6 +1158,72 @@ def rust_kcmt_commits_the_file_with_wrapped_provider_output(
     workflow_context["output"] = output
 
 
+@when("the Rust kcmt command commits the binary file with the mocked provider")
+def rust_kcmt_commits_binary_file_with_mocked_provider(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["OPENAI_TEST_KEY"] = "bdd-openai-key"
+    try:
+        output = _run(
+            [
+                str(_rust_bin("kcmt")),
+                "--file",
+                "assets/logo.png",
+                "--provider",
+                "openai",
+                "--endpoint",
+                workflow_context["endpoint"],
+                "--api-key-env",
+                "OPENAI_TEST_KEY",
+                "--model",
+                "gpt-bdd",
+                "--no-auto-push",
+                "--repo-path",
+                str(workflow_context["repo"]),
+            ],
+            REPO_ROOT,
+            env=env,
+        )
+        workflow_context["output"] = output
+    finally:
+        _stop_server(workflow_context["direct_server"])
+
+
+@when(
+    "the Rust kcmt command commits the file with malformed then valid provider output"
+)
+def rust_kcmt_commits_file_with_malformed_then_valid_provider_output(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["OPENAI_TEST_KEY"] = "bdd-openai-key"
+    try:
+        output = _run(
+            [
+                str(_rust_bin("kcmt")),
+                "--file",
+                "tracked.py",
+                "--provider",
+                "openai",
+                "--endpoint",
+                workflow_context["endpoint"],
+                "--api-key-env",
+                "OPENAI_TEST_KEY",
+                "--model",
+                "gpt-bdd",
+                "--no-auto-push",
+                "--repo-path",
+                str(workflow_context["repo"]),
+            ],
+            REPO_ROOT,
+            env=env,
+        )
+        workflow_context["output"] = output
+    finally:
+        _stop_server(workflow_context["direct_server"])
+
+
 @when("the Rust kcmt command receives invalid provider output")
 def rust_kcmt_receives_invalid_provider_output(
     workflow_context: dict[str, Any],
@@ -1367,6 +1523,49 @@ def latest_commit_uses_the_sanitized_provider_message(
     assert "fix(core): handle provider output" in workflow_context["output"]
     log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
     assert log == "fix(core): handle provider output"
+
+
+@then("the mocked provider prompt includes the binary diff summary")
+def mocked_provider_prompt_includes_binary_diff_summary(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["direct_handler"].requests
+    assert len(requests) == 1
+    body = requests[0][2]
+    assert "Binary diff detected." in body
+    assert "File hint: assets/logo.png" in body
+    assert "Git reported:" in body
+
+
+@then("the latest commit uses the binary provider message")
+def latest_commit_uses_the_binary_provider_message(
+    workflow_context: dict[str, Any],
+) -> None:
+    assert "chore(assets): update logo" in workflow_context["output"]
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "chore(assets): update logo"
+
+
+@then("the mocked provider receives a simplified retry prompt")
+def mocked_provider_receives_a_simplified_retry_prompt(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["direct_handler"].requests
+    assert len(requests) == 2
+    first_body = requests[0][2]
+    retry_body = requests[1][2]
+    assert "STRICT REQUIREMENTS" in first_body
+    assert "Keep it simple but include mandatory scope." in retry_body
+    assert "STRICT REQUIREMENTS" not in retry_body
+
+
+@then("the latest commit uses the simplified retry provider message")
+def latest_commit_uses_the_simplified_retry_provider_message(
+    workflow_context: dict[str, Any],
+) -> None:
+    assert "fix(core): retry simplified prompt" in workflow_context["output"]
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "fix(core): retry simplified prompt"
 
 
 @then("the workflow fails before committing the file")
