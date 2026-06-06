@@ -158,6 +158,9 @@ fn spawn_provider_responses(
             stream
                 .set_nonblocking(false)
                 .expect("mock provider stream should become blocking");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("mock provider stream should have read timeout");
             let mut buffer = [0_u8; 32768];
             let bytes = stream.read(&mut buffer).expect("mock provider read");
             sender

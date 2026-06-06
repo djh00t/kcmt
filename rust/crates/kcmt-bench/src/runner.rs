@@ -12,8 +12,10 @@ use time::OffsetDateTime;
 
 use crate::model::{
     OptimizationIteration, OptimizationMeasurementStatus, RuntimeBenchmarkResult,
-    RuntimeBenchmarkRun, RuntimeBenchmarkSummary, RuntimeKind, RuntimeScenarioStatus,
-    RuntimeStageTiming, RuntimeSummary,
+    RuntimeBenchmarkRun, RuntimeBenchmarkScorecard, RuntimeBenchmarkSnapshot,
+    RuntimeBenchmarkSummary, RuntimeKind, RuntimeScenarioComparison, RuntimeScenarioMatrixCell,
+    RuntimeScenarioMatrixRow, RuntimeScenarioStatus, RuntimeStageDelta, RuntimeStageTiming,
+    RuntimeSummary,
 };
 use crate::RUNTIME_BENCHMARK_SCHEMA_VERSION;
 
@@ -103,22 +105,274 @@ pub fn run_runtime_benchmark(
         rust: build_runtime_summary(&results, RuntimeKind::Rust),
     };
     let optimization_iterations = build_optimization_iterations(&results, &summary);
+    let timestamp = benchmark_timestamp();
+    let command_set = "local-workflows-v1".to_string();
+    let corpora = vec![metadata.id.clone().unwrap_or_else(|| {
+        repo_root
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    })];
+    let scenario_matrix = build_scenario_matrix(&results);
+    let scorecard = build_scorecard(&results);
+    let snapshot = build_runtime_snapshot(&timestamp, &command_set, &corpora, results.len());
 
     Ok(RuntimeBenchmarkRun {
         schema_version: RUNTIME_BENCHMARK_SCHEMA_VERSION.to_string(),
-        timestamp: benchmark_timestamp(),
-        command_set: "local-workflows-v1".to_string(),
-        corpora: vec![metadata.id.clone().unwrap_or_else(|| {
-            repo_root
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-        })],
+        timestamp,
+        command_set,
+        corpora,
+        snapshot,
         results: results.clone(),
+        scenario_matrix,
         summary,
+        scorecard,
         optimization_iterations,
     })
+}
+
+fn build_runtime_snapshot(
+    timestamp: &str,
+    command_set: &str,
+    corpora: &[String],
+    result_count: usize,
+) -> RuntimeBenchmarkSnapshot {
+    RuntimeBenchmarkSnapshot {
+        snapshot_id: runtime_snapshot_id(timestamp, corpora),
+        benchmark_kind: "runtime".to_string(),
+        schema_version: RUNTIME_BENCHMARK_SCHEMA_VERSION.to_string(),
+        timestamp: timestamp.to_string(),
+        command_set: command_set.to_string(),
+        corpora: corpora.to_vec(),
+        result_count: result_count as u32,
+        secret_free: true,
+        provider_benchmark_kind: "provider".to_string(),
+    }
+}
+
+fn runtime_snapshot_id(timestamp: &str, corpora: &[String]) -> String {
+    let mut slug = timestamp
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    if slug.is_empty() {
+        slug = "19700101T000000Z".to_string();
+    }
+    let corpus = corpora
+        .first()
+        .map(|value| {
+            value
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                        ch
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "runtime-corpus".to_string());
+    format!("runtime-{corpus}-{slug}")
+}
+
+fn build_scenario_matrix(results: &[RuntimeBenchmarkResult]) -> Vec<RuntimeScenarioMatrixRow> {
+    let mut scenario_ids = Vec::<String>::new();
+    for result in results {
+        if !scenario_ids.contains(&result.scenario_id) {
+            scenario_ids.push(result.scenario_id.clone());
+        }
+    }
+
+    scenario_ids
+        .into_iter()
+        .filter_map(|scenario_id| {
+            let python = find_runtime_result(results, &scenario_id, RuntimeKind::Python);
+            let rust = find_runtime_result(results, &scenario_id, RuntimeKind::Rust);
+            let exemplar = python.or(rust)?;
+            let python_cell = matrix_cell(python);
+            let rust_cell = matrix_cell(rust);
+            let comparison = scenario_comparison(python, rust);
+            Some(RuntimeScenarioMatrixRow {
+                scenario_id,
+                workflow_contract_id: exemplar.workflow_contract_id.clone(),
+                corpus_id: exemplar.corpus_id.clone(),
+                command_label: exemplar.command_label.clone(),
+                python: python_cell,
+                rust: rust_cell,
+                comparison,
+            })
+        })
+        .collect()
+}
+
+fn find_runtime_result<'a>(
+    results: &'a [RuntimeBenchmarkResult],
+    scenario_id: &str,
+    runtime: RuntimeKind,
+) -> Option<&'a RuntimeBenchmarkResult> {
+    results
+        .iter()
+        .find(|result| result.scenario_id == scenario_id && result.runtime == runtime)
+}
+
+fn matrix_cell(result: Option<&RuntimeBenchmarkResult>) -> RuntimeScenarioMatrixCell {
+    let Some(result) = result else {
+        return RuntimeScenarioMatrixCell {
+            status: RuntimeScenarioStatus::Excluded,
+            iterations: 0,
+            wall_time_ms: None,
+            median_time_ms: None,
+            throughput_commits_per_sec: None,
+            quality_score: None,
+            stage_timings: Vec::new(),
+            failure_reason: Some("runtime not requested".to_string()),
+        };
+    };
+    RuntimeScenarioMatrixCell {
+        status: result.status,
+        iterations: result.iterations,
+        wall_time_ms: Some(result.wall_time_ms),
+        median_time_ms: result.median_time_ms,
+        throughput_commits_per_sec: result
+            .median_time_ms
+            .filter(|value| *value > 0.0)
+            .map(|value| 1000.0 / value),
+        quality_score: Some(result_quality_score(result)),
+        stage_timings: result.stage_timings.clone(),
+        failure_reason: result.failure_reason.clone(),
+    }
+}
+
+fn result_quality_score(result: &RuntimeBenchmarkResult) -> f64 {
+    match result.status {
+        RuntimeScenarioStatus::Passed => 100.0,
+        RuntimeScenarioStatus::Failed | RuntimeScenarioStatus::Excluded => 0.0,
+    }
+}
+
+fn scenario_comparison(
+    python: Option<&RuntimeBenchmarkResult>,
+    rust: Option<&RuntimeBenchmarkResult>,
+) -> RuntimeScenarioComparison {
+    let comparable = matches!(
+        (
+            python.map(|result| result.status),
+            rust.map(|result| result.status)
+        ),
+        (
+            Some(RuntimeScenarioStatus::Passed),
+            Some(RuntimeScenarioStatus::Passed)
+        )
+    );
+    let python_median = python.and_then(|result| result.median_time_ms);
+    let rust_median = rust.and_then(|result| result.median_time_ms);
+    let median_delta_ms = if comparable {
+        match (python_median, rust_median) {
+            (Some(python_ms), Some(rust_ms)) => Some(rust_ms - python_ms),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let fastest_runtime = if comparable {
+        match (python_median, rust_median) {
+            (Some(python_ms), Some(rust_ms)) if rust_ms < python_ms => Some(RuntimeKind::Rust),
+            (Some(python_ms), Some(rust_ms)) if python_ms < rust_ms => Some(RuntimeKind::Python),
+            (Some(_), Some(_)) => None,
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let speedup_ratio = if comparable {
+        match (python_median, rust_median) {
+            (Some(python_ms), Some(rust_ms)) if rust_ms > 0.0 => Some(python_ms / rust_ms),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    RuntimeScenarioComparison {
+        comparable,
+        fastest_runtime,
+        median_delta_ms,
+        speedup_ratio,
+        stage_deltas: stage_deltas(
+            python
+                .map(|result| result.stage_timings.as_slice())
+                .unwrap_or(&[]),
+            rust.map(|result| result.stage_timings.as_slice())
+                .unwrap_or(&[]),
+        ),
+    }
+}
+
+fn stage_deltas(
+    python_stages: &[RuntimeStageTiming],
+    rust_stages: &[RuntimeStageTiming],
+) -> Vec<RuntimeStageDelta> {
+    let mut stage_names = Vec::<String>::new();
+    for stage in python_stages.iter().chain(rust_stages.iter()) {
+        if !stage_names.contains(&stage.stage) {
+            stage_names.push(stage.stage.clone());
+        }
+    }
+    stage_names
+        .into_iter()
+        .map(|stage| {
+            let python_ms = stage_duration(python_stages, &stage);
+            let rust_ms = stage_duration(rust_stages, &stage);
+            RuntimeStageDelta {
+                stage,
+                python_ms,
+                rust_ms,
+                delta_ms: match (python_ms, rust_ms) {
+                    (Some(python_ms), Some(rust_ms)) => Some(rust_ms - python_ms),
+                    _ => None,
+                },
+            }
+        })
+        .collect()
+}
+
+fn stage_duration(stages: &[RuntimeStageTiming], stage_name: &str) -> Option<f64> {
+    stages
+        .iter()
+        .find(|stage| stage.stage == stage_name)
+        .map(|stage| stage.duration_ms)
+}
+
+fn build_scorecard(results: &[RuntimeBenchmarkResult]) -> RuntimeBenchmarkScorecard {
+    RuntimeBenchmarkScorecard {
+        measurement_basis: "runtime workflow subprocess wall time with local fixture provider responses; pre-LLM Rust heuristic stages are not provider throughput".to_string(),
+        quality_score_definition:
+            "percentage of requested runtime scenarios that passed without failed or excluded rows"
+                .to_string(),
+        throughput_definition:
+            "commits per second derived from median scenario wall time; provider benchmark throughput remains separate"
+                .to_string(),
+        python_quality_score: runtime_quality_score(results, RuntimeKind::Python),
+        rust_quality_score: runtime_quality_score(results, RuntimeKind::Rust),
+        provider_throughput_included: false,
+    }
+}
+
+fn runtime_quality_score(results: &[RuntimeBenchmarkResult], runtime: RuntimeKind) -> Option<f64> {
+    let relevant: Vec<&RuntimeBenchmarkResult> = results
+        .iter()
+        .filter(|result| result.runtime == runtime)
+        .collect();
+    if relevant.is_empty() {
+        return None;
+    }
+    let passed = relevant
+        .iter()
+        .filter(|result| result.status == RuntimeScenarioStatus::Passed)
+        .count() as f64;
+    Some((passed / relevant.len() as f64) * 100.0)
 }
 
 fn build_optimization_iterations(
@@ -867,6 +1121,11 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
         ),
         ("KCMT_RUNTIME_BENCHMARK".to_string(), "1".to_string()),
         ("KCMT_ALLOW_LOCAL_SYNTHESIS".to_string(), "1".to_string()),
+        (
+            "KCMT_PROVIDER_RESPONSE".to_string(),
+            "chore(repo): benchmark fixture response".to_string(),
+        ),
+        ("KCMT_DISABLE_KEYCHAIN".to_string(), "1".to_string()),
         ("GIT_AUTHOR_NAME".to_string(), "kcmt-benchmark".to_string()),
         (
             "GIT_AUTHOR_EMAIL".to_string(),

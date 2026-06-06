@@ -73,6 +73,52 @@ def _create_runtime_corpus(tmp_path: Path) -> Path:
     return repo
 
 
+def _create_runtime_corpus_with_file_targets(tmp_path: Path) -> Path:
+    repo = tmp_path / "runtime-file-target-corpus"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main", str(repo)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if not (repo / ".git").exists():
+        _git(repo, "init")
+        _git(repo, "branch", "-M", "main")
+    _git(repo, "config", "user.name", "Tester")
+    _git(repo, "config", "user.email", "tester@example.com")
+
+    source_file = repo / "src" / "app.py"
+    extra_file = repo / "src" / "extra.py"
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text(
+        "def greet() -> str:\n    return 'hello'\n", encoding="utf-8"
+    )
+    extra_file.write_text("def extra() -> str:\n    return 'hello'\n", encoding="utf-8")
+    metadata = {
+        "id": "pytest-runtime-file-target-corpus",
+        "kind": "synthetic",
+        "file_count": 2,
+        "git_history_state": "seeded-history",
+        "change_shape": ["modified", "nested-paths"],
+        "default_file_target": "src/app.py",
+        "file_targets": [{"id": "modified-extra", "path": "src/extra.py"}],
+    }
+    (repo / bench.RUNTIME_BENCHMARK_METADATA_FILENAME).write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "chore(repo): seed")
+    source_file.write_text(
+        "def greet() -> str:\n    return 'hello runtime'\n", encoding="utf-8"
+    )
+    extra_file.write_text(
+        "def extra() -> str:\n    return 'hello target'\n", encoding="utf-8"
+    )
+    return repo
+
+
 def test_run_benchmark_produces_results(monkeypatch):
     def _fake_build_config(provider: str, model: str):
         # Not used by the stub client factory; only present for signature.
@@ -229,6 +275,32 @@ def test_run_runtime_benchmark_produces_python_results(tmp_path):
     assert all(item["throughput_commits_per_sec"] is None for item in iterations[1:])
     assert all(item["quality_score"] is None for item in iterations[1:])
     assert all(item["failures"] is None for item in iterations[1:])
+
+
+def test_runtime_benchmark_matrix_preserves_file_target_scenarios(tmp_path):
+    repo = _create_runtime_corpus_with_file_targets(tmp_path)
+
+    report = bench.run_runtime_benchmark(
+        repo,
+        runtime="python",
+        iterations=1,
+    )
+    payload = bench.runtime_benchmark_report_to_dict(report)
+
+    assert len(payload["results"]) == 5
+    matrix = payload["scenario_matrix"]
+    assert len(matrix) == 5
+    scenario_ids = {row["scenario_id"] for row in matrix}
+    assert "pytest-runtime-file-target-corpus:file-repo-path" in scenario_ids
+    assert "pytest-runtime-file-target-corpus:file-modified-extra" in scenario_ids
+    assert sum(row["workflow_contract_id"] == "file-repo-path" for row in matrix) == 2
+    extra_row = next(
+        row
+        for row in matrix
+        if row["scenario_id"] == "pytest-runtime-file-target-corpus:file-modified-extra"
+    )
+    assert extra_row["python"]["status"] == "passed"
+    assert extra_row["rust"]["status"] == "excluded"
 
 
 def test_runtime_benchmark_large_synthetic_excludes_default_workflow(tmp_path):

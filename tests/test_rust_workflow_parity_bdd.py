@@ -1191,7 +1191,7 @@ def rust_kcmt_runtime_benchmark_runs_against_the_corpus(
             "--repo-path",
             str(workflow_context["repo"]),
             "--runtime",
-            "rust",
+            "both",
             "--iterations",
             "1",
             "--rust-bin",
@@ -2123,3 +2123,48 @@ def benchmark_report_includes_rust_workflow_stage_timings(
     }.issubset(stage_names)
     assert all(isinstance(stage["duration_ms"], int | float) for stage in stages)
     assert all(isinstance(stage["items"], int) for stage in stages)
+
+
+@then("the benchmark report compares Python and Rust runtime stages")
+def benchmark_report_compares_python_and_rust_runtime_stages(
+    workflow_context: dict[str, Any],
+) -> None:
+    payload = json.loads(workflow_context["output"])
+    assert payload["snapshot"]["benchmark_kind"] == "runtime"
+    assert payload["snapshot"]["provider_benchmark_kind"] == "provider"
+    assert payload["scorecard"]["provider_throughput_included"] is False
+    assert "pre-LLM Rust heuristic" in payload["scorecard"]["measurement_basis"]
+    matrix = payload["scenario_matrix"]
+    assert {row["workflow_contract_id"] for row in matrix} == {
+        "status-repo-path",
+        "oneshot-repo-path",
+        "default-repo-path",
+        "file-repo-path",
+    }
+    file_row = next(
+        row for row in matrix if row["workflow_contract_id"] == "file-repo-path"
+    )
+    assert file_row["python"]["status"] == "passed"
+    assert file_row["rust"]["status"] == "passed"
+    assert file_row["comparison"]["comparable"] is True
+    assert any(
+        stage["stage"] == "workflow_total"
+        for stage in file_row["comparison"]["stage_deltas"]
+    )
+
+
+@then("the runtime benchmark snapshot is persisted")
+def runtime_benchmark_snapshot_is_persisted(
+    workflow_context: dict[str, Any],
+) -> None:
+    repo = workflow_context["repo"].resolve()
+    digest = __import__("hashlib").sha256(str(repo).encode("utf-8")).hexdigest()[:8]
+    namespace = f"{repo.name}-{digest}"
+    benchmark_dir = workflow_context["config_home"] / "repos" / namespace / "benchmarks"
+    snapshots = sorted(benchmark_dir.glob("runtime-*.json"))
+    assert len(snapshots) == 1
+    payload = json.loads(snapshots[0].read_text())
+    assert payload["snapshot"]["benchmark_kind"] == "runtime"
+    output_payload = json.loads(workflow_context["output"])
+    assert len(payload["scenario_matrix"]) == len(output_payload["scenario_matrix"])
+    assert len(payload["scenario_matrix"]) >= 4

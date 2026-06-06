@@ -34,6 +34,63 @@
       "minItems": 1,
       "uniqueItems": true
     },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "benchmark_kind",
+        "schema_version",
+        "timestamp",
+        "command_set",
+        "corpora",
+        "result_count",
+        "secret_free",
+        "provider_benchmark_kind"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "benchmark_kind": {
+          "type": "string",
+          "const": "runtime"
+        },
+        "schema_version": {
+          "type": "string",
+          "const": "1.0.0"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "command_set": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpora": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "result_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "secret_free": {
+          "type": "boolean"
+        },
+        "provider_benchmark_kind": {
+          "type": "string",
+          "const": "provider"
+        }
+      },
+      "additionalProperties": false
+    },
     "results": {
       "type": "array",
       "minItems": 1,
@@ -158,6 +215,49 @@
         "additionalProperties": false
       }
     },
+    "scenario_matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "scenario_id",
+          "workflow_contract_id",
+          "corpus_id",
+          "command_label",
+          "python",
+          "rust",
+          "comparison"
+        ],
+        "properties": {
+          "scenario_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "workflow_contract_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "corpus_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "command_label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "python": {
+            "$ref": "#/$defs/runtimeMatrixCell"
+          },
+          "rust": {
+            "$ref": "#/$defs/runtimeMatrixCell"
+          },
+          "comparison": {
+            "$ref": "#/$defs/runtimeScenarioComparison"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "summary": {
       "type": "object",
       "required": [
@@ -170,6 +270,52 @@
         },
         "rust": {
           "$ref": "#/$defs/runtimeSummary"
+        }
+      },
+      "additionalProperties": false
+    },
+    "scorecard": {
+      "type": "object",
+      "required": [
+        "measurement_basis",
+        "quality_score_definition",
+        "throughput_definition",
+        "python_quality_score",
+        "rust_quality_score",
+        "provider_throughput_included"
+      ],
+      "properties": {
+        "measurement_basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quality_score_definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "throughput_definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "python_quality_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "rust_quality_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "provider_throughput_included": {
+          "type": "boolean",
+          "const": false
         }
       },
       "additionalProperties": false
@@ -248,6 +394,177 @@
     }
   },
   "$defs": {
+    "runtimeMatrixCell": {
+      "type": "object",
+      "required": [
+        "status",
+        "iterations",
+        "wall_time_ms",
+        "median_time_ms",
+        "throughput_commits_per_sec",
+        "quality_score",
+        "stage_timings",
+        "failure_reason"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "excluded"
+          ]
+        },
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wall_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "median_time_ms": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "throughput_commits_per_sec": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "quality_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "stage_timings": {
+          "$ref": "#/$defs/stageTimings"
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimeScenarioComparison": {
+      "type": "object",
+      "required": [
+        "comparable",
+        "fastest_runtime",
+        "median_delta_ms",
+        "speedup_ratio",
+        "stage_deltas"
+      ],
+      "properties": {
+        "comparable": {
+          "type": "boolean"
+        },
+        "fastest_runtime": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "python",
+            "rust",
+            null
+          ]
+        },
+        "median_delta_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "speedup_ratio": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "stage_deltas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "stage",
+              "python_ms",
+              "rust_ms",
+              "delta_ms"
+            ],
+            "properties": {
+              "stage": {
+                "type": "string",
+                "minLength": 1
+              },
+              "python_ms": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "rust_ms": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "delta_ms": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "stageTimings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "stage",
+          "duration_ms",
+          "items"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "runtimeSummary": {
       "type": "object",
       "required": [

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kcmt_bench::export::export_runtime_json;
-use kcmt_bench::model::{RuntimeBenchmarkRun, RuntimeScenarioStatus};
+use kcmt_bench::model::{RuntimeBenchmarkRun, RuntimeKind, RuntimeScenarioStatus};
 use kcmt_bench::runner::run_runtime_benchmark;
 use kcmt_core::config::loader::{load_config, ConfigOverrides};
 use kcmt_core::message::{build_prompt, sanitize_commit_output, validate_conventional_commit};
@@ -586,6 +586,32 @@ fn benchmark_timestamp() -> String {
     format!("{seconds}")
 }
 
+fn persist_runtime_benchmark(repo_path: &Path, report: &RuntimeBenchmarkRun) -> anyhow::Result<()> {
+    let report_dir = state_dir(repo_path).join("benchmarks");
+    fs::create_dir_all(&report_dir)?;
+    let safe_id = report
+        .snapshot
+        .snapshot_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    fs::write(
+        report_dir.join(format!("{safe_id}.json")),
+        serde_json::to_string_pretty(report)?,
+    )?;
+    fs::write(
+        report_dir.join(format!("{safe_id}.md")),
+        render_runtime_report(report),
+    )?;
+    Ok(())
+}
+
 fn run_runtime_benchmark_command(
     repo_path: PathBuf,
     runtime: BenchmarkRuntime,
@@ -607,6 +633,9 @@ fn run_runtime_benchmark_command(
         rust_bin_path.as_deref(),
     ) {
         Ok(report) => {
+            if let Err(err) = persist_runtime_benchmark(&repo_path, &report) {
+                eprintln!("warning: failed to persist runtime benchmark snapshot: {err}");
+            }
             if json {
                 match export_runtime_json(&report) {
                     Ok(rendered) => println!("{rendered}"),
@@ -643,6 +672,11 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
         format!("- Timestamp: {}", report.timestamp),
         format!("- Command set: {}", report.command_set),
         format!("- Corpora: {}", report.corpora.join(", ")),
+        format!("- Snapshot: {}", report.snapshot.snapshot_id),
+        format!(
+            "- Measurement basis: {}",
+            report.scorecard.measurement_basis
+        ),
         String::new(),
         "| Runtime | Scenarios | Passed | Failed | Excluded | Median wall time (ms) |".to_string(),
         "| --- | --- | --- | --- | --- | --- |".to_string(),
@@ -693,6 +727,47 @@ fn render_runtime_report(report: &RuntimeBenchmarkRun) -> String {
 
     lines.push(String::new());
     lines.push(
+        "| Scenario | Python | Rust | Median delta (ms) | Fastest | Stage deltas |".to_string(),
+    );
+    lines.push("| --- | --- | --- | --- | --- | --- |".to_string());
+    for row in &report.scenario_matrix {
+        let python = matrix_cell_label(row.python.status, row.python.median_time_ms);
+        let rust = matrix_cell_label(row.rust.status, row.rust.median_time_ms);
+        let delta = row
+            .comparison
+            .median_delta_ms
+            .map(|value| format!("{value:.2}"))
+            .unwrap_or_else(|| "-".to_string());
+        let fastest = row
+            .comparison
+            .fastest_runtime
+            .map(runtime_label)
+            .unwrap_or("-");
+        let stage_deltas = row
+            .comparison
+            .stage_deltas
+            .iter()
+            .filter_map(|stage| stage.delta_ms.map(|delta| (stage.stage.as_str(), delta)))
+            .map(|(stage, delta)| format!("{stage}:{delta:.2}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "| {} | {} | {} | {} | {} | {} |",
+            row.scenario_id.replace('|', "\\|"),
+            python,
+            rust,
+            delta,
+            fastest,
+            if stage_deltas.is_empty() {
+                "-".to_string()
+            } else {
+                stage_deltas.replace('|', "\\|")
+            },
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push(
         "| Scenario | Runtime | Status | Iterations | Total wall time (ms) | Median (ms) | Failure |"
             .to_string(),
     );
@@ -737,7 +812,19 @@ fn append_summary_row(
 
 fn runtime_label(runtime: kcmt_bench::model::RuntimeKind) -> &'static str {
     match runtime {
-        kcmt_bench::model::RuntimeKind::Python => "python",
-        kcmt_bench::model::RuntimeKind::Rust => "rust",
+        RuntimeKind::Python => "python",
+        RuntimeKind::Rust => "rust",
     }
+}
+
+fn matrix_cell_label(status: RuntimeScenarioStatus, median_time_ms: Option<f64>) -> String {
+    let status = match status {
+        RuntimeScenarioStatus::Passed => "passed",
+        RuntimeScenarioStatus::Failed => "failed",
+        RuntimeScenarioStatus::Excluded => "excluded",
+    };
+    let median = median_time_ms
+        .map(|value| format!("{value:.2} ms"))
+        .unwrap_or_else(|| "-".to_string());
+    format!("{status} ({median})")
 }

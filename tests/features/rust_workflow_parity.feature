@@ -185,7 +185,9 @@ Feature: Rust workflow parity
     Then the benchmark output includes leaderboard JSON and CSV sections
     And the provider benchmark snapshot is persisted
 
-  Scenario: Runtime benchmark reports Rust snapshot stage telemetry
+  Scenario: Runtime benchmark reports side-by-side runtime scoreboard
     Given a checked-in runtime benchmark corpus
     When the Rust kcmt runtime benchmark runs against the corpus
     Then the benchmark report includes Rust workflow stage timings
+    And the benchmark report compares Python and Rust runtime stages
+    And the runtime benchmark snapshot is persisted

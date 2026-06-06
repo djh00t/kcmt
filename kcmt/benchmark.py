@@ -1099,6 +1099,69 @@ class RuntimeBenchmarkSummary:
 
 
 @dataclass
+class RuntimeBenchmarkSnapshot:
+    snapshot_id: str
+    benchmark_kind: str
+    schema_version: str
+    timestamp: str
+    command_set: str
+    corpora: list[str]
+    result_count: int
+    secret_free: bool
+    provider_benchmark_kind: str
+
+
+@dataclass
+class RuntimeScenarioMatrixCell:
+    status: str
+    iterations: int
+    wall_time_ms: float | None
+    median_time_ms: float | None
+    throughput_commits_per_sec: float | None
+    quality_score: float | None
+    stage_timings: list[RuntimeStageTiming]
+    failure_reason: str | None
+
+
+@dataclass
+class RuntimeStageDelta:
+    stage: str
+    python_ms: float | None
+    rust_ms: float | None
+    delta_ms: float | None
+
+
+@dataclass
+class RuntimeScenarioComparison:
+    comparable: bool
+    fastest_runtime: str | None
+    median_delta_ms: float | None
+    speedup_ratio: float | None
+    stage_deltas: list[RuntimeStageDelta]
+
+
+@dataclass
+class RuntimeScenarioMatrixRow:
+    scenario_id: str
+    workflow_contract_id: str
+    corpus_id: str
+    command_label: str
+    python: RuntimeScenarioMatrixCell
+    rust: RuntimeScenarioMatrixCell
+    comparison: RuntimeScenarioComparison
+
+
+@dataclass
+class RuntimeBenchmarkScorecard:
+    measurement_basis: str
+    quality_score_definition: str
+    throughput_definition: str
+    python_quality_score: float | None
+    rust_quality_score: float | None
+    provider_throughput_included: bool
+
+
+@dataclass
 class RuntimeOptimizationIteration:
     iteration: int
     label: str
@@ -1117,8 +1180,11 @@ class RuntimeBenchmarkRun:
     timestamp: str
     command_set: str
     corpora: list[str]
+    snapshot: RuntimeBenchmarkSnapshot
     results: list[RuntimeBenchmarkResult]
+    scenario_matrix: list[RuntimeScenarioMatrixRow]
     summary: dict[str, RuntimeBenchmarkSummary]
+    scorecard: RuntimeBenchmarkScorecard
     optimization_iterations: list[RuntimeOptimizationIteration] = field(
         default_factory=list
     )
@@ -1130,6 +1196,7 @@ class _RuntimeBenchmarkScenario:
     workflow_contract_id: str
     command_label: str
     expected_stdout_fragment: str
+    file_target: str | None = None
 
 
 def _runtime_benchmark_repo_root() -> Path:
@@ -1199,6 +1266,7 @@ def _runtime_benchmark_scenarios(
             workflow_contract_id="file-repo-path",
             command_label=f"kcmt --file {target} --repo-path <repo>",
             expected_stdout_fragment="✓ ",
+            file_target=target,
         ),
     ]
     if not _is_large_untracked_runtime_corpus(metadata):
@@ -1211,6 +1279,24 @@ def _runtime_benchmark_scenarios(
                 expected_stdout_fragment="✓ ",
             ),
         )
+    file_targets = metadata.get("file_targets")
+    if isinstance(file_targets, list):
+        for file_target in file_targets:
+            if not isinstance(file_target, dict):
+                continue
+            target_id = str(file_target.get("id") or "").strip()
+            target_path = str(file_target.get("path") or "").strip()
+            if not target_id or not target_path:
+                continue
+            scenarios.append(
+                _RuntimeBenchmarkScenario(
+                    scenario_id=f"{metadata['id']}:file-{target_id}",
+                    workflow_contract_id="file-repo-path",
+                    command_label=f"kcmt --file {target_path} --repo-path <repo>",
+                    expected_stdout_fragment="✓ ",
+                    file_target=target_path,
+                )
+            )
     return scenarios
 
 
@@ -1321,6 +1407,8 @@ def _runtime_benchmark_env(config_home: Path, runtime: str) -> dict[str, str]:
     env[RUNTIME_BENCHMARK_ENV] = "1"
     env["KCMT_NO_SPINNER"] = "1"
     env.setdefault("OPENAI_API_KEY", "kcmt-runtime-benchmark")
+    env.setdefault("KCMT_PROVIDER_RESPONSE", "chore(repo): benchmark fixture response")
+    env.setdefault("KCMT_DISABLE_KEYCHAIN", "1")
     env.setdefault("GIT_AUTHOR_NAME", "kcmt-benchmark")
     env.setdefault("GIT_AUTHOR_EMAIL", "kcmt-benchmark@example.com")
     env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
@@ -1373,7 +1461,7 @@ def _scenario_command(
         return [*base, "--oneshot", "--repo-path", str(repo_path)]
     if scenario.workflow_contract_id == "default-repo-path":
         return [*base, "--repo-path", str(repo_path)]
-    target = _runtime_benchmark_target_file(repo_path, metadata)
+    target = scenario.file_target or _runtime_benchmark_target_file(repo_path, metadata)
     return [*base, "--file", target, "--repo-path", str(repo_path)]
 
 
@@ -1606,6 +1694,222 @@ def _build_runtime_summary(
     )
 
 
+def _runtime_snapshot_id(timestamp: str, corpora: list[str]) -> str:
+    safe_timestamp = (
+        "".join(ch for ch in timestamp if ch.isalnum()) or "19700101T000000Z"
+    )
+    corpus = corpora[0] if corpora else "runtime-corpus"
+    safe_corpus = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in corpus
+    )
+    return f"runtime-{safe_corpus or 'runtime-corpus'}-{safe_timestamp}"
+
+
+def _build_runtime_snapshot(
+    *, timestamp: str, command_set: str, corpora: list[str], result_count: int
+) -> RuntimeBenchmarkSnapshot:
+    return RuntimeBenchmarkSnapshot(
+        snapshot_id=_runtime_snapshot_id(timestamp, corpora),
+        benchmark_kind="runtime",
+        schema_version=RUNTIME_BENCHMARK_SCHEMA_VERSION,
+        timestamp=timestamp,
+        command_set=command_set,
+        corpora=corpora,
+        result_count=result_count,
+        secret_free=True,
+        provider_benchmark_kind="provider",
+    )
+
+
+def _runtime_result_quality_score(result: RuntimeBenchmarkResult) -> float:
+    return 100.0 if result.status == "passed" else 0.0
+
+
+def _runtime_quality_score(
+    results: list[RuntimeBenchmarkResult], runtime: str
+) -> float | None:
+    relevant = [item for item in results if item.runtime == runtime]
+    if not relevant:
+        return None
+    passed = sum(1 for item in relevant if item.status == "passed")
+    return passed / len(relevant) * 100.0
+
+
+def _runtime_matrix_cell(
+    result: RuntimeBenchmarkResult | None,
+) -> RuntimeScenarioMatrixCell:
+    if result is None:
+        return RuntimeScenarioMatrixCell(
+            status="excluded",
+            iterations=0,
+            wall_time_ms=None,
+            median_time_ms=None,
+            throughput_commits_per_sec=None,
+            quality_score=None,
+            stage_timings=[],
+            failure_reason="runtime not requested",
+        )
+    throughput = (
+        1000.0 / result.median_time_ms
+        if result.median_time_ms is not None and result.median_time_ms > 0
+        else None
+    )
+    return RuntimeScenarioMatrixCell(
+        status=result.status,
+        iterations=result.iterations,
+        wall_time_ms=result.wall_time_ms,
+        median_time_ms=result.median_time_ms,
+        throughput_commits_per_sec=throughput,
+        quality_score=_runtime_result_quality_score(result),
+        stage_timings=result.stage_timings,
+        failure_reason=result.failure_reason,
+    )
+
+
+def _stage_duration(stages: list[RuntimeStageTiming], stage_name: str) -> float | None:
+    for stage in stages:
+        if stage.stage == stage_name:
+            return stage.duration_ms
+    return None
+
+
+def _runtime_stage_deltas(
+    python_stages: list[RuntimeStageTiming],
+    rust_stages: list[RuntimeStageTiming],
+) -> list[RuntimeStageDelta]:
+    stage_names: list[str] = []
+    for stage in [*python_stages, *rust_stages]:
+        if stage.stage not in stage_names:
+            stage_names.append(stage.stage)
+    deltas: list[RuntimeStageDelta] = []
+    for stage_name in stage_names:
+        python_ms = _stage_duration(python_stages, stage_name)
+        rust_ms = _stage_duration(rust_stages, stage_name)
+        deltas.append(
+            RuntimeStageDelta(
+                stage=stage_name,
+                python_ms=python_ms,
+                rust_ms=rust_ms,
+                delta_ms=(
+                    rust_ms - python_ms
+                    if python_ms is not None and rust_ms is not None
+                    else None
+                ),
+            )
+        )
+    return deltas
+
+
+def _runtime_scenario_comparison(
+    python: RuntimeBenchmarkResult | None,
+    rust: RuntimeBenchmarkResult | None,
+) -> RuntimeScenarioComparison:
+    comparable = (
+        python is not None
+        and rust is not None
+        and python.status == "passed"
+        and rust.status == "passed"
+    )
+    median_delta = None
+    speedup_ratio = None
+    fastest_runtime = None
+    if comparable and python is not None and rust is not None:
+        python_median = python.median_time_ms
+        rust_median = rust.median_time_ms
+    else:
+        python_median = None
+        rust_median = None
+    if python_median is not None and rust_median is not None:
+        median_delta = rust_median - python_median
+        speedup_ratio = python_median / rust_median if rust_median > 0 else None
+        if rust_median < python_median:
+            fastest_runtime = "rust"
+        elif python_median < rust_median:
+            fastest_runtime = "python"
+    return RuntimeScenarioComparison(
+        comparable=comparable,
+        fastest_runtime=fastest_runtime,
+        median_delta_ms=median_delta,
+        speedup_ratio=speedup_ratio,
+        stage_deltas=_runtime_stage_deltas(
+            python.stage_timings if python is not None else [],
+            rust.stage_timings if rust is not None else [],
+        ),
+    )
+
+
+def _build_runtime_scenario_matrix(
+    results: list[RuntimeBenchmarkResult],
+) -> list[RuntimeScenarioMatrixRow]:
+    scenario_ids: list[str] = []
+    for result in results:
+        if result.scenario_id not in scenario_ids:
+            scenario_ids.append(result.scenario_id)
+
+    rows: list[RuntimeScenarioMatrixRow] = []
+    for scenario_id in scenario_ids:
+        python = next(
+            (
+                item
+                for item in results
+                if item.scenario_id == scenario_id and item.runtime == "python"
+            ),
+            None,
+        )
+        rust = next(
+            (
+                item
+                for item in results
+                if item.scenario_id == scenario_id and item.runtime == "rust"
+            ),
+            None,
+        )
+        exemplar = python or rust
+        if exemplar is None:
+            continue
+        rows.append(
+            RuntimeScenarioMatrixRow(
+                scenario_id=scenario_id,
+                workflow_contract_id=exemplar.workflow_contract_id,
+                corpus_id=exemplar.corpus_id,
+                command_label=exemplar.command_label,
+                python=_runtime_matrix_cell(python),
+                rust=_runtime_matrix_cell(rust),
+                comparison=_runtime_scenario_comparison(python, rust),
+            )
+        )
+    return rows
+
+
+def _build_runtime_scorecard(
+    results: list[RuntimeBenchmarkResult],
+) -> RuntimeBenchmarkScorecard:
+    return RuntimeBenchmarkScorecard(
+        measurement_basis=(
+            "runtime workflow subprocess wall time with local fixture provider "
+            "responses; pre-LLM Rust heuristic stages are not provider throughput"
+        ),
+        quality_score_definition=(
+            "percentage of requested runtime scenarios that passed without failed "
+            "or excluded rows"
+        ),
+        throughput_definition=(
+            "commits per second derived from median scenario wall time; provider "
+            "benchmark throughput remains separate"
+        ),
+        python_quality_score=_runtime_quality_score(results, "python"),
+        rust_quality_score=_runtime_quality_score(results, "rust"),
+        provider_throughput_included=False,
+    )
+
+
+def _runtime_matrix_cell_label(cell: RuntimeScenarioMatrixCell) -> str:
+    median_text = (
+        f"{cell.median_time_ms:.2f} ms" if cell.median_time_ms is not None else "-"
+    )
+    return f"{cell.status} ({median_text})"
+
+
 def _build_runtime_optimization_iterations(
     results: list[RuntimeBenchmarkResult],
     summary: dict[str, RuntimeBenchmarkSummary],
@@ -1694,13 +1998,25 @@ def run_runtime_benchmark(
         "python": _build_runtime_summary(results, "python"),
         "rust": _build_runtime_summary(results, "rust"),
     }
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    command_set = "local-workflows-v1"
+    corpora = [str(metadata["id"])]
+    scenario_matrix = _build_runtime_scenario_matrix(results)
     return RuntimeBenchmarkRun(
         schema_version=RUNTIME_BENCHMARK_SCHEMA_VERSION,
-        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        command_set="local-workflows-v1",
-        corpora=[str(metadata["id"])],
+        timestamp=timestamp,
+        command_set=command_set,
+        corpora=corpora,
+        snapshot=_build_runtime_snapshot(
+            timestamp=timestamp,
+            command_set=command_set,
+            corpora=corpora,
+            result_count=len(results),
+        ),
         results=results,
+        scenario_matrix=scenario_matrix,
         summary=summary,
+        scorecard=_build_runtime_scorecard(results),
         optimization_iterations=_build_runtime_optimization_iterations(
             results, summary
         ),
@@ -1714,6 +2030,8 @@ def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
         f"- Timestamp: {report.timestamp}",
         f"- Command set: {report.command_set}",
         f"- Corpora: {', '.join(report.corpora)}",
+        f"- Snapshot: {report.snapshot.snapshot_id}",
+        f"- Measurement basis: {report.scorecard.measurement_basis}",
         "",
         "| Runtime | Scenarios | Passed | Failed | Excluded | Median wall time (ms) |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -1766,6 +2084,35 @@ def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
                 quality=quality_text,
                 failures=failures_text,
                 bottleneck=_escape_md(iteration.next_bottleneck),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "| Scenario | Python | Rust | Median delta (ms) | Fastest | Stage deltas |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in report.scenario_matrix:
+        delta_text = (
+            f"{row.comparison.median_delta_ms:.2f}"
+            if row.comparison.median_delta_ms is not None
+            else "-"
+        )
+        stage_delta_text = ", ".join(
+            f"{stage.stage}:{stage.delta_ms:.2f}"
+            for stage in row.comparison.stage_deltas
+            if stage.delta_ms is not None
+        )
+        lines.append(
+            "| {scenario} | {python} | {rust} | {delta} | {fastest} | {stages} |".format(
+                scenario=_escape_md(row.scenario_id),
+                python=_runtime_matrix_cell_label(row.python),
+                rust=_runtime_matrix_cell_label(row.rust),
+                delta=delta_text,
+                fastest=row.comparison.fastest_runtime or "-",
+                stages=_escape_md(stage_delta_text) if stage_delta_text else "-",
             )
         )
 
