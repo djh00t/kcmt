@@ -369,28 +369,7 @@ fn run_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigureTuiOutcome, ConfigureTuiState};
-
-    #[test]
-    fn configure_tui_state_names_save_and_cancel_outcomes() {
-        let state = ConfigureTuiState {
-            provider: "anthropic".to_string(),
-            model: "claude-test".to_string(),
-            rule: "provider presets enabled".to_string(),
-            credential_status: "keychain first, environment fallback".to_string(),
-        };
-
-        let outcome = ConfigureTuiOutcome::Save;
-
-        assert_eq!(state.provider, "anthropic");
-        assert!(matches!(outcome, ConfigureTuiOutcome::Save));
-        assert_ne!(outcome, ConfigureTuiOutcome::Cancel);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiState};
+    use super::{ConfigureTuiOutcome, ConfigureTuiState, WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiState};
 
     fn context(total_files: usize) -> WorkflowTuiContext {
         WorkflowTuiContext {
@@ -480,5 +459,21 @@ mod tests {
         let state = WorkflowTuiState::new(context);
 
         assert_eq!(state.screen, "workflow");
+    }
+
+    #[test]
+    fn configure_tui_state_names_save_and_cancel_outcomes() {
+        let state = ConfigureTuiState {
+            provider: "anthropic".to_string(),
+            model: "claude-test".to_string(),
+            rule: "provider presets enabled".to_string(),
+            credential_status: "keychain first, environment fallback".to_string(),
+        };
+
+        let outcome = ConfigureTuiOutcome::Save;
+
+        assert_eq!(state.provider, "anthropic");
+        assert!(matches!(outcome, ConfigureTuiOutcome::Save));
+        assert_ne!(outcome, ConfigureTuiOutcome::Cancel);
     }
 }
