@@ -796,7 +796,9 @@ fn valid_hash(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{commit_file_with_gix, recent_commit_hash, CommitStaging, GixCommitSession};
+    use super::{
+        commit_file, commit_file_with_gix, recent_commit_hash, CommitStaging, GixCommitSession,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1174,5 +1176,56 @@ mod tests {
             git_output(&repo, &["log", "-1", "--pretty=%s"]),
             "chore(repo): add first file"
         );
+    }
+
+    #[test]
+    fn commit_file_returns_default_outcome_on_dry_run() {
+        let repo = unique_temp_dir("cli-dry-run");
+
+        let outcome = commit_file(&repo, "tracked.py", "chore(repo): skip dry run", true)
+            .expect("dry run should succeed");
+
+        assert_eq!(outcome.stage_path_ms, 0.0);
+        assert!(!outcome.stage_path_invoked);
+        assert_eq!(outcome.create_commit_ms, 0.0);
+        assert!(outcome.commit_hash.is_none());
+    }
+
+    #[test]
+    fn reads_recent_commit_hash_from_packed_refs() {
+        let repo = unique_temp_dir("recent-packed-refs");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        let expected = git_output(&repo, &["rev-parse", "HEAD"]);
+        let branch = git_output(&repo, &["symbolic-ref", "--quiet", "HEAD"]);
+        git(&repo, &["pack-refs", "--all"]);
+        let loose_ref = repo.join(".git").join(&branch);
+        if loose_ref.exists() {
+            fs::remove_file(&loose_ref).expect("loose ref removed");
+        }
+        let packed_refs = fs::read_to_string(repo.join(".git").join("packed-refs"))
+            .expect("packed refs should exist");
+        assert!(packed_refs.lines().any(|line| line.ends_with(&branch)));
+
+        let actual = recent_commit_hash(&repo).expect("packed refs should be readable");
+
+        assert_eq!(actual.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn reads_recent_commit_hash_from_detached_head() {
+        let repo = unique_temp_dir("recent-detached-head");
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked file");
+        git(&repo, &["add", "tracked.py"]);
+        git(&repo, &["commit", "-m", "chore(repo): seed"]);
+        let expected = git_output(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "--detach", "HEAD"]);
+
+        let actual = recent_commit_hash(&repo).expect("detached head hash should be read");
+
+        assert_eq!(actual.as_deref(), Some(expected.as_str()));
     }
 }

@@ -48,34 +48,50 @@ fn parse_porcelain_path(raw_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::collect_changes;
-    use crate::error::Result;
+    use crate::error::{KcmtError, Result};
     use crate::git::repo::GitRepository;
 
-    struct StaticRepo {
-        status: &'static str,
+    struct StubRepo {
+        status: Result<String>,
     }
 
-    impl GitRepository for StaticRepo {
+    impl GitRepository for StubRepo {
         fn staged_files(&self) -> Result<Vec<String>> {
             Ok(Vec::new())
         }
 
         fn status_porcelain(&self) -> Result<String> {
-            Ok(self.status.to_string())
+            match &self.status {
+                Ok(value) => Ok(value.clone()),
+                Err(KcmtError::Io(err)) => Err(KcmtError::Io(std::io::Error::new(
+                    err.kind(),
+                    err.to_string(),
+                ))),
+                Err(KcmtError::CommandFailure {
+                    command,
+                    status,
+                    stderr,
+                }) => Err(KcmtError::CommandFailure {
+                    command: command.clone(),
+                    status: *status,
+                    stderr: stderr.clone(),
+                }),
+                Err(KcmtError::Message(message)) => Err(KcmtError::Message(message.clone())),
+            }
         }
 
         fn status_porcelain_for_path(&self, _file_path: &str) -> Result<String> {
-            Ok(self.status.to_string())
+            Ok(String::new())
         }
     }
 
     #[test]
     fn collect_changes_skips_ignored_rows_and_uses_worktree_status() {
-        let repo = StaticRepo {
-            status: " M tracked.py\n!! ignored.log\n?? new.py\n",
+        let repo = StubRepo {
+            status: Ok(" M tracked.py\n!! ignored.log\n?? new.py\n".to_string()),
         };
 
-        let changes = collect_changes(&repo).expect("changes");
+        let changes = collect_changes(&repo).expect("changes should collect");
 
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].file_path, "tracked.py");
@@ -87,11 +103,11 @@ mod tests {
 
     #[test]
     fn collect_changes_uses_rename_and_copy_destination_paths() {
-        let repo = StaticRepo {
-            status: "R  old.py -> new.py\n C template.py -> copied.py\n",
+        let repo = StubRepo {
+            status: Ok("R  old.py -> new.py\n C template.py -> copied.py\n".to_string()),
         };
 
-        let changes = collect_changes(&repo).expect("changes");
+        let changes = collect_changes(&repo).expect("changes should collect");
 
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].file_path, "new.py");
@@ -100,5 +116,30 @@ mod tests {
         assert_eq!(changes[1].file_path, "copied.py");
         assert_eq!(changes[1].change_type, "C");
         assert!(!changes[1].staged);
+    }
+
+    #[test]
+    fn collect_changes_skips_short_and_blank_status_lines() {
+        let repo = StubRepo {
+            status: Ok("M\n?? \n".to_string()),
+        };
+
+        let changes = collect_changes(&repo).expect("changes should collect");
+
+        assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn collect_changes_propagates_status_errors() {
+        let repo = StubRepo {
+            status: Err(KcmtError::Message("status failed".to_string())),
+        };
+
+        let err = collect_changes(&repo).expect_err("status error should propagate");
+
+        match err {
+            KcmtError::Message(message) => assert_eq!(message, "status failed"),
+            other => panic!("expected message error, got {other:?}"),
+        }
     }
 }
