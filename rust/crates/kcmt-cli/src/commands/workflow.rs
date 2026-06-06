@@ -1389,11 +1389,14 @@ fn credential_for_candidate(candidate: &ProviderCandidate) -> Option<(String, Cr
 
 fn available_providers(config: &kcmt_core::model::WorkflowConfig) -> Vec<String> {
     let candidates = provider_candidates(config);
-    if fixture_provider_response().is_some() || runtime_benchmark_enabled() {
+    if fixture_provider_response().is_some() {
         return candidates
             .into_iter()
             .map(|candidate| candidate.provider)
             .collect();
+    }
+    if runtime_benchmark_enabled() {
+        return vec![config.provider.clone()];
     }
     candidates
         .into_iter()
@@ -1407,6 +1410,7 @@ fn selected_workflow_config(
     selection: &ModelSelection,
 ) -> kcmt_core::model::WorkflowConfig {
     let mut selected = config.clone();
+    let provider_changed = selected.provider != selection.provider;
     selected.provider = selection.provider.clone();
     selected.model = selection.model.clone();
     if let Some(candidate) = provider_candidates(config)
@@ -1416,7 +1420,21 @@ fn selected_workflow_config(
         selected.llm_endpoint = candidate.endpoint;
         selected.api_key_env = candidate.api_key_env;
     }
+    if !matches!(selected.provider.as_str(), "openai" | "xai") {
+        selected.use_batch = false;
+        selected.batch_model = None;
+    } else if provider_changed {
+        selected.batch_model = default_provider_batch_model(&selected.provider).map(str::to_string);
+    }
     selected
+}
+
+fn default_provider_batch_model(provider: &str) -> Option<&'static str> {
+    match provider {
+        "openai" => Some("gpt-5-mini-2025-08-07"),
+        "xai" => Some("grok-4.3"),
+        _ => None,
+    }
 }
 
 fn invoke_provider_with_fallback(
@@ -1532,7 +1550,7 @@ fn invoke_provider_candidate_with_style(
                         ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
-                    OpenAiClient::invoke_chat(
+                    OpenAiClient::invoke_model(
                         transport,
                         &candidate.endpoint,
                         api_key,
@@ -2185,11 +2203,14 @@ fn write_run_snapshot(repo_path: &Path, snapshot: &serde_json::Value) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        deletion_commit_message, diff_for_entry, git_common_config_path, git_config_has_include,
-        git_config_value, heuristic_commit_message, local_origin_remote_probe,
-        parse_status_entries, select_prepare_workers, OriginRemoteProbe, StatusEntry,
+        default_provider_batch_model, deletion_commit_message, diff_for_entry,
+        git_common_config_path, git_config_has_include, git_config_value, heuristic_commit_message,
+        local_origin_remote_probe, parse_status_entries, select_prepare_workers,
+        selected_workflow_config, OriginRemoteProbe, StatusEntry,
     };
     use kcmt_core::git::commit_file::CommitStaging;
+    use kcmt_core::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
+    use kcmt_core::selector::ModelSelection;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2427,6 +2448,89 @@ mod tests {
             deletion_commit_message("delete_me.txt", 72),
             "chore(delete_me-txt): file deleted"
         );
+    }
+
+    #[test]
+    fn selected_workflow_config_uses_provider_specific_batch_model_after_selection() {
+        let mut providers = std::collections::HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            ProviderConfigEntry {
+                endpoint: Some("https://api.openai.com/v1".to_string()),
+                api_key_env: Some("OPENAI_TEST_KEY".to_string()),
+                preferred_model: Some("gpt-5-mini-2025-08-07".to_string()),
+                ..ProviderConfigEntry::default()
+            },
+        );
+        providers.insert(
+            "xai".to_string(),
+            ProviderConfigEntry {
+                endpoint: Some("https://api.x.ai/v1".to_string()),
+                api_key_env: Some("XAI_TEST_KEY".to_string()),
+                preferred_model: Some("grok-code-fast".to_string()),
+                ..ProviderConfigEntry::default()
+            },
+        );
+        let config = WorkflowConfig {
+            provider: "openai".to_string(),
+            model: "gpt-5-mini-2025-08-07".to_string(),
+            llm_endpoint: "https://api.openai.com/v1".to_string(),
+            api_key_env: "OPENAI_TEST_KEY".to_string(),
+            use_batch: true,
+            batch_model: Some("gpt-5-mini-2025-08-07".to_string()),
+            providers,
+            model_priority: vec![
+                ModelPreference {
+                    provider: "openai".to_string(),
+                    model: "gpt-5-mini-2025-08-07".to_string(),
+                },
+                ModelPreference {
+                    provider: "xai".to_string(),
+                    model: "grok-code-fast".to_string(),
+                },
+            ],
+            ..WorkflowConfig::default()
+        };
+        let selection = ModelSelection {
+            provider: "xai".to_string(),
+            model: "grok-code-fast".to_string(),
+            rule_applied: None,
+            fallback_reason: None,
+        };
+
+        let selected = selected_workflow_config(&config, &selection);
+
+        assert_eq!(selected.provider, "xai");
+        assert_eq!(selected.model, "grok-code-fast");
+        assert_eq!(selected.llm_endpoint, "https://api.x.ai/v1");
+        assert_eq!(selected.api_key_env, "XAI_TEST_KEY");
+        assert_eq!(selected.batch_model.as_deref(), Some("grok-4.3"));
+        assert_eq!(default_provider_batch_model("xai"), Some("grok-4.3"));
+    }
+
+    #[test]
+    fn selected_workflow_config_disables_batch_for_non_batch_provider_selection() {
+        let config = WorkflowConfig {
+            provider: "openai".to_string(),
+            model: "gpt-5-mini-2025-08-07".to_string(),
+            llm_endpoint: "https://api.openai.com/v1".to_string(),
+            api_key_env: "OPENAI_TEST_KEY".to_string(),
+            use_batch: true,
+            batch_model: Some("gpt-5-mini-2025-08-07".to_string()),
+            ..WorkflowConfig::default()
+        };
+        let selection = ModelSelection {
+            provider: "anthropic".to_string(),
+            model: "claude-3-5-haiku-latest".to_string(),
+            rule_applied: None,
+            fallback_reason: None,
+        };
+
+        let selected = selected_workflow_config(&config, &selection);
+
+        assert_eq!(selected.provider, "anthropic");
+        assert!(!selected.use_batch);
+        assert!(selected.batch_model.is_none());
     }
 
     #[test]
