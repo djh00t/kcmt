@@ -66,14 +66,14 @@ def test_covered_rust_runtime_invocations(monkeypatch):
     assert main_mod._is_rust_covered_invocation(["--file", "tracked.py"]) is True
     assert main_mod._is_rust_covered_invocation(["status", "--raw"]) is True
     assert main_mod._is_rust_covered_invocation(["benchmark", "runtime"]) is True
-    assert main_mod._is_rust_covered_invocation(["--configure"]) is False
+    assert main_mod._is_rust_covered_invocation(["--configure"]) is True
     assert (
         main_mod._is_rust_covered_invocation(["--configure", "--provider", "anthropic"])
         is True
     )
     assert main_mod._is_rust_covered_invocation(["--list-models"]) is True
     assert main_mod._is_rust_covered_invocation(["--verify-keys"]) is True
-    assert main_mod._is_rust_covered_invocation(["--configure-all"]) is False
+    assert main_mod._is_rust_covered_invocation(["--configure-all"]) is True
     assert (
         main_mod._is_rust_covered_invocation(
             ["--configure-all", "--api-key-env", "OPENAI_TEST_KEY"]
@@ -187,6 +187,70 @@ def test_run_rust_runtime_preserves_status_raw_args(monkeypatch):
 
     assert main_mod._run_rust_runtime() == 0
     assert called == [["/tmp/kcmt-rust", "status", "--repo-path", "/tmp/repo", "--raw"]]
+
+
+def test_run_rust_runtime_preserves_configure_all_args(monkeypatch):
+    called: list[list[str]] = []
+
+    def _fake_run(args: list[str], check: bool):
+        called.append(args)
+        assert check is False
+        return type("CompletedProcessStub", (), {"returncode": 0})()
+
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
+    monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+    monkeypatch.setattr(
+        main_mod.sys,
+        "argv",
+        [
+            "kcmt",
+            "--configure-all",
+            "--provider",
+            "anthropic",
+            "--api-key-env",
+            "ANTHROPIC_TEST_KEY",
+            "--repo-path",
+            "/tmp/repo",
+        ],
+    )
+    monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+    assert main_mod._run_rust_runtime() == 0
+    assert called == [
+        [
+            "/tmp/kcmt-rust",
+            "--configure-all",
+            "--provider",
+            "anthropic",
+            "--api-key-env",
+            "ANTHROPIC_TEST_KEY",
+            "--repo-path",
+            "/tmp/repo",
+        ]
+    ]
+
+
+def test_run_rust_runtime_preserves_bare_configure_args(monkeypatch):
+    called: list[list[str]] = []
+
+    def _fake_run(args: list[str], check: bool):
+        called.append(args)
+        assert check is False
+        return type("CompletedProcessStub", (), {"returncode": 0})()
+
+    monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
+    monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
+    monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
+    monkeypatch.setattr(
+        main_mod.sys,
+        "argv",
+        ["kcmt", "--configure", "--repo-path", "/tmp/repo"],
+    )
+    monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
+
+    assert main_mod._run_rust_runtime() == 0
+    assert called == [["/tmp/kcmt-rust", "--configure", "--repo-path", "/tmp/repo"]]
 
 
 def test_emit_runtime_trace_enabled_writes_json(monkeypatch, capsys):

@@ -67,7 +67,9 @@ Dependencies
 
 Run `kcmt --configure` inside a repository to write or refresh global config.
 Use `kcmt --configure --tui` to open the terminal menu shell when stdin/stdout
-are attached to a terminal.
+are attached to a terminal. In the Rust path, the TUI shows the resolved
+provider/model/credential summary and saves on `s` or Enter; `q`/Esc exits
+without changing files. Non-TTY configure runs stay non-blocking and scriptable.
 
 - Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
 - Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
@@ -129,7 +131,7 @@ First-use model selection
 
 Configure API keys for multiple providers
 
-- `kcmt --configure-all` lets you pick which providers to configure and select which environment variable holds each API key. This updates both the legacy `provider_env_overrides` and the new `providers[prov].api_key_env` entries.
+- `kcmt --configure-all` lets you pick which providers to configure and select which environment variable holds each API key. Non-interactive Rust runs with `--provider`, `--model`, `--endpoint`, or `--api-key-env` update the target `providers[prov]` entry without clobbering an existing primary provider/model priority.
 - `kcmt --verify-keys` prints a concise table of providers, the env var in use, whether it’s set, and any detected alternatives in your environment.
 
 OpenAI batch mode
