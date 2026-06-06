@@ -116,7 +116,9 @@ fn configure_all_accepts_noninteractive_overrides() {
 
 #[test]
 fn list_models_prints_supported_provider_defaults() {
+    let config_home = unique_temp_dir("home");
     let output = kcmt_command()
+        .env("KCMT_CONFIG_HOME", &config_home)
         .args(["--list-models"])
         .output()
         .expect("kcmt list-models should run");
@@ -160,22 +162,54 @@ fn configure_writes_default_preferences_file() {
 
 #[test]
 fn list_models_debug_prints_structured_provider_json() {
+    let config_home = unique_temp_dir("home");
     let output = kcmt_command()
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .env("OPENAI_API_KEY", "sk-test-secret")
         .args(["--debug", "--list-models"])
         .output()
         .expect("kcmt list-models debug should run");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("sk-test-secret"));
     let payload: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("debug model list is json");
     let providers = payload.as_array().expect("provider array");
     assert_eq!(providers.len(), 4);
-    assert!(providers.iter().any(|provider| {
-        provider["provider"] == "openai" && provider["models"][0]["id"] == "gpt-5-mini-2025-08-07"
-    }));
-    assert!(providers.iter().any(|provider| {
-        provider["provider"] == "github" && provider["models"][0]["api_key_env"] == "GITHUB_TOKEN"
-    }));
+    let openai = providers
+        .iter()
+        .find(|provider| provider["provider"] == "openai")
+        .expect("openai provider");
+    assert!(matches!(
+        openai["source"].as_str(),
+        Some("live" | "static_fallback" | "cache")
+    ));
+    assert_eq!(openai["display_name"], "OpenAI");
+    assert_eq!(openai["endpoint"], "https://api.openai.com/v1");
+    assert_eq!(openai["api_key_env"], "OPENAI_API_KEY");
+    assert!(openai["error"].is_null() || openai["error"].is_string());
+    let openai_model = &openai["models"][0];
+    assert!(openai_model["id"].as_str().is_some());
+    assert_eq!(openai_model["provider"], "openai");
+    assert_eq!(openai_model["endpoint"], "https://api.openai.com/v1");
+    assert_eq!(openai_model["api_key_env"], "OPENAI_API_KEY");
+    assert!(openai_model["created"].is_null() || openai_model["created"].is_string());
+    assert!(openai_model["family"].is_null() || openai_model["family"].is_string());
+    assert!(openai_model["code_capable"].is_boolean());
+
+    let anthropic = providers
+        .iter()
+        .find(|provider| provider["provider"] == "anthropic")
+        .expect("anthropic provider");
+    assert_eq!(anthropic["source"], "static_fallback");
+    assert_eq!(anthropic["models"][0]["family"], "haiku");
+
+    let github = providers
+        .iter()
+        .find(|provider| provider["provider"] == "github")
+        .expect("github provider");
+    assert_eq!(github["models"][0]["api_key_env"], "GITHUB_TOKEN");
 }
 
 #[test]

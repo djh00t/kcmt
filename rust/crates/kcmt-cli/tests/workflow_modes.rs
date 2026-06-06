@@ -155,6 +155,9 @@ fn spawn_provider_responses(
                     Err(err) => panic!("mock provider connection failed: {err}"),
                 }
             };
+            stream
+                .set_nonblocking(false)
+                .expect("mock provider stream should become blocking");
             let mut buffer = [0_u8; 32768];
             let bytes = stream.read(&mut buffer).expect("mock provider read");
             sender

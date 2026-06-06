@@ -1922,8 +1922,16 @@ def debug_model_list_is_structured_json(workflow_context: dict[str, Any]) -> Non
     payload = json.loads(workflow_context["output"])
     providers = {entry["provider"]: entry for entry in payload}
     assert providers["openai"]["models"][0]["id"] == "gpt-5-mini-2025-08-07"
+    assert providers["openai"]["source"] == "static_fallback"
+    assert providers["openai"]["error"]
     assert providers["github"]["models"][0]["api_key_env"] == "GITHUB_TOKEN"
     assert providers["anthropic"]["display_name"] == "Anthropic"
+    anthropic_model = providers["anthropic"]["models"][0]
+    assert anthropic_model["provider"] == "anthropic"
+    assert anthropic_model["endpoint"] == "https://api.anthropic.com"
+    assert anthropic_model["family"] == "haiku"
+    assert anthropic_model["code_capable"] is True
+    assert "bdd-key" not in workflow_context["output"]
 
 
 @then("the key verification output shows present and missing providers")

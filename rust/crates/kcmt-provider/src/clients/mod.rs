@@ -1003,6 +1003,75 @@ mod tests {
     }
 
     #[test]
+    fn provider_models_requests_use_provider_specific_paths_and_headers() {
+        let openai = OpenAiClient::build_models_request("https://api.openai.com/v1/", "openai-key");
+        assert_eq!(openai.url, "https://api.openai.com/v1/models");
+        assert_eq!(openai.headers["Authorization"], "Bearer openai-key");
+
+        let anthropic =
+            AnthropicClient::build_models_request("https://api.anthropic.com/v1", "claude-key");
+        assert_eq!(anthropic.url, "https://api.anthropic.com/v1/models");
+        assert_eq!(anthropic.headers["x-api-key"], "claude-key");
+        assert_eq!(anthropic.headers["anthropic-version"], "2023-06-01");
+        assert!(!anthropic.headers.contains_key("Authorization"));
+
+        let xai = XaiClient::build_models_request("https://api.x.ai/v1", "xai-key");
+        assert_eq!(xai.url, "https://api.x.ai/v1/models");
+        assert_eq!(xai.headers["Authorization"], "Bearer xai-key");
+
+        let github = GitHubModelsClient::build_models_request(
+            "https://models.github.ai/inference",
+            "gh-key",
+        );
+        assert_eq!(github.url, "https://models.github.ai/inference/models");
+        assert_eq!(github.headers["Authorization"], "Bearer gh-key");
+    }
+
+    #[test]
+    fn provider_models_parsers_normalize_ids_and_created_metadata() {
+        let openai = OpenAiClient::parse_models_response(&json!({
+            "data": [
+                {"id": "gpt-5-mini", "created": 1780716000},
+                {"object": "model"},
+                {"id": "text-embedding-3-small"}
+            ]
+        }))
+        .expect("openai models should parse");
+        assert_eq!(openai.len(), 2);
+        assert_eq!(openai[0].id, "gpt-5-mini");
+        assert_eq!(openai[0].created_at.as_deref(), Some("1780716000"));
+
+        let anthropic = AnthropicClient::parse_models_response(&json!({
+            "models": [{"id": "claude-3-5-haiku-latest", "created_at": "2026-01-01"}]
+        }))
+        .expect("anthropic models should parse");
+        assert_eq!(anthropic[0].id, "claude-3-5-haiku-latest");
+        assert_eq!(anthropic[0].created_at.as_deref(), Some("2026-01-01"));
+
+        let xai = XaiClient::parse_models_response(&json!({
+            "data": [{"id": "grok-code-fast", "created": "2026-01-02"}]
+        }))
+        .expect("xai models should parse");
+        assert_eq!(xai[0].id, "grok-code-fast");
+        assert_eq!(xai[0].created_at.as_deref(), Some("2026-01-02"));
+
+        let github = GitHubModelsClient::parse_models_response(&json!({
+            "data": [{"id": "openai/gpt-4.1-mini"}]
+        }))
+        .expect("github models should parse");
+        assert_eq!(github[0].id, "openai/gpt-4.1-mini");
+        assert_eq!(github[0].created_at, None);
+    }
+
+    #[test]
+    fn provider_models_parser_reports_missing_model_ids() {
+        let err = OpenAiClient::parse_models_response(&json!({"data": [{"object": "model"}]}))
+            .expect_err("missing ids should fail");
+
+        assert!(err.contains("did not include model ids"));
+    }
+
+    #[test]
     fn xai_and_github_use_openai_compatible_chat_requests() {
         let xai = XaiClient::build_chat_request(
             "https://api.x.ai/v1/",
