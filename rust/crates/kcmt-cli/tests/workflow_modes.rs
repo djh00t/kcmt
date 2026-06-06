@@ -1230,6 +1230,102 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
 }
 
 #[test]
+fn file_mode_invokes_openai_responses_api_for_responses_only_models() {
+    let repo = init_repo();
+    let (endpoint, request_rx) =
+        spawn_provider_response(r#"{"output_text":"fix(openai): use responses api."}"#);
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-5.1-codex",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be sent");
+    assert!(request.starts_with("POST /responses HTTP/1.1"));
+    assert!(request.contains(r#""model":"gpt-5.1-codex""#));
+    assert!(request.contains(r#""input":["#));
+    assert!(!request.contains("/chat/completions"));
+
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log, "fix(openai): use responses api");
+}
+
+#[test]
+fn file_mode_provider_prompt_and_subject_respect_max_commit_length() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"choices":[{"message":{"content":"fix(provider): trim this intentionally long provider subject."}}]}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").expect("tracked change");
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("OPENAI_TEST_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "openai",
+            "--endpoint",
+            &endpoint,
+            "--api-key-env",
+            "OPENAI_TEST_KEY",
+            "--model",
+            "gpt-mock",
+            "--max-commit-length",
+            "42",
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .expect("kcmt binary should run");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("provider request should be sent");
+    assert!(request.contains("Keep the subject <=42 characters"));
+    let log = git(&repo, &["log", "--pretty=%s", "-1"]);
+    assert_eq!(log.len(), 42);
+    assert_eq!(log, "fix(provider): trim this intentionally lon");
+}
+
+#[test]
 fn file_mode_provider_prompt_uses_staged_diff_for_staged_only_change() {
     let repo = init_repo();
     let (endpoint, request_rx) = spawn_provider_response(
