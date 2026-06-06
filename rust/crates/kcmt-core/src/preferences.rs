@@ -174,9 +174,61 @@ pub enum CredentialSource {
     Environment,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainSaveMode {
+    PlatformDefault,
+    BiometricPreferred,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainProtection {
+    PlatformDefault,
+    BiometricPreferred,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretSaveResult {
+    pub protection: KeychainProtection,
+    pub fallback_reason: Option<String>,
+}
+
+impl SecretSaveResult {
+    fn platform_default() -> Self {
+        Self {
+            protection: KeychainProtection::PlatformDefault,
+            fallback_reason: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn biometric_preferred() -> Self {
+        Self {
+            protection: KeychainProtection::BiometricPreferred,
+            fallback_reason: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn biometric_fallback(reason: String) -> Self {
+        Self {
+            protection: KeychainProtection::PlatformDefault,
+            fallback_reason: Some(reason),
+        }
+    }
+}
+
 pub trait SecretStore {
     fn get_secret(&self, account: &str) -> std::result::Result<Option<String>, String>;
     fn set_secret(&self, account: &str, secret: &str) -> std::result::Result<(), String>;
+    fn set_secret_with_mode(
+        &self,
+        account: &str,
+        secret: &str,
+        _mode: KeychainSaveMode,
+    ) -> std::result::Result<SecretSaveResult, String> {
+        self.set_secret(account, secret)
+            .map(|()| SecretSaveResult::platform_default())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -199,6 +251,23 @@ impl SecretStore for OsKeychainStore {
         let entry =
             keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|err| err.to_string())?;
         entry.set_password(secret).map_err(|err| err.to_string())
+    }
+
+    fn set_secret_with_mode(
+        &self,
+        account: &str,
+        secret: &str,
+        mode: KeychainSaveMode,
+    ) -> std::result::Result<SecretSaveResult, String> {
+        match mode {
+            KeychainSaveMode::PlatformDefault => {
+                self.set_secret(account, secret)?;
+                Ok(SecretSaveResult::platform_default())
+            }
+            KeychainSaveMode::BiometricPreferred => {
+                self.set_secret_biometric_preferred(account, secret)
+            }
+        }
     }
 }
 
@@ -290,8 +359,24 @@ pub fn resolve_credential(
     Ok(None)
 }
 
+pub fn save_keychain_secret(
+    store: &dyn SecretStore,
+    account: &str,
+    secret: &str,
+    mode: KeychainSaveMode,
+) -> std::result::Result<SecretSaveResult, String> {
+    if keychain_disabled() {
+        return Err("OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN".to_string());
+    }
+    store.set_secret_with_mode(account, secret, mode)
+}
+
 fn keychain_disabled() -> bool {
-    env::var("KCMT_DISABLE_KEYCHAIN")
+    env_truthy("KCMT_DISABLE_KEYCHAIN") || env_truthy("KCMT_RUNTIME_BENCHMARK")
+}
+
+fn env_truthy(key: &str) -> bool {
+    env::var(key)
         .ok()
         .map(|value| {
             let normalized = value.trim().to_ascii_lowercase();
@@ -304,10 +389,79 @@ pub fn default_keychain_account(provider: &str) -> String {
     format!("provider/{provider}/default")
 }
 
+#[cfg(target_os = "macos")]
+impl OsKeychainStore {
+    fn set_secret_biometric_preferred(
+        &self,
+        account: &str,
+        secret: &str,
+    ) -> std::result::Result<SecretSaveResult, String> {
+        match set_macos_biometric_secret(account, secret) {
+            Ok(()) => Ok(SecretSaveResult::biometric_preferred()),
+            Err(err) => {
+                self.set_secret(account, secret)?;
+                Ok(SecretSaveResult::biometric_fallback(err))
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl OsKeychainStore {
+    fn set_secret_biometric_preferred(
+        &self,
+        account: &str,
+        secret: &str,
+    ) -> std::result::Result<SecretSaveResult, String> {
+        self.set_secret(account, secret)?;
+        Ok(SecretSaveResult::platform_default())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_biometric_secret(account: &str, secret: &str) -> std::result::Result<(), String> {
+    use security_framework::access_control::{ProtectionMode, SecAccessControl};
+    use security_framework::passwords::{
+        delete_generic_password, set_generic_password_options, AccessControlOptions,
+        PasswordOptions,
+    };
+
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    fn biometric_access_control() -> security_framework::base::Result<SecAccessControl> {
+        SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+            (AccessControlOptions::BIOMETRY_ANY
+                | AccessControlOptions::OR
+                | AccessControlOptions::DEVICE_PASSCODE)
+                .bits(),
+        )
+    }
+
+    fn add_biometric_secret(
+        account: &str,
+        secret: &str,
+        access_control: SecAccessControl,
+    ) -> security_framework::base::Result<()> {
+        let mut options = PasswordOptions::new_generic_password(KEYCHAIN_SERVICE, account);
+        options.set_access_control(access_control);
+        set_generic_password_options(secret.as_bytes(), options)
+    }
+
+    let access_control = biometric_access_control().map_err(|err| err.to_string())?;
+    match delete_generic_password(KEYCHAIN_SERVICE, account) {
+        Ok(()) => {}
+        Err(err) if err.code() == ERR_SEC_ITEM_NOT_FOUND => {}
+        Err(err) => return Err(err.to_string()),
+    }
+    add_biometric_secret(account, secret, access_control).map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_credential, CredentialRequest, CredentialSource, Preferences, SecretStore,
+        resolve_credential, save_keychain_secret, CredentialRequest, CredentialSource,
+        KeychainProtection, KeychainSaveMode, Preferences, SecretSaveResult, SecretStore,
     };
     use std::collections::BTreeMap;
     use std::sync::{Mutex, OnceLock};
@@ -324,6 +478,40 @@ mod tests {
 
         fn set_secret(&self, _account: &str, _secret: &str) -> std::result::Result<(), String> {
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CapturingStore {
+        modes: Mutex<Vec<KeychainSaveMode>>,
+    }
+
+    impl SecretStore for CapturingStore {
+        fn get_secret(&self, _account: &str) -> std::result::Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn set_secret(&self, _account: &str, _secret: &str) -> std::result::Result<(), String> {
+            Ok(())
+        }
+
+        fn set_secret_with_mode(
+            &self,
+            _account: &str,
+            _secret: &str,
+            mode: KeychainSaveMode,
+        ) -> std::result::Result<SecretSaveResult, String> {
+            self.modes
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(mode);
+            Ok(SecretSaveResult {
+                protection: match mode {
+                    KeychainSaveMode::PlatformDefault => KeychainProtection::PlatformDefault,
+                    KeychainSaveMode::BiometricPreferred => KeychainProtection::BiometricPreferred,
+                },
+                fallback_reason: None,
+            })
         }
     }
 
@@ -411,6 +599,117 @@ mod tests {
         assert_eq!(credential.source, CredentialSource::Environment);
         assert_eq!(credential.secret, "env-secret");
         std::env::remove_var("KCMT_TEST_API_KEY");
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+    }
+
+    #[test]
+    fn credential_resolution_skips_keychain_in_runtime_benchmark_mode() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+        std::env::set_var("KCMT_RUNTIME_BENCHMARK", "1");
+        std::env::set_var("KCMT_TEST_API_KEY", "env-secret");
+        let mut store = FakeStore::default();
+        store.secrets.insert(
+            "provider/openai/default".to_string(),
+            "keychain-secret".to_string(),
+        );
+        let request = CredentialRequest {
+            provider: "openai".to_string(),
+            explicit_secret: None,
+            keychain_account: None,
+            env_var: "KCMT_TEST_API_KEY".to_string(),
+        };
+
+        let credential = resolve_credential(&request, &store)
+            .expect("credential")
+            .expect("present");
+
+        assert_eq!(credential.source, CredentialSource::Environment);
+        assert_eq!(credential.secret, "env-secret");
+        std::env::remove_var("KCMT_TEST_API_KEY");
+        std::env::remove_var("KCMT_RUNTIME_BENCHMARK");
+    }
+
+    #[test]
+    fn credential_resolution_uses_configured_keychain_account() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+        std::env::remove_var("KCMT_TEST_API_KEY");
+        let mut store = FakeStore::default();
+        store
+            .secrets
+            .insert("custom/account".to_string(), "custom-secret".to_string());
+        let request = CredentialRequest {
+            provider: "openai".to_string(),
+            explicit_secret: None,
+            keychain_account: Some("custom/account".to_string()),
+            env_var: "KCMT_TEST_API_KEY".to_string(),
+        };
+
+        let credential = resolve_credential(&request, &store)
+            .expect("credential")
+            .expect("present");
+
+        assert_eq!(credential.source, CredentialSource::Keychain);
+        assert_eq!(credential.secret, "custom-secret");
+    }
+
+    #[test]
+    fn default_keychain_save_mode_uses_platform_protection() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+        let store = FakeStore::default();
+
+        let result = save_keychain_secret(
+            &store,
+            "provider/openai/default",
+            "secret-value",
+            KeychainSaveMode::PlatformDefault,
+        )
+        .expect("saved");
+
+        assert_eq!(result.protection, KeychainProtection::PlatformDefault);
+        assert!(result.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn keychain_save_can_request_biometric_preferred_protection() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
+        let store = CapturingStore::default();
+
+        let result = save_keychain_secret(
+            &store,
+            "provider/openai/default",
+            "secret-value",
+            KeychainSaveMode::BiometricPreferred,
+        )
+        .expect("saved");
+
+        assert_eq!(result.protection, KeychainProtection::BiometricPreferred);
+        assert_eq!(
+            store.modes.lock().unwrap_or_else(|err| err.into_inner())[0],
+            KeychainSaveMode::BiometricPreferred
+        );
+    }
+
+    #[test]
+    fn keychain_save_respects_disabled_keychain_flag() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        std::env::set_var("KCMT_DISABLE_KEYCHAIN", "1");
+        let store = CapturingStore::default();
+
+        let result = save_keychain_secret(
+            &store,
+            "provider/openai/default",
+            "secret-value",
+            KeychainSaveMode::BiometricPreferred,
+        );
+
+        assert_eq!(
+            result.expect_err("save should be disabled"),
+            "OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN"
+        );
         std::env::remove_var("KCMT_DISABLE_KEYCHAIN");
     }
 }

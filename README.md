@@ -86,6 +86,15 @@ kcmt maintains a per-provider settings map in `~/.config/kcmt/config.json`. Each
 - `keychain_account`: OS keychain account reference; credential resolution is explicit CLI input, then OS keychain, then environment variable
 - `preferred_model`: your saved default model for that provider
 
+Use `--api-key-stdin --save-api-key` to save a provider key without putting it
+in shell history. kcmt stores the secret in the OS keychain and writes only the
+provider-specific account reference, such as `provider/anthropic/default`, to
+config. On macOS, saved keys prefer biometric-or-passcode keychain access
+control where available and fall back to normal keychain protection when the
+platform cannot apply that policy. Use `--no-biometric-keychain` to request the
+platform default policy explicitly. Linux builds keep using environment
+fallbacks until an OS keychain backend is added.
+
 Example (`~/.config/kcmt/config.json` excerpt):
 
 ```json
@@ -225,7 +234,7 @@ Additional LLM behaviour environment variables:
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
 - `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
 - `KCMT_FAST_LOCAL_FOR_SMALL_DIFFS` – opt-in local conventional subject for tiny diffs (<=3 changed lines)
-- `KCMT_DISABLE_KEYCHAIN=1` – skip OS keychain lookup for hermetic CI/test runs
+- `KCMT_DISABLE_KEYCHAIN=1` – skip OS keychain lookup and saves for hermetic CI/test runs
 - `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
 
 ## List models and pricing
@@ -251,6 +260,7 @@ messages, or secret values.
 ```shell
 kcmt stats --json --repo-path .
 printf '%s' "$ANTHROPIC_API_KEY" | kcmt --configure --provider anthropic --api-key-stdin --save-api-key
+printf '%s' "$ANTHROPIC_API_KEY" | kcmt --configure --provider anthropic --api-key-stdin --save-api-key --no-biometric-keychain
 ```
 
 ## Benchmarking

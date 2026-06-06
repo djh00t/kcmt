@@ -33,14 +33,26 @@ pub struct CliArgs {
     #[arg(long = "github-token")]
     pub github_token: Option<String>,
 
-    #[arg(long = "api-key")]
+    #[arg(
+        long = "api-key",
+        help = "API key to use for this invocation; prefer --api-key-stdin"
+    )]
     pub api_key: Option<String>,
 
-    #[arg(long = "save-api-key")]
+    #[arg(long = "save-api-key", help = "Save API key input to the OS keychain")]
     pub save_api_key: bool,
 
-    #[arg(long = "api-key-stdin")]
+    #[arg(
+        long = "api-key-stdin",
+        help = "Read API key from stdin instead of the shell history"
+    )]
     pub api_key_stdin: bool,
+
+    #[arg(
+        long = "no-biometric-keychain",
+        help = "Save API keys with the platform-default keychain policy instead of biometric-preferred macOS access control"
+    )]
+    pub no_biometric_keychain: bool,
 
     #[arg(long, alias = "summary")]
     pub compact: bool,

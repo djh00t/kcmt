@@ -1269,6 +1269,36 @@ def rust_kcmt_configures_all_providers_with_anthropic_overrides(
     )
     workflow_context["output"] = output
 
+@when("the Rust kcmt command tries to save an Anthropic API key from stdin")
+def rust_kcmt_tries_to_save_anthropic_api_key_from_stdin(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    secret = "bdd-anthropic-secret"
+    result = subprocess.run(
+        [
+            str(_rust_bin("kcmt")),
+            "--configure",
+            "--provider",
+            "anthropic",
+            "--api-key-stdin",
+            "--save-api-key",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        input=secret,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    workflow_context["secret"] = secret
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+    workflow_context["returncode"] = result.returncode
+
 
 @when("the Rust kcmt command commits the file with Anthropic preferences")
 def rust_kcmt_commits_file_with_anthropic_preferences(
@@ -2219,6 +2249,28 @@ def rust_preferences_file_contains_default_selector_preferences(
     assert preferences["provider_rules"]["anthropic"]["preset"] == "none"
     assert preferences["provider_rules"]["xai"]["preset"] == "none"
     assert preferences["provider_rules"]["github"]["preset"] == "none"
+
+
+@then("the keychain save response does not print the API key")
+def keychain_save_response_does_not_print_api_key(
+    workflow_context: dict[str, Any],
+) -> None:
+    combined = workflow_context.get("output", "") + workflow_context.get("stderr", "")
+    assert workflow_context["secret"] not in combined
+    assert workflow_context["returncode"] == 1
+    assert "OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN" in combined
+
+
+@then("no saved configuration file contains the API key")
+def no_saved_configuration_file_contains_api_key(
+    workflow_context: dict[str, Any],
+) -> None:
+    config_home = workflow_context["config_home"]
+    if not config_home.exists():
+        return
+    for path in config_home.rglob("*"):
+        if path.is_file():
+            assert workflow_context["secret"] not in path.read_text(errors="ignore")
 
 
 @then("the Anthropic provider receives the latest Haiku model")

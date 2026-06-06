@@ -156,13 +156,22 @@ fn spawn_provider_responses(
                 }
             };
             stream
-                .set_nonblocking(false)
-                .expect("mock provider stream should become blocking");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .expect("mock provider stream should have read timeout");
+                .set_nonblocking(true)
+                .expect("mock provider stream should become nonblocking");
             let mut buffer = [0_u8; 32768];
-            let bytes = stream.read(&mut buffer).expect("mock provider read");
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let bytes = loop {
+                match stream.read(&mut buffer) {
+                    Ok(bytes) => break bytes,
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            panic!("mock provider read timed out");
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("mock provider read failed: {err}"),
+                }
+            };
             sender
                 .send(String::from_utf8_lossy(&buffer[..bytes]).to_string())
                 .expect("request should be recorded");
