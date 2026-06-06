@@ -194,7 +194,7 @@ impl WorkflowProgress {
         };
         let progress = Self {
             enabled: progress_enabled(options) && total > 0,
-            tui_echo: options.tui && !options.tui_model_export,
+            tui_echo: options.tui && !options.tui_model_export && progress_enabled(options),
             mode,
             total,
             queued: Arc::new(AtomicUsize::new(0)),
@@ -2395,10 +2395,12 @@ mod tests {
         git_common_config_path, git_config_has_include, git_config_value, heuristic_commit_message,
         local_origin_remote_probe, parse_status_entries, select_prepare_workers,
         selected_workflow_config, OriginRemoteProbe, StatusEntry,
+        WorkflowOutputOptions, WorkflowProgress,
     };
     use kcmt_core::git::commit_file::CommitStaging;
     use kcmt_core::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
     use kcmt_core::selector::ModelSelection;
+    use kcmt_tui::WorkflowTuiContext;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2420,6 +2422,17 @@ mod tests {
         let git_dir = repo.join(".git");
         fs::create_dir_all(&git_dir).expect("git dir should be created");
         fs::write(git_dir.join("config"), config).expect("git config should be written");
+    }
+
+    fn tui_context(total_files: usize) -> WorkflowTuiContext {
+        WorkflowTuiContext {
+            repo_path: "/repo".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            mode: "direct".to_string(),
+            total_files,
+            last_screen: None,
+        }
     }
 
     fn git(repo: &Path, args: &[&str]) {
@@ -2459,6 +2472,20 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn workflow_tui_echo_respects_no_progress() {
+        let options = WorkflowOutputOptions {
+            tui: true,
+            no_progress: true,
+            ..WorkflowOutputOptions::default()
+        };
+
+        let progress = WorkflowProgress::new("direct", 1, &options, tui_context(1));
+
+        assert!(!progress.enabled);
+        assert!(!progress.tui_echo);
     }
 
     #[test]
