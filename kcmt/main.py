@@ -66,7 +66,7 @@ def _is_rust_covered_invocation(args: list[str] | None = None) -> bool:
     if "--oneshot" in arg_list or "--file" in arg_list:
         return True
     is_configure = "--configure" in arg_list or "--configure-all" in arg_list
-    if is_configure and any(flag in arg_list for flag in _CONFIG_OVERRIDE_FLAGS):
+    if is_configure:
         return True
     if (
         "--list-models" in arg_list

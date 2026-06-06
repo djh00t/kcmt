@@ -39,7 +39,13 @@ pub struct ConfigureTuiState {
     pub credential_status: String,
 }
 
-pub fn run_configure_tui(state: ConfigureTuiState) -> anyhow::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigureTuiOutcome {
+    Save,
+    Cancel,
+}
+
+pub fn run_configure_tui(state: ConfigureTuiState) -> anyhow::Result<ConfigureTuiOutcome> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     if let Err(err) = execute!(stdout, EnterAlternateScreen) {
@@ -68,7 +74,7 @@ pub fn run_configure_tui(state: ConfigureTuiState) -> anyhow::Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &ConfigureTuiState,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ConfigureTuiOutcome> {
     let items = [
         "Providers and credentials",
         "Provider model rules",
@@ -81,30 +87,66 @@ fn run_loop(
         terminal.draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(5), Constraint::Min(8), Constraint::Length(3)])
+                .constraints([
+                    Constraint::Length(5),
+                    Constraint::Min(8),
+                    Constraint::Length(3),
+                ])
                 .split(frame.area());
             let summary = Paragraph::new(format!(
                 "Provider: {}\nModel: {}\nRule: {}\nCredentials: {}",
                 state.provider, state.model, state.rule, state.credential_status
             ))
-            .block(Block::default().title("kcmt configure").borders(Borders::ALL));
+            .block(
+                Block::default()
+                    .title("kcmt configure")
+                    .borders(Borders::ALL),
+            );
             frame.render_widget(summary, chunks[0]);
-            let list = List::new(items.iter().map(|item| ListItem::new(*item)).collect::<Vec<_>>())
-                .block(Block::default().title("Menu").borders(Borders::ALL))
-                .style(Style::default())
-                .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+            let list = List::new(
+                items
+                    .iter()
+                    .map(|item| ListItem::new(*item))
+                    .collect::<Vec<_>>(),
+            )
+            .block(Block::default().title("Menu").borders(Borders::ALL))
+            .style(Style::default())
+            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
             frame.render_widget(list, chunks[1]);
-            let footer = Paragraph::new("This v1 configure TUI is read-oriented. Press q or Esc to exit; use CLI flags to save until editable TUI forms land.")
+            let footer = Paragraph::new("Press s to save this configuration, or q/Esc to cancel.")
                 .block(Block::default().borders(Borders::ALL));
             frame.render_widget(footer, chunks[2]);
         })?;
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
+                if matches!(key.code, KeyCode::Char('s') | KeyCode::Enter) {
+                    return Ok(ConfigureTuiOutcome::Save);
+                }
                 if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                    break;
+                    return Ok(ConfigureTuiOutcome::Cancel);
                 }
             }
         }
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigureTuiOutcome, ConfigureTuiState};
+
+    #[test]
+    fn configure_tui_state_names_save_and_cancel_outcomes() {
+        let state = ConfigureTuiState {
+            provider: "anthropic".to_string(),
+            model: "claude-test".to_string(),
+            rule: "provider presets enabled".to_string(),
+            credential_status: "keychain first, environment fallback".to_string(),
+        };
+
+        let outcome = ConfigureTuiOutcome::Save;
+
+        assert_eq!(state.provider, "anthropic");
+        assert!(matches!(outcome, ConfigureTuiOutcome::Save));
+        assert_ne!(outcome, ConfigureTuiOutcome::Cancel);
+    }
 }

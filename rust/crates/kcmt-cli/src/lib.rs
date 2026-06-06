@@ -13,6 +13,7 @@ use kcmt_core::git::repo::find_git_repo_root;
 use kcmt_core::preferences::{default_keychain_account, OsKeychainStore, SecretStore};
 
 use args::{CliArgs, CliCommand, StatusArgs};
+use commands::configure::ConfigureMode;
 use commands::workflow::WorkflowOutputOptions;
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,32 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
     let repo_path = repo_discovery.repo_path.clone();
 
     if args.configure || args.configure_all {
+        let overrides = config_overrides(&args, repo_path.clone());
+        if args.tui && kcmt_tui::should_enable_tui(false) {
+            let state = kcmt_tui::ConfigureTuiState {
+                provider: args
+                    .provider
+                    .clone()
+                    .unwrap_or_else(|| "auto/default".to_string()),
+                model: args
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "auto/default".to_string()),
+                rule: "provider presets enabled".to_string(),
+                credential_status: "keychain first, environment fallback".to_string(),
+            };
+            match kcmt_tui::run_configure_tui(state) {
+                Ok(kcmt_tui::ConfigureTuiOutcome::Save) => {}
+                Ok(kcmt_tui::ConfigureTuiOutcome::Cancel) => {
+                    println!("Configuration unchanged");
+                    return 0;
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    return 1;
+                }
+            }
+        }
         if args.save_api_key {
             let Some(api_key) = explicit_api_key
                 .as_deref()
@@ -114,26 +141,12 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             }
             println!("Saved {provider} credentials to OS keychain account {account}");
         }
-        let overrides = config_overrides(&args, repo_path.clone());
-        if args.tui && kcmt_tui::should_enable_tui(false) {
-            let state = kcmt_tui::ConfigureTuiState {
-                provider: args
-                    .provider
-                    .clone()
-                    .unwrap_or_else(|| "auto/default".to_string()),
-                model: args
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "auto/default".to_string()),
-                rule: "provider presets enabled".to_string(),
-                credential_status: "keychain first, environment fallback".to_string(),
-            };
-            if let Err(err) = kcmt_tui::run_configure_tui(state) {
-                eprintln!("{err}");
-                return 1;
-            }
-        }
-        return commands::configure::run_configure(repo_path, overrides);
+        let mode = if args.configure_all {
+            ConfigureMode::All
+        } else {
+            ConfigureMode::Single
+        };
+        return commands::configure::run_configure(repo_path, overrides, mode);
     }
 
     if args.benchmark {

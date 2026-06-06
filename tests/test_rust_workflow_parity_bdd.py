@@ -566,6 +566,50 @@ def empty_runtime_configuration_home(tmp_path: Path) -> dict[str, Any]:
     return {"repo": repo, "config_home": config_home}
 
 
+@given("an existing OpenAI runtime configuration", target_fixture="workflow_context")
+def existing_openai_runtime_configuration(tmp_path: Path) -> dict[str, Any]:
+    config_home = tmp_path / "config-home"
+    config_home.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (config_home / "config.json").write_text(
+        json.dumps(
+            {
+                "provider": "openai",
+                "model": "gpt-existing",
+                "llm_endpoint": "https://openai.existing/v1",
+                "api_key_env": "OPENAI_EXISTING_KEY",
+                "git_repo_path": str(repo),
+                "max_commit_length": 72,
+                "auto_push": False,
+                "use_batch": False,
+                "batch_model": "gpt-existing",
+                "batch_timeout_seconds": 900,
+                "providers": {
+                    "openai": {
+                        "name": "OpenAI",
+                        "endpoint": "https://openai.existing/v1",
+                        "api_key_env": "OPENAI_EXISTING_KEY",
+                        "keychain_account": "provider/openai/existing",
+                        "preferred_model": "gpt-existing",
+                    },
+                    "anthropic": {
+                        "name": "Anthropic",
+                        "endpoint": "https://anthropic.existing",
+                        "api_key_env": "ANTHROPIC_EXISTING_KEY",
+                        "preferred_model": "claude-existing",
+                    },
+                },
+                "model_priority": [
+                    {"provider": "openai", "model": "gpt-existing"},
+                    {"provider": "anthropic", "model": "claude-existing"},
+                ],
+            }
+        )
+    )
+    return {"repo": repo, "config_home": config_home}
+
+
 @given("a checked-in runtime benchmark corpus", target_fixture="workflow_context")
 def checked_in_runtime_benchmark_corpus(tmp_path: Path) -> dict[str, Any]:
     return {
@@ -985,6 +1029,133 @@ def rust_kcmt_configures_anthropic_non_interactively(
             "--api-key-env",
             "ANTHROPIC_TEST_KEY",
             "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Python kcmt entrypoint configures Anthropic in auto runtime mode")
+def python_kcmt_entrypoint_configures_anthropic_in_auto_runtime_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    rust_bin = _rust_bin("kcmt")
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_RUST_BIN"] = str(rust_bin)
+    env["KCMT_RUNTIME_TRACE"] = "1"
+    result = subprocess.run(
+        [
+            os.environ.get("PYTHON", "python"),
+            "-m",
+            "kcmt.main",
+            "--configure",
+            "--provider",
+            "anthropic",
+            "--model",
+            "claude-test",
+            "--endpoint",
+            "https://anthropic.test",
+            "--api-key-env",
+            "ANTHROPIC_TEST_KEY",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+
+
+@when("the Python kcmt entrypoint runs bare configure in auto runtime mode")
+def python_kcmt_entrypoint_runs_bare_configure_in_auto_runtime_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    rust_bin = _rust_bin("kcmt")
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_RUST_BIN"] = str(rust_bin)
+    env["KCMT_RUNTIME_TRACE"] = "1"
+    result = subprocess.run(
+        [
+            os.environ.get("PYTHON", "python"),
+            "-m",
+            "kcmt.main",
+            "--configure",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+
+
+@when("the Python kcmt entrypoint configures all providers in auto runtime mode")
+def python_kcmt_entrypoint_configures_all_providers_in_auto_runtime_mode(
+    workflow_context: dict[str, Any],
+) -> None:
+    rust_bin = _rust_bin("kcmt")
+    env = _clean_env(workflow_context["config_home"])
+    env["KCMT_RUST_BIN"] = str(rust_bin)
+    env["KCMT_RUNTIME_TRACE"] = "1"
+    result = subprocess.run(
+        [
+            os.environ.get("PYTHON", "python"),
+            "-m",
+            "kcmt.main",
+            "--configure-all",
+            "--provider",
+            "anthropic",
+            "--model",
+            "claude-new",
+            "--endpoint",
+            "https://anthropic.new",
+            "--api-key-env",
+            "ANTHROPIC_NEW_KEY",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    workflow_context["output"] = result.stdout
+    workflow_context["stderr"] = result.stderr
+
+
+@when("the Rust kcmt command configures all providers with Anthropic overrides")
+def rust_kcmt_configures_all_providers_with_anthropic_overrides(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--configure-all",
+            "--provider",
+            "anthropic",
+            "--model",
+            "claude-new",
+            "--endpoint",
+            "https://anthropic.new",
+            "--api-key-env",
+            "ANTHROPIC_NEW_KEY",
             "--repo-path",
             str(workflow_context["repo"]),
         ],
@@ -1849,6 +2020,64 @@ def rust_configuration_file_contains_anthropic_provider_settings(
     assert config["llm_endpoint"] == "https://anthropic.test"
     assert config["api_key_env"] == "ANTHROPIC_TEST_KEY"
     assert config["providers"]["anthropic"]["api_key_env"] == "ANTHROPIC_TEST_KEY"
+    assert config["providers"]["anthropic"]["keychain_account"] == (
+        "provider/anthropic/default"
+    )
+    assert "api_key" not in config["providers"]["anthropic"]
+
+
+@then("the Rust configuration file contains the default OpenAI provider settings")
+def rust_configuration_file_contains_default_openai_provider_settings(
+    workflow_context: dict[str, Any],
+) -> None:
+    config = json.loads((workflow_context["config_home"] / "config.json").read_text())
+    assert config["provider"] == "openai"
+    assert config["model"] == "gpt-5-mini-2025-08-07"
+    assert config["llm_endpoint"] == "https://api.openai.com/v1"
+    assert config["api_key_env"] == "OPENAI_API_KEY"
+    assert config["providers"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
+    assert (
+        config["providers"]["openai"]["keychain_account"] == "provider/openai/default"
+    )
+    assert "api_key" not in config["providers"]["openai"]
+
+
+@then("the Python entrypoint configure run is handled by Rust")
+def python_entrypoint_configure_run_is_handled_by_rust(
+    workflow_context: dict[str, Any],
+) -> None:
+    assert "auto_covered_workflow" in workflow_context["stderr"]
+
+
+@then("the Rust configuration keeps the OpenAI primary provider")
+def rust_configuration_keeps_openai_primary_provider(
+    workflow_context: dict[str, Any],
+) -> None:
+    config = json.loads((workflow_context["config_home"] / "config.json").read_text())
+    assert config["provider"] == "openai"
+    assert config["model"] == "gpt-existing"
+    assert config["llm_endpoint"] == "https://openai.existing/v1"
+    assert config["api_key_env"] == "OPENAI_EXISTING_KEY"
+    assert config["providers"]["openai"]["keychain_account"] == (
+        "provider/openai/existing"
+    )
+    assert config["model_priority"][0]["provider"] == "openai"
+    assert config["model_priority"][1]["provider"] == "anthropic"
+
+
+@then(
+    "the Rust configuration file contains the Anthropic configure-all provider settings"
+)
+def rust_configuration_file_contains_anthropic_configure_all_provider_settings(
+    workflow_context: dict[str, Any],
+) -> None:
+    config = json.loads((workflow_context["config_home"] / "config.json").read_text())
+    provider = config["providers"]["anthropic"]
+    assert provider["endpoint"] == "https://anthropic.new"
+    assert provider["api_key_env"] == "ANTHROPIC_NEW_KEY"
+    assert provider["preferred_model"] == "claude-new"
+    assert provider["keychain_account"] == "provider/anthropic/default"
+    assert "api_key" not in provider
 
 
 @then("the Rust preferences file contains default selector preferences")
@@ -1861,6 +2090,10 @@ def rust_preferences_file_contains_default_selector_preferences(
     assert preferences["selection_policy"] == "fastest_cheap"
     assert preferences["default_prompt_profile"] == "conventional"
     assert preferences["prompt_profiles"][0]["id"] == "conventional"
+    assert preferences["provider_rules"]["openai"]["preset"] == "none"
+    assert preferences["provider_rules"]["anthropic"]["preset"] == "none"
+    assert preferences["provider_rules"]["xai"]["preset"] == "none"
+    assert preferences["provider_rules"]["github"]["preset"] == "none"
 
 
 @then("the Anthropic provider receives the latest Haiku model")
