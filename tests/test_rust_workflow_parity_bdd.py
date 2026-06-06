@@ -2337,6 +2337,7 @@ def rust_preferences_file_contains_default_selector_preferences(
     assert preferences["provider_rules"]["xai"]["preset"] == "none"
     assert preferences["provider_rules"]["github"]["preset"] == "none"
 
+
 @then("the keychain save response does not print the API key")
 def keychain_save_response_does_not_print_api_key(
     workflow_context: dict[str, Any],
@@ -2357,6 +2358,7 @@ def no_saved_configuration_file_contains_api_key(
     for path in config_home.rglob("*"):
         if path.is_file():
             assert workflow_context["secret"] not in path.read_text(errors="ignore")
+
 
 @then("the Rust preferences remember the workflow screen")
 def rust_preferences_remember_the_workflow_screen(
