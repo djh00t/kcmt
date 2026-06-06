@@ -342,6 +342,9 @@ def test_cli_runtime_benchmark_json(tmp_path, capsys):
     assert payload["schema_version"] == "1.0.0"
     assert payload["command_set"] == "local-workflows-v1"
     assert payload["corpora"] == ["pytest-cli-runtime-corpus"]
+    assert payload["snapshot"]["benchmark_kind"] == "runtime"
+    assert payload["snapshot"]["provider_benchmark_kind"] == "provider"
+    assert payload["snapshot"]["secret_free"] is True
     assert len(payload["results"]) == 4
     assert any(
         item["workflow_contract_id"] == "default-repo-path"
@@ -349,6 +352,23 @@ def test_cli_runtime_benchmark_json(tmp_path, capsys):
     )
     assert all(item["runtime"] == "python" for item in payload["results"])
     assert all(isinstance(item["stage_timings"], list) for item in payload["results"])
+    matrix = payload["scenario_matrix"]
+    assert len(matrix) == 4
+    assert {row["workflow_contract_id"] for row in matrix} == {
+        "status-repo-path",
+        "oneshot-repo-path",
+        "default-repo-path",
+        "file-repo-path",
+    }
+    file_row = next(
+        row for row in matrix if row["workflow_contract_id"] == "file-repo-path"
+    )
+    assert file_row["python"]["status"] == "passed"
+    assert file_row["python"]["quality_score"] == 100.0
+    assert file_row["rust"]["status"] == "excluded"
+    assert file_row["rust"]["failure_reason"] == "runtime not requested"
+    assert payload["scorecard"]["provider_throughput_included"] is False
+    assert "pre-LLM Rust heuristic" in payload["scorecard"]["measurement_basis"]
     assert len(payload["optimization_iterations"]) == 6
     assert payload["optimization_iterations"][0]["measurement_status"] == "measured"
     assert all(

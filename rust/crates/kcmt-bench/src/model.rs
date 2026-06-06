@@ -83,9 +83,75 @@ pub struct RuntimeBenchmarkRun {
     pub timestamp: String,
     pub command_set: String,
     pub corpora: Vec<String>,
+    pub snapshot: RuntimeBenchmarkSnapshot,
     pub results: Vec<RuntimeBenchmarkResult>,
+    pub scenario_matrix: Vec<RuntimeScenarioMatrixRow>,
     pub summary: RuntimeBenchmarkSummary,
+    pub scorecard: RuntimeBenchmarkScorecard,
     pub optimization_iterations: Vec<OptimizationIteration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBenchmarkSnapshot {
+    pub snapshot_id: String,
+    pub benchmark_kind: String,
+    pub schema_version: String,
+    pub timestamp: String,
+    pub command_set: String,
+    pub corpora: Vec<String>,
+    pub result_count: u32,
+    pub secret_free: bool,
+    pub provider_benchmark_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeScenarioMatrixRow {
+    pub scenario_id: String,
+    pub workflow_contract_id: String,
+    pub corpus_id: String,
+    pub command_label: String,
+    pub python: RuntimeScenarioMatrixCell,
+    pub rust: RuntimeScenarioMatrixCell,
+    pub comparison: RuntimeScenarioComparison,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeScenarioMatrixCell {
+    pub status: RuntimeScenarioStatus,
+    pub iterations: u32,
+    pub wall_time_ms: Option<f64>,
+    pub median_time_ms: Option<f64>,
+    pub throughput_commits_per_sec: Option<f64>,
+    pub quality_score: Option<f64>,
+    pub stage_timings: Vec<RuntimeStageTiming>,
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeScenarioComparison {
+    pub comparable: bool,
+    pub fastest_runtime: Option<RuntimeKind>,
+    pub median_delta_ms: Option<f64>,
+    pub speedup_ratio: Option<f64>,
+    pub stage_deltas: Vec<RuntimeStageDelta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeStageDelta {
+    pub stage: String,
+    pub python_ms: Option<f64>,
+    pub rust_ms: Option<f64>,
+    pub delta_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBenchmarkScorecard {
+    pub measurement_basis: String,
+    pub quality_score_definition: String,
+    pub throughput_definition: String,
+    pub python_quality_score: Option<f64>,
+    pub rust_quality_score: Option<f64>,
+    pub provider_throughput_included: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
