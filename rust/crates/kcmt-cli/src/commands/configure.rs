@@ -1,9 +1,16 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use kcmt_core::config::loader::{config_file_path, load_config, ConfigOverrides};
 use kcmt_core::model::{ModelPreference, ProviderConfigEntry};
+use kcmt_core::preferences::{
+    default_keychain_account, load_preferences, resolve_credential, save_preferences,
+    CredentialRequest, OsKeychainStore,
+};
+use kcmt_provider::clients::{AnthropicClient, GitHubModelsClient, OpenAiClient, XaiClient};
+use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
 use serde_json::json;
 
 const PROVIDERS: &[(&str, &str, &str, &str, &str)] = &[
@@ -17,7 +24,7 @@ const PROVIDERS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "anthropic",
         "Anthropic",
-        "claude-sonnet-4-20250514",
+        "claude-3-5-haiku-latest",
         "https://api.anthropic.com",
         "ANTHROPIC_API_KEY",
     ),
@@ -51,18 +58,23 @@ pub fn run_configure(repo_path: PathBuf, overrides: ConfigOverrides) -> i32 {
 }
 
 pub fn run_list_models(debug: bool) -> i32 {
+    let provider_models = resolved_provider_models();
     if debug {
         let payload = PROVIDERS
             .iter()
             .map(|(provider, name, model, endpoint, api_key_env)| {
+                let models = provider_models
+                    .get(*provider)
+                    .cloned()
+                    .unwrap_or_else(|| vec![(*model).to_string()]);
                 json!({
                     "provider": provider,
                     "display_name": name,
-                    "models": [{
-                        "id": model,
+                    "models": models.into_iter().map(|model_id| json!({
+                        "id": model_id,
                         "endpoint": endpoint,
                         "api_key_env": api_key_env
-                    }]
+                    })).collect::<Vec<_>>()
                 })
             })
             .collect::<Vec<_>>();
@@ -77,9 +89,73 @@ pub fn run_list_models(debug: bool) -> i32 {
     }
 
     for (provider, _name, model, endpoint, _api_key_env) in PROVIDERS {
-        println!("{provider}\t{model}\t{endpoint}");
+        let models = provider_models
+            .get(*provider)
+            .cloned()
+            .unwrap_or_else(|| vec![(*model).to_string()]);
+        for model in models {
+            println!("{provider}\t{model}\t{endpoint}");
+        }
     }
     0
+}
+
+fn resolved_provider_models() -> HashMap<String, Vec<String>> {
+    PROVIDERS
+        .iter()
+        .map(|(provider, _name, model, endpoint, api_key_env)| {
+            let models = live_models_for_provider(provider, endpoint, api_key_env)
+                .filter(|models| !models.is_empty())
+                .unwrap_or_else(|| vec![(*model).to_string()]);
+            ((*provider).to_string(), models)
+        })
+        .collect()
+}
+
+fn live_models_for_provider(
+    provider: &str,
+    endpoint: &str,
+    api_key_env: &str,
+) -> Option<Vec<String>> {
+    let explicit_provider = std::env::var("KCMT_EXPLICIT_API_KEY_PROVIDER").ok();
+    let explicit_secret = if explicit_provider.as_deref().unwrap_or(provider) == provider {
+        std::env::var("KCMT_EXPLICIT_API_KEY").ok()
+    } else {
+        None
+    };
+    let request = CredentialRequest {
+        provider: provider.to_string(),
+        explicit_secret,
+        keychain_account: Some(default_keychain_account(provider)),
+        env_var: api_key_env.to_string(),
+    };
+    let api_key = resolve_credential(&request, &OsKeychainStore)
+        .ok()
+        .flatten()?
+        .secret;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    let transport = AsyncTransport::new(
+        Duration::from_secs(5),
+        RetryPolicy {
+            max_attempts: 1,
+            base_backoff: Duration::from_millis(100),
+        },
+    )
+    .ok()?;
+    runtime
+        .block_on(async {
+            match provider {
+                "anthropic" => AnthropicClient::list_models(&transport, endpoint, &api_key).await,
+                "xai" => XaiClient::list_models(&transport, endpoint, &api_key).await,
+                "github" => GitHubModelsClient::list_models(&transport, endpoint, &api_key).await,
+                _ => OpenAiClient::list_models(&transport, endpoint, &api_key).await,
+            }
+        })
+        .ok()
+        .map(|models| models.into_iter().map(|model| model.id).collect())
 }
 
 pub fn run_verify_keys() -> i32 {
@@ -114,6 +190,9 @@ fn write_config(repo_path: PathBuf, overrides: ConfigOverrides) -> anyhow::Resul
                     .api_key_env
                     .get_or_insert_with(|| (*api_key_env).to_string());
                 entry
+                    .keychain_account
+                    .get_or_insert_with(|| format!("provider/{provider}/default"));
+                entry
                     .preferred_model
                     .get_or_insert_with(|| (*model).to_string());
             })
@@ -121,6 +200,7 @@ fn write_config(repo_path: PathBuf, overrides: ConfigOverrides) -> anyhow::Resul
                 name: Some((*name).to_string()),
                 endpoint: Some((*endpoint).to_string()),
                 api_key_env: Some((*api_key_env).to_string()),
+                keychain_account: Some(format!("provider/{provider}/default")),
                 preferred_model: Some((*model).to_string()),
             });
     }
@@ -128,6 +208,9 @@ fn write_config(repo_path: PathBuf, overrides: ConfigOverrides) -> anyhow::Resul
     if let Some(primary) = providers.get_mut(&cfg.provider) {
         primary.endpoint = Some(cfg.llm_endpoint.clone());
         primary.api_key_env = Some(cfg.api_key_env.clone());
+        primary
+            .keychain_account
+            .get_or_insert_with(|| format!("provider/{}/default", cfg.provider));
         primary.preferred_model = Some(cfg.model.clone());
     }
 
@@ -159,5 +242,7 @@ fn write_config(repo_path: PathBuf, overrides: ConfigOverrides) -> anyhow::Resul
         fs::create_dir_all(parent)?;
     }
     fs::write(&path, serde_json::to_string_pretty(&payload)?)?;
+    let preferences = load_preferences().unwrap_or_default();
+    save_preferences(&preferences)?;
     Ok(path)
 }

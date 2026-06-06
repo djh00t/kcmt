@@ -53,6 +53,7 @@ def _clean_env(config_home: Path) -> dict[str, str]:
     }
     env["KCMT_CONFIG_HOME"] = str(config_home)
     env["KCMT_ALLOW_LOCAL_SYNTHESIS"] = "1"
+    env["KCMT_DISABLE_KEYCHAIN"] = "1"
     return env
 
 
@@ -363,6 +364,70 @@ def git_repository_with_one_changed_tracked_file(tmp_path: Path) -> dict[str, An
 
     (repo / "tracked.py").write_text("print('changed')\n")
     return {"repo": repo, "config_home": tmp_path / "config-home"}
+
+
+@given(
+    "a git repository with one changed tracked file and Anthropic latest Haiku preferences",
+    target_fixture="workflow_context",
+)
+def git_repository_with_anthropic_latest_haiku_preferences(
+    tmp_path: Path,
+) -> dict[str, Any]:
+    context = git_repository_with_one_changed_tracked_file(tmp_path)
+    endpoint, handler, server = _start_fallback_provider()
+    config_home = context["config_home"]
+    config_home.mkdir(parents=True, exist_ok=True)
+    (config_home / "config.json").write_text(
+        json.dumps(
+            {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-20250514",
+                "llm_endpoint": endpoint,
+                "api_key_env": "ANTHROPIC_API_KEY",
+                "git_repo_path": str(context["repo"]),
+                "max_commit_length": 72,
+                "auto_push": False,
+                "use_batch": False,
+                "batch_model": None,
+                "batch_timeout_seconds": 900,
+                "providers": {
+                    "anthropic": {
+                        "endpoint": endpoint,
+                        "api_key_env": "ANTHROPIC_API_KEY",
+                        "preferred_model": "claude-sonnet-4-20250514",
+                    }
+                },
+                "model_priority": [
+                    {"provider": "anthropic", "model": "claude-sonnet-4-20250514"}
+                ],
+            }
+        )
+    )
+    (config_home / "preferences.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selection_policy": "fastest_cheap",
+                "provider_rules": {
+                    "anthropic": {"preset": "latest_haiku", "strict": False}
+                },
+                "prompt_profiles": [
+                    {
+                        "id": "conventional",
+                        "name": "Conventional Commit",
+                        "system_instruction": "You generate strictly valid Conventional Commit messages.",
+                        "user_instruction": "Only output the commit message.",
+                    }
+                ],
+                "default_prompt_profile": "conventional",
+                "tui": {},
+                "model_cache": {"ttl_seconds": 86400},
+            }
+        )
+    )
+    context["anthropic_handler"] = handler
+    context["anthropic_server"] = server
+    return context
 
 
 @given(
@@ -807,6 +872,27 @@ def rust_kcmt_configures_anthropic_non_interactively(
             "https://anthropic.test",
             "--api-key-env",
             "ANTHROPIC_TEST_KEY",
+            "--no-auto-push",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    workflow_context["output"] = output
+
+
+@when("the Rust kcmt command commits the file with Anthropic preferences")
+def rust_kcmt_commits_file_with_anthropic_preferences(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    env["ANTHROPIC_API_KEY"] = "bdd-anthropic-key"
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "--file",
+            "tracked.py",
             "--no-auto-push",
             "--repo-path",
             str(workflow_context["repo"]),
@@ -1522,6 +1608,59 @@ def rust_configuration_file_contains_anthropic_provider_settings(
     assert config["providers"]["anthropic"]["api_key_env"] == "ANTHROPIC_TEST_KEY"
 
 
+@then("the Rust preferences file contains default selector preferences")
+def rust_preferences_file_contains_default_selector_preferences(
+    workflow_context: dict[str, Any],
+) -> None:
+    preferences = json.loads(
+        (workflow_context["config_home"] / "preferences.json").read_text()
+    )
+    assert preferences["selection_policy"] == "fastest_cheap"
+    assert preferences["default_prompt_profile"] == "conventional"
+    assert preferences["prompt_profiles"][0]["id"] == "conventional"
+
+
+@then("the Anthropic provider receives the latest Haiku model")
+def anthropic_provider_receives_latest_haiku_model(
+    workflow_context: dict[str, Any],
+) -> None:
+    requests = workflow_context["anthropic_handler"].requests
+    assert requests
+    assert any("claude-3-5-haiku-latest" in body for _method, _path, body in requests)
+
+
+@then("the latest commit uses the Anthropic provider message")
+def latest_commit_uses_anthropic_provider_message(
+    workflow_context: dict[str, Any],
+) -> None:
+    log = _git(workflow_context["repo"], ["log", "-1", "--pretty=%s"])
+    assert log == "fix(fallback): use secondary provider"
+
+
+@then("the Rust stats command reports usage telemetry")
+def rust_stats_command_reports_usage_telemetry(
+    workflow_context: dict[str, Any],
+) -> None:
+    env = _clean_env(workflow_context["config_home"])
+    output = _run(
+        [
+            str(_rust_bin("kcmt")),
+            "stats",
+            "--json",
+            "--repo-path",
+            str(workflow_context["repo"]),
+        ],
+        REPO_ROOT,
+        env=env,
+    )
+    payload = json.loads(output)
+    assert payload["aggregates"]
+    aggregate = payload["aggregates"][0]
+    assert aggregate["runs"] >= 1
+    assert "provider" in aggregate
+    assert "model" in aggregate
+
+
 @then("the model list includes all supported providers")
 def model_list_includes_all_supported_providers(
     workflow_context: dict[str, Any],
@@ -1530,7 +1669,7 @@ def model_list_includes_all_supported_providers(
     assert "openai" in output
     assert "gpt-5-mini-2025-08-07" in output
     assert "anthropic" in output
-    assert "claude-sonnet-4-20250514" in output
+    assert "claude-3-5-haiku-latest" in output
     assert "xai" in output
     assert "github" in output
 

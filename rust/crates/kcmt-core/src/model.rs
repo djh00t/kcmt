@@ -27,6 +27,7 @@ pub struct ProviderConfigEntry {
     pub name: Option<String>,
     pub endpoint: Option<String>,
     pub api_key_env: Option<String>,
+    pub keychain_account: Option<String>,
     pub preferred_model: Option<String>,
 }
 

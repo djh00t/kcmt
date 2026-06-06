@@ -9,6 +9,7 @@ use crate::config::persisted::load_persisted_config;
 use crate::config::workflow_config::validate_config;
 use crate::error::Result;
 use crate::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
+use crate::preferences::default_keychain_account;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigSource {
@@ -35,6 +36,7 @@ pub struct ConfigOverrides {
     pub model: Option<String>,
     pub endpoint: Option<String>,
     pub api_key_env: Option<String>,
+    pub keychain_account: Option<String>,
     pub repo_path: Option<PathBuf>,
     pub max_commit_length: Option<usize>,
     pub auto_push: Option<bool>,
@@ -256,6 +258,7 @@ fn merged_provider_entries(
                 name: None,
                 endpoint: Some(defaults.endpoint.to_string()),
                 api_key_env: Some(defaults.api_key_env.to_string()),
+                keychain_account: Some(default_keychain_account(defaults.provider)),
                 preferred_model: Some(defaults.model.to_string()),
             },
         );
@@ -273,6 +276,9 @@ fn merged_provider_entries(
                     }
                     if entry.api_key_env.is_some() {
                         existing.api_key_env = entry.api_key_env.clone();
+                    }
+                    if entry.keychain_account.is_some() {
+                        existing.keychain_account = entry.keychain_account.clone();
                     }
                     if entry.preferred_model.is_some() {
                         existing.preferred_model = entry.preferred_model.clone();
@@ -530,6 +536,7 @@ mod tests {
             model: Some("grok-code-fast".to_string()),
             endpoint: Some("https://custom.x.ai".to_string()),
             api_key_env: Some("XAI_SECRET".to_string()),
+            keychain_account: None,
             repo_path: Some(repo.join("nested")),
             max_commit_length: Some(80),
             ..ConfigOverrides::default()

@@ -71,6 +71,12 @@ pub struct OpenAiBatchOutput {
     pub failures: Vec<OpenAiBatchFailure>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedModel {
+    pub id: String,
+    pub created_at: Option<String>,
+}
+
 impl ProviderRequest {
     pub fn header_map(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
@@ -118,6 +124,26 @@ impl OpenAiClient {
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
         Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+    }
+
+    pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
+        build_bearer_models_request(endpoint, api_key)
+    }
+
+    pub fn parse_models_response(payload: &Value) -> Result<Vec<ListedModel>, String> {
+        parse_openai_compatible_models_response(payload)
+    }
+
+    pub async fn list_models(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<Vec<ListedModel>> {
+        let request = Self::build_models_request(endpoint, api_key);
+        let response = transport
+            .get_json(&request.url, request.header_map()?)
+            .await?;
+        Self::parse_models_response(&response).map_err(|err| anyhow!(err))
     }
 
     pub fn build_batch_jsonl(model: &str, jobs: &[OpenAiBatchJob]) -> String {
@@ -396,6 +422,34 @@ impl AnthropicClient {
             .await?;
         Self::parse_messages_response(&response).map_err(|err| anyhow!(err))
     }
+
+    pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-api-key".to_string(), api_key.to_string());
+        headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
+        headers.insert("content-type".to_string(), "application/json".to_string());
+        ProviderRequest {
+            url: format!("{}/v1/models", trim_anthropic_endpoint(endpoint)),
+            headers,
+            payload: Value::Null,
+        }
+    }
+
+    pub fn parse_models_response(payload: &Value) -> Result<Vec<ListedModel>, String> {
+        parse_openai_compatible_models_response(payload)
+    }
+
+    pub async fn list_models(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<Vec<ListedModel>> {
+        let request = Self::build_models_request(endpoint, api_key);
+        let response = transport
+            .get_json(&request.url, request.header_map()?)
+            .await?;
+        Self::parse_models_response(&response).map_err(|err| anyhow!(err))
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -433,6 +487,26 @@ impl XaiClient {
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
         Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+    }
+
+    pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
+        build_bearer_models_request(endpoint, api_key)
+    }
+
+    pub fn parse_models_response(payload: &Value) -> Result<Vec<ListedModel>, String> {
+        parse_openai_compatible_models_response(payload)
+    }
+
+    pub async fn list_models(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<Vec<ListedModel>> {
+        let request = Self::build_models_request(endpoint, api_key);
+        let response = transport
+            .get_json(&request.url, request.header_map()?)
+            .await?;
+        Self::parse_models_response(&response).map_err(|err| anyhow!(err))
     }
 
     pub fn build_batch_requests_payload(model: &str, jobs: &[OpenAiBatchJob]) -> Value {
@@ -633,6 +707,26 @@ impl GitHubModelsClient {
             .await?;
         Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
     }
+
+    pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
+        build_bearer_models_request(endpoint, api_key)
+    }
+
+    pub fn parse_models_response(payload: &Value) -> Result<Vec<ListedModel>, String> {
+        parse_openai_compatible_models_response(payload)
+    }
+
+    pub async fn list_models(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+    ) -> Result<Vec<ListedModel>> {
+        let request = Self::build_models_request(endpoint, api_key);
+        let response = transport
+            .get_json(&request.url, request.header_map()?)
+            .await?;
+        Self::parse_models_response(&response).map_err(|err| anyhow!(err))
+    }
 }
 
 fn build_openai_compatible_request(
@@ -662,6 +756,17 @@ fn build_openai_compatible_request(
         url: format!("{}/chat/completions", trim_endpoint(endpoint)),
         headers,
         payload,
+    }
+}
+
+fn build_bearer_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
+    let mut headers = BTreeMap::new();
+    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    ProviderRequest {
+        url: format!("{}/models", trim_endpoint(endpoint)),
+        headers,
+        payload: Value::Null,
     }
 }
 
@@ -708,6 +813,38 @@ fn parse_openai_compatible_response(payload: &Value) -> Result<String, String> {
             .unwrap_or("unknown");
         format!("provider response missing assistant content (finish_reason={finish_reason})")
     })
+}
+
+fn parse_openai_compatible_models_response(payload: &Value) -> Result<Vec<ListedModel>, String> {
+    let data = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| payload.get("models").and_then(Value::as_array))
+        .ok_or_else(|| "provider models response missing data array".to_string())?;
+    let models = data
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?;
+            let created_at = entry
+                .get("created_at")
+                .or_else(|| entry.get("created"))
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .or_else(|| value.as_i64().map(|number| number.to_string()))
+                });
+            Some(ListedModel {
+                id: id.to_string(),
+                created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        Err("provider models response did not include model ids".to_string())
+    } else {
+        Ok(models)
+    }
 }
 
 fn provider_content_text(value: &Value) -> Option<String> {

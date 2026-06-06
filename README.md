@@ -65,11 +65,14 @@ Dependencies
 
 ## Configuration
 
-Run `kcmt --configure` inside a repository to launch a colourful wizard that:
+Run `kcmt --configure` inside a repository to write or refresh global config.
+Use `kcmt --configure --tui` to open the terminal menu shell when stdin/stdout
+are attached to a terminal.
 
 - Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
 - Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
 - Persists the selection to `~/.config/kcmt/config.json` (global, per-user).
+- Persists selector, prompt, and TUI defaults to `~/.config/kcmt/preferences.json`.
 
 Per-provider settings
 
@@ -77,7 +80,8 @@ kcmt maintains a per-provider settings map in `~/.config/kcmt/config.json`. Each
 
 - `name`: friendly display name
 - `endpoint`: base URL for API calls
-- `api_key_env`: environment variable that holds your API key/token (kcmt stores the variable name, not the secret)
+- `api_key_env`: fallback environment variable that holds your API key/token (kcmt stores the variable name, not the secret)
+- `keychain_account`: OS keychain account reference; credential resolution is explicit CLI input, then OS keychain, then environment variable
 - `preferred_model`: your saved default model for that provider
 
 Example (`~/.config/kcmt/config.json` excerpt):
@@ -163,8 +167,8 @@ kcmt --help
 ```
 
 Optional live smoke commands use real provider keys only when the corresponding
-environment variable is already set. They do not print secret values; `status
---raw` records the env var name, not the key.
+OS keychain entry or environment variable is already set. They do not print
+secret values; `status --raw` records credential references, not the key.
 
 ```shell
 test -n "$OPENAI_API_KEY" && \
@@ -186,7 +190,7 @@ test -n "$OPENAI_API_KEY" && \
 | Provider  | Default model             | Default endpoint                         |
 |-----------|---------------------------|------------------------------------------|
 | OpenAI    | `gpt-5-mini-2025-08-07`   | `https://api.openai.com/v1`              |
-| Anthropic | `claude-sonnet-4-20250514` | `https://api.anthropic.com`             |
+| Anthropic | `claude-3-5-haiku-latest`  | `https://api.anthropic.com`             |
 | xAI       | `grok-code-fast`          | `https://api.x.ai/v1`                   |
 | GitHub    | `openai/gpt-4.1-mini`     | `https://models.github.ai/inference`    |
 
@@ -219,16 +223,32 @@ Additional LLM behaviour environment variables:
 - `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
 - `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
 - `KCMT_FAST_LOCAL_FOR_SMALL_DIFFS` – opt-in local conventional subject for tiny diffs (<=3 changed lines)
+- `KCMT_DISABLE_KEYCHAIN=1` – skip OS keychain lookup for hermetic CI/test runs
 - `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
 
 ## List models and pricing
 
-`kcmt --list-models` prints a simple cross-provider pricing board ordered by output (completion) price per 1M tokens, including context window and max output when available. Use `--debug` to see the raw structured listings.
+`kcmt --list-models` prints supported provider models. When credentials are
+available, kcmt tries live provider model listing and falls back to curated
+defaults offline. Use `--debug` to see structured listings.
 
 Example:
 
 ```shell
 kcmt --list-models
+```
+
+## Preferences, rules, and stats
+
+Provider rules and prompt profiles live in `~/.config/kcmt/preferences.json`.
+The first selector policy is `fastest_cheap`; provider presets include rules
+such as Anthropic `latest_haiku`. The commit workflow records local aggregate
+usage telemetry per repository without storing prompts, diffs, generated commit
+messages, or secret values.
+
+```shell
+kcmt stats --json --repo-path .
+printf '%s' "$ANTHROPIC_API_KEY" | kcmt --configure --provider anthropic --api-key-stdin --save-api-key
 ```
 
 ## Benchmarking

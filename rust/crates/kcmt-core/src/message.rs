@@ -1,5 +1,7 @@
 //! Provider prompt and commit-message post-processing.
 
+use crate::preferences::{Preferences, PromptProfile};
+
 const CONVENTIONAL_TYPES: &[&str] = &[
     "feat", "fix", "docs", "style", "refactor", "test", "chore", "perf", "ci", "build", "revert",
 ];
@@ -34,6 +36,26 @@ pub fn build_prompt(diff: &str, context: &str, style: &str) -> String {
     parts.push(String::new());
     parts.push("Analyze the changes carefully and be specific.".to_string());
     parts.join("\n")
+}
+
+pub fn selected_prompt_profile(preferences: &Preferences) -> PromptProfile {
+    preferences
+        .prompt_profiles
+        .iter()
+        .find(|profile| profile.id == preferences.default_prompt_profile)
+        .cloned()
+        .or_else(|| preferences.prompt_profiles.first().cloned())
+        .unwrap_or_else(PromptProfile::default_commit)
+}
+
+pub fn build_prompt_with_profile(diff: &str, context: &str, profile: &PromptProfile) -> String {
+    let mut prompt = build_prompt(diff, context, "conventional");
+    let instruction = profile.user_instruction.trim();
+    if !instruction.is_empty() {
+        prompt.push_str("\n\nUSER PREFERENCES:\n");
+        prompt.push_str(instruction);
+    }
+    prompt
 }
 
 pub fn sanitize_commit_output(raw: &str) -> Result<String, String> {
@@ -138,7 +160,11 @@ fn is_wrapped(value: &str, delimiter: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_prompt, sanitize_commit_output, validate_conventional_commit};
+    use super::{
+        build_prompt, build_prompt_with_profile, sanitize_commit_output,
+        validate_conventional_commit,
+    };
+    use crate::preferences::PromptProfile;
 
     #[test]
     fn build_prompt_matches_python_conventional_shape() {
@@ -163,6 +189,21 @@ mod tests {
         .expect("wrapped provider output should sanitize");
 
         assert_eq!(sanitized, "fix(core): handle retries\n\nExplains the fix.");
+    }
+
+    #[test]
+    fn build_prompt_with_profile_appends_user_instruction() {
+        let profile = PromptProfile {
+            id: "team".to_string(),
+            name: "Team".to_string(),
+            system_instruction: "system".to_string(),
+            user_instruction: "Prefer repo-specific scopes.".to_string(),
+        };
+
+        let prompt = build_prompt_with_profile("diff", "File: app.py", &profile);
+
+        assert!(prompt.contains("STRICT REQUIREMENTS"));
+        assert!(prompt.contains("USER PREFERENCES:\nPrefer repo-specific scopes."));
     }
 
     #[test]

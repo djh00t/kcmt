@@ -4,11 +4,13 @@ pub mod args;
 pub mod commands;
 
 use clap::Parser;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use kcmt_core::config::loader::ConfigOverrides;
 use kcmt_core::git::repo::find_git_repo_root;
+use kcmt_core::preferences::{default_keychain_account, OsKeychainStore, SecretStore};
 
 use args::{CliArgs, CliCommand, StatusArgs};
 use commands::workflow::WorkflowOutputOptions;
@@ -35,6 +37,7 @@ fn config_overrides(args: &CliArgs, repo_path: PathBuf) -> ConfigOverrides {
         model: args.model.clone(),
         endpoint: args.endpoint.clone(),
         api_key_env: args.api_key_env.clone(),
+        keychain_account: None,
         repo_path: Some(repo_path),
         max_commit_length: args.max_commit_length,
         auto_push: args.auto_push_override(),
@@ -66,6 +69,22 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
     {
         std::env::set_var("GITHUB_TOKEN", token);
     }
+    let stdin_api_key = if args.api_key_stdin {
+        read_secret_from_stdin()
+    } else {
+        None
+    };
+    let explicit_api_key = args
+        .api_key
+        .as_ref()
+        .filter(|token| !token.trim().is_empty())
+        .cloned()
+        .or(stdin_api_key);
+    if let Some(api_key) = explicit_api_key.as_ref() {
+        std::env::set_var("KCMT_EXPLICIT_API_KEY", api_key);
+        let provider = args.provider.as_deref().unwrap_or("openai");
+        std::env::set_var("KCMT_EXPLICIT_API_KEY_PROVIDER", provider);
+    }
 
     if args.list_models {
         return commands::configure::run_list_models(args.debug);
@@ -79,7 +98,41 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
     let repo_path = repo_discovery.repo_path.clone();
 
     if args.configure || args.configure_all {
+        if args.save_api_key {
+            let Some(api_key) = explicit_api_key
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            else {
+                eprintln!("--save-api-key requires --api-key or --api-key-stdin");
+                return 1;
+            };
+            let provider = args.provider.as_deref().unwrap_or("openai");
+            let account = default_keychain_account(provider);
+            if let Err(err) = OsKeychainStore.set_secret(&account, api_key) {
+                eprintln!("failed to save API key to OS keychain: {err}");
+                return 1;
+            }
+            println!("Saved {provider} credentials to OS keychain account {account}");
+        }
         let overrides = config_overrides(&args, repo_path.clone());
+        if args.tui && kcmt_tui::should_enable_tui(false) {
+            let state = kcmt_tui::ConfigureTuiState {
+                provider: args
+                    .provider
+                    .clone()
+                    .unwrap_or_else(|| "auto/default".to_string()),
+                model: args
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "auto/default".to_string()),
+                rule: "provider presets enabled".to_string(),
+                credential_status: "keychain first, environment fallback".to_string(),
+            };
+            if let Err(err) = kcmt_tui::run_configure_tui(state) {
+                eprintln!("{err}");
+                return 1;
+            }
+        }
         return commands::configure::run_configure(repo_path, overrides);
     }
 
@@ -100,6 +153,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 }
             }
         }
+        Some(CliCommand::Stats(stats)) => commands::stats::render_stats_command(repo_path, stats),
         Some(CliCommand::Benchmark(benchmark)) => {
             commands::benchmark::run_benchmark_command(repo_path, benchmark)
         }
@@ -202,6 +256,17 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 }
             }
         }
+    }
+}
+
+fn read_secret_from_stdin() -> Option<String> {
+    let mut value = String::new();
+    io::stdin().read_to_string(&mut value).ok()?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 

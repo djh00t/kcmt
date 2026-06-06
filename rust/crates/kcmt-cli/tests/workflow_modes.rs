@@ -61,6 +61,7 @@ fn kcmt_command(binary_path: &str) -> Command {
         }
     }
     command.env("KCMT_ALLOW_LOCAL_SYNTHESIS", "1");
+    command.env("KCMT_DISABLE_KEYCHAIN", "1");
     command.env("KCMT_RUNTIME_BENCHMARK", "0");
     command
 }

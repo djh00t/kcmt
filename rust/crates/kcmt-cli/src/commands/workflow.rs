@@ -17,7 +17,15 @@ use kcmt_core::git::commit_file::{
     GixCommitSession,
 };
 use kcmt_core::git::repo::{CliGitRepository, GitRepository};
-use kcmt_core::message::{build_prompt, sanitize_commit_output};
+use kcmt_core::message::{
+    build_prompt_with_profile, sanitize_commit_output, selected_prompt_profile,
+};
+use kcmt_core::preferences::{
+    default_keychain_account, load_preferences, resolve_credential, CredentialRequest,
+    CredentialSource, OsKeychainStore, Preferences, PromptProfile,
+};
+use kcmt_core::selector::{default_models_for_provider, select_model, ModelSelection};
+use kcmt_core::telemetry::{load_usage_summary, record_usage, TelemetryRunRecord};
 use kcmt_provider::clients::{
     AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderMessage, XaiClient,
 };
@@ -206,6 +214,13 @@ struct ProviderCandidate {
     model: String,
     endpoint: String,
     api_key_env: String,
+    keychain_account: String,
+}
+
+#[derive(Debug, Clone)]
+struct WorkflowRuntime {
+    prompt_profile: PromptProfile,
+    model_selection: ModelSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -412,6 +427,36 @@ fn run_entries_workflow(
     let total_entries = entries.len();
     let mut commits = Vec::new();
     let mut failures = Vec::new();
+    let preferences = load_preferences().unwrap_or_else(|_| Preferences::default());
+    let usage_summary = load_usage_summary(&repo_path).unwrap_or_default();
+    let model_catalog = provider_candidates(config)
+        .iter()
+        .flat_map(|candidate| default_models_for_provider(&candidate.provider))
+        .collect::<Vec<_>>();
+    let available = available_providers(config);
+    let mut model_selection = select_model(
+        config,
+        &preferences,
+        &model_catalog,
+        &usage_summary,
+        &available,
+    );
+    if !preferences.provider_rules.contains_key(&config.provider)
+        && config.model != provider_default_model(&config.provider)
+    {
+        model_selection = ModelSelection {
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            rule_applied: None,
+            fallback_reason: None,
+        };
+    }
+    let selected_config = selected_workflow_config(config, &model_selection);
+    let runtime = WorkflowRuntime {
+        prompt_profile: selected_prompt_profile(&preferences),
+        model_selection,
+    };
+    let config = &selected_config;
 
     let prepare_workers = select_prepare_workers(entries.len(), prepare_workers_override);
     telemetry.prepare_workers = prepare_workers;
@@ -426,6 +471,7 @@ fn run_entries_workflow(
         &repo_path,
         entries,
         config,
+        &runtime,
         max_attempts,
         prepare_workers,
         progress,
@@ -542,6 +588,22 @@ fn run_entries_workflow(
         &mut telemetry,
         workflow_start,
     )?;
+    let _ = record_usage(
+        &repo_path,
+        &TelemetryRunRecord {
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            selected_rule: runtime
+                .model_selection
+                .rule_applied
+                .as_ref()
+                .map(|rule| rule.as_str().to_string()),
+            success: failures.is_empty() && !commits.is_empty(),
+            latency_ms: workflow_start.elapsed().as_secs_f64() * 1000.0,
+            fallback_count: u64::from(runtime.model_selection.fallback_reason.is_some()),
+            request_count: prepared_count as u64,
+        },
+    );
 
     if commits.is_empty() && total_entries <= 1 {
         if let Some(failure) = failures.first() {
@@ -658,6 +720,7 @@ fn commit_message_for_entry(
     repo_path: &Path,
     entry: &StatusEntry,
     config: &kcmt_core::model::WorkflowConfig,
+    runtime: &WorkflowRuntime,
     max_attempts: usize,
 ) -> Result<String> {
     if entry.is_deletion() {
@@ -675,7 +738,7 @@ fn commit_message_for_entry(
             config.max_commit_length,
         ))
     } else if configured_api_key(config).is_some() {
-        invoke_provider_with_fallback(repo_path, entry, config, max_attempts)
+        invoke_provider_with_fallback(repo_path, entry, config, runtime, max_attempts)
     } else if local_synthesis_enabled() {
         Ok(heuristic_commit_message(
             &entry.path,
@@ -777,6 +840,7 @@ fn prepare_messages_for_entries(
     repo_path: &Path,
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
+    runtime: &WorkflowRuntime,
     max_attempts: usize,
     prepare_workers: usize,
     progress: WorkflowProgress,
@@ -787,6 +851,7 @@ fn prepare_messages_for_entries(
                 repo_path,
                 entries,
                 config,
+                runtime,
                 &api_key,
                 max_attempts,
                 progress,
@@ -800,7 +865,7 @@ fn prepare_messages_for_entries(
             .map(|entry| {
                 progress.queued("diff", &entry.path);
                 progress.event("llm", &entry.path);
-                match commit_message_for_entry(repo_path, &entry, config, max_attempts) {
+                match commit_message_for_entry(repo_path, &entry, config, runtime, max_attempts) {
                     Ok(message) => {
                         progress.completed(&entry.path);
                         Ok(PreparedEntry { entry, message })
@@ -823,6 +888,7 @@ fn prepare_messages_for_entries(
         repo_path,
         entries,
         config,
+        runtime,
         max_attempts,
         prepare_workers,
         progress.clone(),
@@ -838,6 +904,7 @@ fn prepare_messages_in_workers(
     repo_path: &Path,
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
+    runtime: &WorkflowRuntime,
     max_attempts: usize,
     prepare_workers: usize,
     progress: WorkflowProgress,
@@ -854,6 +921,7 @@ fn prepare_messages_in_workers(
         .map(|bucket| {
             let repo_path = repo_path.to_path_buf();
             let config = config.clone();
+            let runtime = runtime.clone();
             let progress = progress.clone();
             thread::spawn(move || {
                 bucket
@@ -865,6 +933,7 @@ fn prepare_messages_in_workers(
                             &repo_path,
                             &entry,
                             &config,
+                            &runtime,
                             max_attempts,
                         ) {
                             Ok(message) => {
@@ -904,10 +973,41 @@ fn commit_message_system_prompt(max_commit_length: usize) -> String {
     )
 }
 
+fn provider_default_model(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "claude-3-5-haiku-latest",
+        "xai" => "grok-code-fast",
+        "github" => "openai/gpt-4.1-mini",
+        _ => "gpt-5-mini-2025-08-07",
+    }
+}
+
+fn system_prompt_for_runtime(
+    runtime_context: &WorkflowRuntime,
+    max_commit_length: usize,
+) -> String {
+    if runtime_context.prompt_profile.id == "conventional"
+        || runtime_context
+            .prompt_profile
+            .system_instruction
+            .trim()
+            .is_empty()
+    {
+        commit_message_system_prompt(max_commit_length)
+    } else {
+        format!(
+            "{}\n{}",
+            commit_message_system_prompt(max_commit_length),
+            runtime_context.prompt_profile.system_instruction
+        )
+    }
+}
+
 fn prepare_provider_batch_messages(
     repo_path: &Path,
     entries: Vec<StatusEntry>,
     config: &kcmt_core::model::WorkflowConfig,
+    runtime_context: &WorkflowRuntime,
     api_key: &str,
     max_attempts: usize,
     progress: WorkflowProgress,
@@ -916,7 +1016,7 @@ fn prepare_provider_batch_messages(
     let mut batch_entries = Vec::new();
     let mut jobs = Vec::new();
     let mut telemetry = PreparationTelemetry::default();
-    let system = commit_message_system_prompt(config.max_commit_length);
+    let system = system_prompt_for_runtime(runtime_context, config.max_commit_length);
     for entry in entries {
         if entry.is_deletion() {
             let message = deletion_commit_message(&entry.path, config.max_commit_length);
@@ -942,7 +1042,7 @@ fn prepare_provider_batch_messages(
         telemetry.diff_preparation_items += 1;
         let enqueue_start = Instant::now();
         let context = format!("File: {}", entry.path);
-        let prompt = build_prompt(&diff, &context, "conventional");
+        let prompt = build_prompt_with_profile(&diff, &context, &runtime_context.prompt_profile);
         jobs.push(OpenAiBatchJob {
             custom_id: entry.path.clone(),
             messages: vec![
@@ -1124,10 +1224,18 @@ fn prepare_provider_batch_messages(
 }
 
 fn configured_api_key(config: &kcmt_core::model::WorkflowConfig) -> Option<String> {
-    env::var(&config.api_key_env)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    let candidate = ProviderCandidate {
+        provider: config.provider.clone(),
+        model: config.model.clone(),
+        endpoint: config.llm_endpoint.clone(),
+        api_key_env: config.api_key_env.clone(),
+        keychain_account: config
+            .providers
+            .get(&config.provider)
+            .and_then(|entry| entry.keychain_account.clone())
+            .unwrap_or_else(|| default_keychain_account(&config.provider)),
+    };
+    credential_for_candidate(&candidate).map(|credential| credential.0)
 }
 
 fn provider_candidates(config: &kcmt_core::model::WorkflowConfig) -> Vec<ProviderCandidate> {
@@ -1137,6 +1245,11 @@ fn provider_candidates(config: &kcmt_core::model::WorkflowConfig) -> Vec<Provide
         model: config.model.clone(),
         endpoint: config.llm_endpoint.clone(),
         api_key_env: config.api_key_env.clone(),
+        keychain_account: config
+            .providers
+            .get(&config.provider)
+            .and_then(|entry| entry.keychain_account.clone())
+            .unwrap_or_else(|| default_keychain_account(&config.provider)),
     });
     for preference in config.model_priority.iter().skip(1) {
         if preference.provider.trim().is_empty() || preference.model.trim().is_empty() {
@@ -1149,11 +1262,15 @@ fn provider_candidates(config: &kcmt_core::model::WorkflowConfig) -> Vec<Provide
         let api_key_env = entry
             .and_then(|entry| entry.api_key_env.clone())
             .unwrap_or_else(|| default_provider_api_key_env(&preference.provider).to_string());
+        let keychain_account = entry
+            .and_then(|entry| entry.keychain_account.clone())
+            .unwrap_or_else(|| default_keychain_account(&preference.provider));
         candidates.push(ProviderCandidate {
             provider: preference.provider.clone(),
             model: preference.model.clone(),
             endpoint,
             api_key_env,
+            keychain_account,
         });
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -1186,22 +1303,60 @@ fn default_provider_api_key_env(provider: &str) -> &'static str {
     }
 }
 
-fn api_key_for_env(api_key_env: &str) -> Option<String> {
-    env::var(api_key_env)
+fn credential_for_candidate(candidate: &ProviderCandidate) -> Option<(String, CredentialSource)> {
+    let explicit_provider = env::var("KCMT_EXPLICIT_API_KEY_PROVIDER").ok();
+    let explicit_secret = if explicit_provider.as_deref() == Some(candidate.provider.as_str()) {
+        env::var("KCMT_EXPLICIT_API_KEY").ok()
+    } else {
+        None
+    };
+    let request = CredentialRequest {
+        provider: candidate.provider.clone(),
+        explicit_secret,
+        keychain_account: Some(candidate.keychain_account.clone()),
+        env_var: candidate.api_key_env.clone(),
+    };
+    resolve_credential(&request, &OsKeychainStore)
         .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+        .flatten()
+        .map(|credential| (credential.secret, credential.source))
+}
+
+fn available_providers(config: &kcmt_core::model::WorkflowConfig) -> Vec<String> {
+    provider_candidates(config)
+        .into_iter()
+        .filter(|candidate| credential_for_candidate(candidate).is_some())
+        .map(|candidate| candidate.provider)
+        .collect()
+}
+
+fn selected_workflow_config(
+    config: &kcmt_core::model::WorkflowConfig,
+    selection: &ModelSelection,
+) -> kcmt_core::model::WorkflowConfig {
+    let mut selected = config.clone();
+    selected.provider = selection.provider.clone();
+    selected.model = selection.model.clone();
+    if let Some(candidate) = provider_candidates(config)
+        .into_iter()
+        .find(|candidate| candidate.provider == selection.provider)
+    {
+        selected.llm_endpoint = candidate.endpoint;
+        selected.api_key_env = candidate.api_key_env;
+    }
+    selected
 }
 
 fn invoke_provider_with_fallback(
     repo_path: &Path,
     entry: &StatusEntry,
     config: &kcmt_core::model::WorkflowConfig,
+    runtime_context: &WorkflowRuntime,
     max_attempts: usize,
 ) -> Result<String> {
     let mut last_error = None;
     for candidate in provider_candidates(config) {
-        let Some(api_key) = api_key_for_env(&candidate.api_key_env) else {
+        let Some((api_key, _source)) = credential_for_candidate(&candidate) else {
             continue;
         };
         match invoke_provider_candidate(
@@ -1209,6 +1364,7 @@ fn invoke_provider_with_fallback(
             entry,
             &candidate,
             &api_key,
+            runtime_context,
             max_attempts,
             config.max_commit_length,
         )
@@ -1231,13 +1387,14 @@ fn invoke_provider_candidate(
     entry: &StatusEntry,
     candidate: &ProviderCandidate,
     api_key: &str,
+    runtime_context: &WorkflowRuntime,
     max_attempts: usize,
     max_commit_length: usize,
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
-    let prompt = build_prompt(&diff, &context, "conventional");
-    let system = commit_message_system_prompt(max_commit_length);
+    let prompt = build_prompt_with_profile(&diff, &context, &runtime_context.prompt_profile);
+    let system = system_prompt_for_runtime(runtime_context, max_commit_length);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
