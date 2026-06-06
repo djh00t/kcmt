@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -72,8 +73,14 @@ fn configure_writes_python_compatible_config_file() {
         config["providers"]["anthropic"]["api_key_env"],
         "ANTHROPIC_TEST_KEY"
     );
+    assert_eq!(
+        config["providers"]["anthropic"]["keychain_account"],
+        "provider/anthropic/default"
+    );
     assert_eq!(config["model_priority"][0]["provider"], "anthropic");
     assert_eq!(config["model_priority"][0]["model"], "claude-test");
+    let rendered = serde_json::to_string(&config).expect("config serializes");
+    assert!(!rendered.contains("secret"));
 }
 
 #[test]
@@ -432,4 +439,44 @@ fn verify_keys_prints_provider_env_presence() {
     assert!(stdout.contains("anthropic\tANTHROPIC_API_KEY\tno\t-"));
     assert!(stdout.contains("xai\tXAI_API_KEY\tno\t-"));
     assert!(stdout.contains("github\tGITHUB_TOKEN\tno\t-"));
+}
+
+#[test]
+fn save_api_key_respects_disabled_keychain_without_printing_secret() {
+    let config_home = unique_temp_dir("home");
+    let repo = unique_temp_dir("repo");
+    let secret = "linux-unavailable-secret";
+
+    let mut child = kcmt_command()
+        .env("KCMT_CONFIG_HOME", &config_home)
+        .args([
+            "--configure",
+            "--provider",
+            "anthropic",
+            "--api-key-stdin",
+            "--save-api-key",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("kcmt configure should spawn");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(secret.as_bytes())
+        .expect("secret written");
+    let output = child
+        .wait_with_output()
+        .expect("kcmt configure should exit");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("OS keychain access is disabled by KCMT_DISABLE_KEYCHAIN"));
+    assert!(!stdout.contains(secret));
+    assert!(!stderr.contains(secret));
 }

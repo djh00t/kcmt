@@ -1119,6 +1119,7 @@ fn runtime_benchmark_env(config_home: &Path, runtime: RuntimeKind) -> Vec<(Strin
             "OPENAI_API_KEY".to_string(),
             "kcmt-runtime-benchmark".to_string(),
         ),
+        ("KCMT_DISABLE_KEYCHAIN".to_string(), "1".to_string()),
         ("KCMT_RUNTIME_BENCHMARK".to_string(), "1".to_string()),
         ("KCMT_ALLOW_LOCAL_SYNTHESIS".to_string(), "1".to_string()),
         (

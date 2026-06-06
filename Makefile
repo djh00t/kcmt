@@ -32,6 +32,7 @@ PACKAGE_NAME = kcmt
 PYTHON = python3
 UV = uv
 PYTEST = $(UV) run pytest
+TEST_ENV = KCMT_DISABLE_KEYCHAIN=1
 PYPI_TOKEN ?=
 TEST_PYPI_TOKEN ?=
 TWINE_USER ?= __token__
@@ -69,25 +70,25 @@ ruff-fix:
 
 # Testing
 test:
-	$(PYTEST) -q
+	$(TEST_ENV) $(PYTEST) -q
 
 test-ink:
 	npm --prefix kcmt/ui/ink test
 
 test-rust:
-	cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
+	$(TEST_ENV) cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
 
 test-llm-matrix:
 	KCMT_LIVE_LLM_MATRIX=1 cargo test --locked --manifest-path rust/Cargo.toml -p kcmt-cli --test live_llm_matrix -- --ignored --nocapture
 
 test-verbose:
-	$(PYTEST) -v
+	$(TEST_ENV) $(PYTEST) -v
 
 test-strict:
-	$(PYTEST) -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers tests
+	$(TEST_ENV) $(PYTEST) -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers tests
 
 coverage:
-	$(PYTEST) --cov=$(PACKAGE_NAME) --cov-report=html --cov-report=term
+	$(TEST_ENV) $(PYTEST) --cov=$(PACKAGE_NAME) --cov-report=html --cov-report=term
 
 # Type checking
 typecheck:

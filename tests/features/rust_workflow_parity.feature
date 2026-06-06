@@ -183,6 +183,12 @@ Feature: Rust workflow parity
     And the Rust configuration file contains the Anthropic configure-all provider settings
     And the Rust preferences file contains default selector preferences
 
+  Scenario: Rust configure keeps saved credential input secret-free
+    Given an empty runtime configuration home
+    When the Rust kcmt command tries to save an Anthropic API key from stdin
+    Then the keychain save response does not print the API key
+    And no saved configuration file contains the API key
+
   Scenario: Anthropic latest Haiku rule selects the Haiku model
     Given a git repository with one changed tracked file and Anthropic latest Haiku preferences
     When the Rust kcmt command commits the file with Anthropic preferences

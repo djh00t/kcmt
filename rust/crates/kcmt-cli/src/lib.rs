@@ -10,7 +10,10 @@ use std::time::Instant;
 
 use kcmt_core::config::loader::ConfigOverrides;
 use kcmt_core::git::repo::find_git_repo_root;
-use kcmt_core::preferences::{default_keychain_account, OsKeychainStore, SecretStore};
+use kcmt_core::preferences::{
+    default_keychain_account, save_keychain_secret, KeychainProtection, KeychainSaveMode,
+    OsKeychainStore,
+};
 
 use args::{CliArgs, CliCommand, StatusArgs};
 use commands::configure::ConfigureMode;
@@ -135,11 +138,31 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             };
             let provider = args.provider.as_deref().unwrap_or("openai");
             let account = default_keychain_account(provider);
-            if let Err(err) = OsKeychainStore.set_secret(&account, api_key) {
-                eprintln!("failed to save API key to OS keychain: {err}");
-                return 1;
+            let mode = if args.no_biometric_keychain {
+                KeychainSaveMode::PlatformDefault
+            } else {
+                KeychainSaveMode::BiometricPreferred
+            };
+            let save_result = match save_keychain_secret(&OsKeychainStore, &account, api_key, mode)
+            {
+                Ok(result) => result,
+                Err(err) => {
+                    eprintln!("failed to save API key to OS keychain: {err}");
+                    return 1;
+                }
+            };
+            let protection = match save_result.protection {
+                KeychainProtection::BiometricPreferred => {
+                    "biometric authentication preferred where supported"
+                }
+                KeychainProtection::PlatformDefault => "platform-default keychain protection",
+            };
+            println!(
+                "Saved {provider} credentials to OS keychain account {account} ({protection})"
+            );
+            if let Some(reason) = save_result.fallback_reason {
+                eprintln!("biometric-preferred keychain save unavailable; used platform default: {reason}");
             }
-            println!("Saved {provider} credentials to OS keychain account {account}");
         }
         let mode = if args.configure_all {
             ConfigureMode::All
