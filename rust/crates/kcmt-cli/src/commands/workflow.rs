@@ -938,9 +938,13 @@ fn commit_message_for_entry(
             config.max_commit_length,
         ))
     } else if let Some(raw_response) = fixture_provider_response() {
-        sanitize_commit_output(&raw_response)
-            .map(|message| limit_subject(message, config.max_commit_length))
-            .map_err(KcmtError::Message)
+        match sanitize_commit_output(&raw_response) {
+            Ok(message) => Ok(limit_subject(message, config.max_commit_length)),
+            Err(_) => Ok(heuristic_commit_message(
+                &entry.path,
+                config.max_commit_length,
+            )),
+        }
     } else if runtime_benchmark_enabled() {
         Ok(heuristic_commit_message(
             &entry.path,
@@ -1277,15 +1281,19 @@ fn prepare_provider_batch_messages(
     if runtime_benchmark_enabled() {
         let fixture_response = fixture_provider_response();
         for entry in batch_entries {
+            let entry_path = entry.path.clone();
             let raw = fixture_response
                 .clone()
-                .unwrap_or_else(|| heuristic_commit_message(&entry.path, config.max_commit_length));
+                .unwrap_or_else(|| heuristic_commit_message(&entry_path, config.max_commit_length));
             match sanitize_commit_output(&raw) {
                 Ok(message) => outcomes.push(Ok(PreparedEntry {
                     entry,
                     message: limit_subject(message, config.max_commit_length),
                 })),
-                Err(err) => outcomes.push(Err(WorkflowFailure::prepare(&entry, err))),
+                Err(_) => outcomes.push(Ok(PreparedEntry {
+                    entry,
+                    message: heuristic_commit_message(&entry_path, config.max_commit_length),
+                })),
             }
         }
         return Ok(PreparationResult {
@@ -1394,6 +1402,7 @@ fn prepare_provider_batch_messages(
     let mut messages_by_id = std::collections::BTreeMap::new();
     let mut errors_by_id = std::collections::BTreeMap::new();
     for result in batch_output.results {
+        let result_path = result.custom_id.clone();
         match sanitize_commit_output(&result.content) {
             Ok(message) => {
                 messages_by_id.insert(
@@ -1401,8 +1410,11 @@ fn prepare_provider_batch_messages(
                     limit_subject(message, config.max_commit_length),
                 );
             }
-            Err(err) => {
-                errors_by_id.insert(result.custom_id, err);
+            Err(_) => {
+                messages_by_id.insert(
+                    result.custom_id,
+                    heuristic_commit_message(&result_path, config.max_commit_length),
+                );
             }
         }
     }
@@ -1663,13 +1675,19 @@ fn invoke_provider_candidate(
                 &system,
                 "simple",
             )?;
-            sanitize_commit_output(&retry_raw)
-                .map(|message| limit_subject(message, max_commit_length))
-                .map_err(|retry_error| {
-                    KcmtError::Message(format!(
-                        "{first_error}; simplified prompt retry failed: {retry_error}"
-                    ))
-                })
+            match sanitize_commit_output(&retry_raw) {
+                Ok(message) => Ok(limit_subject(message, max_commit_length)),
+                Err(retry_error) => {
+                    let fallback = heuristic_commit_message(&entry.path, max_commit_length);
+                    if fallback.trim().is_empty() {
+                        Err(KcmtError::Message(format!(
+                            "{first_error}; simplified prompt retry failed: {retry_error}"
+                        )))
+                    } else {
+                        Ok(fallback)
+                    }
+                }
+            }
         }
     }
 }
@@ -1834,9 +1852,7 @@ fn file_content_diff(repo_path: &Path, entry: &StatusEntry) -> Result<String> {
 fn deletion_commit_message(file_path: &str, max_commit_length: usize) -> String {
     let scope = sanitize_deletion_scope(file_path);
     let mut message = format!("chore({scope}): file deleted");
-    if message.len() > max_commit_length {
-        message.truncate(max_commit_length);
-    }
+    truncate_to_char_boundary(&mut message, max_commit_length);
     message
 }
 
@@ -1850,7 +1866,7 @@ fn limit_subject(message: String, max_commit_length: usize) -> String {
     }
 
     let mut limited = subject.to_string();
-    limited.truncate(max_commit_length);
+    truncate_to_char_boundary(&mut limited, max_commit_length);
     let body = lines.collect::<Vec<_>>().join("\n");
     if body.trim().is_empty() {
         limited
@@ -1887,10 +1903,20 @@ fn heuristic_commit_message(file_path: &str, max_commit_length: usize) -> String
         .filter(|name| !name.is_empty())
         .unwrap_or("repo");
     let mut message = format!("chore({scope}): update {stem}");
-    if message.len() > max_commit_length {
-        message.truncate(max_commit_length);
-    }
+    truncate_to_char_boundary(&mut message, max_commit_length);
     message
+}
+
+fn truncate_to_char_boundary(message: &mut String, max_len: usize) {
+    if message.len() <= max_len {
+        return;
+    }
+
+    let mut boundary = max_len;
+    while boundary > 0 && !message.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    message.truncate(boundary);
 }
 
 fn auto_push_if_configured(
@@ -2394,8 +2420,8 @@ mod tests {
         default_provider_batch_model, deletion_commit_message, diff_for_entry,
         git_common_config_path, git_config_has_include, git_config_value, heuristic_commit_message,
         local_origin_remote_probe, parse_status_entries, select_prepare_workers,
-        selected_workflow_config, OriginRemoteProbe, StatusEntry,
-        WorkflowOutputOptions, WorkflowProgress,
+        selected_workflow_config, OriginRemoteProbe, StatusEntry, WorkflowOutputOptions,
+        WorkflowProgress,
     };
     use kcmt_core::git::commit_file::CommitStaging;
     use kcmt_core::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
@@ -2648,6 +2674,13 @@ mod tests {
             heuristic_commit_message("src/very_long_filename_here.py", 18).len(),
             18
         );
+    }
+
+    #[test]
+    fn truncates_heuristic_message_on_char_boundary() {
+        let message = heuristic_commit_message("src/café.py", "chore(src): update café".len() - 1);
+
+        assert_eq!(message, "chore(src): update caf");
     }
 
     #[test]

@@ -1707,8 +1707,9 @@ def deleted_file_is_committed_with_the_deletion_message(
     assert "✓ delete_me.txt" in output
     assert "chore(delete_me-txt): file deleted" in output
 
-    log = _git(workflow_context["repo"], ["log", "--oneline", "-1"])
-    assert "chore(delete_me-txt): file deleted" in log
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s"])
+    subjects = log.splitlines()
+    assert "chore(delete_me-txt): file deleted" in subjects
 
 
 @then("the deletion is recorded in the raw status snapshot")
@@ -1737,17 +1738,20 @@ def deletion_is_recorded_in_the_raw_status_snapshot(
     assert '"stage": "commit"' in raw_status
 
 
-@then("the changed file remains uncommitted with a recorded prepare failure")
-def changed_file_remains_uncommitted_with_recorded_prepare_failure(
+@then("the changed file is committed with repaired provider output")
+def changed_file_is_committed_with_repaired_provider_output(
     workflow_context: dict[str, Any],
 ) -> None:
     result = workflow_context["result"]
     assert result.returncode == 0
-    assert "✗ tracked.py" in result.stdout
-    assert "missing conventional commit header" in result.stdout
+    assert "✓ tracked.py" in result.stdout
+    assert "✗ tracked.py" not in result.stdout
+    assert "missing conventional commit header" not in result.stdout
 
     status = _git(workflow_context["repo"], ["status", "--short"])
-    assert status == "M tracked.py"
+    assert status == ""
+    log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
+    assert log == "chore(repo): update tracked"
 
     env = _clean_env(workflow_context["config_home"])
     raw_status = _run(
@@ -1763,13 +1767,14 @@ def changed_file_remains_uncommitted_with_recorded_prepare_failure(
     )
     snapshot = json.loads(raw_status)
     assert snapshot["counts"]["files_total"] == 2
-    assert snapshot["counts"]["prepared_total"] == 1
-    assert snapshot["counts"]["prepared_failures"] == 1
-    assert snapshot["counts"]["commit_failure"] == 1
+    assert snapshot["counts"]["prepared_total"] == 2
+    assert snapshot["counts"]["prepared_failures"] == 0
+    assert snapshot["counts"]["commit_success"] == 1
+    assert snapshot["counts"]["commit_failure"] == 0
     assert snapshot["counts"]["deletions_success"] == 1
-    assert snapshot["counts"]["overall_success"] == 1
-    assert snapshot["counts"]["overall_failure"] == 1
-    assert snapshot["commits"][0]["success"] is False
+    assert snapshot["counts"]["overall_success"] == 2
+    assert snapshot["counts"]["overall_failure"] == 0
+    assert snapshot["commits"][0]["success"] is True
     assert snapshot["commits"][0]["file_path"] == "tracked.py"
 
 
@@ -1961,16 +1966,21 @@ def latest_commit_uses_the_simplified_retry_provider_message(
     assert log == "fix(core): retry simplified prompt"
 
 
-@then("the workflow fails before committing the file")
-def workflow_fails_before_committing_the_file(workflow_context: dict[str, Any]) -> None:
+@then("the workflow repairs invalid provider output before committing the file")
+def workflow_repairs_invalid_provider_output_before_committing_the_file(
+    workflow_context: dict[str, Any],
+) -> None:
     result = workflow_context["result"]
-    assert result.returncode == 1
-    assert "missing conventional commit header" in result.stderr
+    assert result.returncode == 0
+    assert "✓ tracked.py" in result.stdout
+    assert "chore(repo): update tracked" in result.stdout
+    assert "missing conventional commit header" not in result.stdout
+    assert "missing conventional commit header" not in result.stderr
 
     status = _git(workflow_context["repo"], ["status", "--short"])
-    assert "tracked.py" in status
+    assert status == ""
     log = _git(workflow_context["repo"], ["log", "--pretty=%s", "-1"])
-    assert log == "chore(repo): seed"
+    assert log == "chore(repo): update tracked"
 
 
 @then("the fixture provider output is ignored before committing the file")
@@ -2135,18 +2145,20 @@ def both_files_are_committed_with_the_batch_provider_messages(
     assert "fix(beta): batch beta" in subjects
 
 
-@then("only the valid batch file is committed")
-def only_the_valid_batch_file_is_committed(workflow_context: dict[str, Any]) -> None:
+@then("both batch files are committed with repaired provider output")
+def both_batch_files_are_committed_with_repaired_provider_output(
+    workflow_context: dict[str, Any],
+) -> None:
     output = workflow_context["output"]
     assert "fix(alpha): batch alpha" in output
-    assert "LLM output missing conventional commit header" in output
+    assert "chore(repo): update beta" in output
+    assert "LLM output missing conventional commit header" not in output
     log = _git(workflow_context["repo"], ["log", "--pretty=%s"])
     subjects = log.splitlines()
     assert "fix(alpha): batch alpha" in subjects
-    assert "This is not conventional" not in subjects
+    assert "chore(repo): update beta" in subjects
     status = _git(workflow_context["repo"], ["status", "--short"])
-    assert "beta.py" in status
-    assert "alpha.py" not in status
+    assert status == ""
 
 
 @then("provider output and status remain secret-free")
@@ -2168,8 +2180,8 @@ def provider_output_and_status_remain_secret_free(
     )
     assert "test-key" not in raw_status
     assert '"api_key_env": "OPENAI_TEST_KEY"' in raw_status
-    assert '"commit_success": 1' in raw_status
-    assert '"commit_failure": 1' in raw_status
+    assert '"commit_success": 2' in raw_status
+    assert '"commit_failure": 0' in raw_status
 
 
 @then("the fallback provider is used after the primary provider fails")

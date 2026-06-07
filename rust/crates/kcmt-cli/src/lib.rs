@@ -196,7 +196,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             commands::benchmark::run_benchmark_command(repo_path, benchmark)
         }
         None => {
-            let workflow_tui_active = match prepare_workflow_tui(&args) {
+            let workflow_tui_interactive = kcmt_tui::should_enable_tui(false);
+            let workflow_tui_active = match prepare_workflow_tui(&args, workflow_tui_interactive) {
                 Ok(active) => active,
                 Err(code) => return code,
             };
@@ -214,6 +215,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
                 output_options.tui = workflow_tui_active;
+                output_options.tui_model_export =
+                    workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
                 add_dispatch_telemetry(
                     &mut output_options,
                     &repo_discovery,
@@ -250,6 +253,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
                 output_options.tui = workflow_tui_active;
+                output_options.tui_model_export =
+                    workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
                 add_dispatch_telemetry(
                     &mut output_options,
                     &repo_discovery,
@@ -284,6 +289,8 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             let overrides = config_overrides(&args, repo_path.clone());
             let mut output_options = output_options(&args);
             output_options.tui = workflow_tui_active;
+            output_options.tui_model_export =
+                workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
             add_dispatch_telemetry(
                 &mut output_options,
                 &repo_discovery,
@@ -304,22 +311,33 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
     }
 }
 
-fn prepare_workflow_tui(args: &CliArgs) -> std::result::Result<bool, i32> {
-    if !args.tui {
+fn prepare_workflow_tui(
+    args: &CliArgs,
+    interactive_terminal: bool,
+) -> std::result::Result<bool, i32> {
+    if !workflow_tui_requested(
+        args,
+        interactive_terminal,
+        env_truthy("KCMT_TUI_MODEL_EXPORT"),
+    )? {
         return Ok(false);
     }
-    if env_truthy("KCMT_TUI_MODEL_EXPORT") {
-        persist_tui_last_screen("workflow");
-        return Ok(true);
+    persist_tui_last_screen("workflow");
+    Ok(true)
+}
+
+fn workflow_tui_requested(
+    args: &CliArgs,
+    interactive_terminal: bool,
+    allow_headless_export: bool,
+) -> std::result::Result<bool, i32> {
+    if args.tui && !interactive_terminal && !allow_headless_export {
+        eprintln!(
+            "--tui workflow mode requires an interactive terminal; omit --tui for non-interactive CLI use"
+        );
+        return Err(1);
     }
-    if kcmt_tui::should_enable_tui(false) {
-        persist_tui_last_screen("workflow");
-        return Ok(true);
-    }
-    eprintln!(
-        "--tui workflow mode requires an interactive terminal; omit --tui for non-interactive CLI use"
-    );
-    Err(1)
+    Ok(interactive_terminal || args.tui)
 }
 
 fn persist_tui_last_screen(screen: &str) {
@@ -339,6 +357,41 @@ fn env_truthy(key: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{workflow_tui_requested, CliArgs};
+
+    #[test]
+    fn workflow_tui_defaults_to_enabled_when_terminal_is_interactive() {
+        let args = CliArgs::parse_from(["kcmt"]);
+
+        let active = workflow_tui_requested(&args, true, false).expect("interactive workflow");
+
+        assert!(active);
+    }
+
+    #[test]
+    fn workflow_tui_stays_disabled_when_terminal_is_not_interactive() {
+        let args = CliArgs::parse_from(["kcmt"]);
+
+        let active = workflow_tui_requested(&args, false, false).expect("non-interactive workflow");
+
+        assert!(!active);
+    }
+
+    #[test]
+    fn workflow_tui_rejects_explicit_tui_without_interactive_terminal() {
+        let mut args = CliArgs::parse_from(["kcmt"]);
+        args.tui = true;
+
+        let err = workflow_tui_requested(&args, false, false).expect_err("non-interactive tui");
+
+        assert_eq!(err, 1);
+    }
 }
 
 fn read_secret_from_stdin() -> Option<String> {

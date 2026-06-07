@@ -369,7 +369,10 @@ fn run_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigureTuiOutcome, ConfigureTuiState, WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiState};
+    use super::{
+        ConfigureTuiOutcome, ConfigureTuiState, WorkflowTuiContext, WorkflowTuiEvent,
+        WorkflowTuiState,
+    };
 
     fn context(total_files: usize) -> WorkflowTuiContext {
         WorkflowTuiContext {

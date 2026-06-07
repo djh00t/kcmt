@@ -67,16 +67,16 @@ Feature: Rust workflow parity
     Then the mocked provider receives a simplified retry prompt
     And the latest commit uses the simplified retry provider message
 
-  Scenario: File workflow rejects invalid provider output
+  Scenario: File workflow repairs invalid provider output
     Given a git repository with one changed tracked file
     When the Rust kcmt command receives invalid provider output
-    Then the workflow fails before committing the file
+    Then the workflow repairs invalid provider output before committing the file
 
-  Scenario: Default workflow records per-file failure without blocking other commits
+  Scenario: Default workflow repairs invalid provider output without blocking other commits
     Given a git repository with one deleted tracked file and one changed tracked file
     When the Rust kcmt command runs default mode with invalid provider output
     Then the deleted file is committed with the deletion message
-    And the changed file remains uncommitted with a recorded prepare failure
+    And the changed file is committed with repaired provider output
 
   Scenario: Provider response fixture requires explicit opt in
     Given a git repository with one changed tracked file
@@ -107,11 +107,11 @@ Feature: Rust workflow parity
     Then the batch provider receives both file prompts before commits are written
     And both files are committed with the batch provider messages
 
-  Scenario: Default OpenAI batch reports partial invalid provider output
+  Scenario: Default OpenAI batch repairs partial invalid provider output
     Given a git repository with two changed tracked files and a partially invalid OpenAI batch provider
     When the Rust kcmt command runs in default batch mode
     Then the batch provider receives both file prompts before commits are written
-    And only the valid batch file is committed
+    And both batch files are committed with repaired provider output
     And provider output and status remain secret-free
 
   Scenario: Default xAI batch queues all file prompts before committing
