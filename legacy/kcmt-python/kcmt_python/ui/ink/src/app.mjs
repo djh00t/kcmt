@@ -6,7 +6,7 @@ import {createBackendClient} from './backend-client.mjs';
 import WorkflowView from './components/workflow-view.mjs';
 import {AppContext} from './app-context.mjs';
 
-// The Python wrapper invokes: `node index.mjs -- <kcmt args...>`.
+// The Python wrapper invokes: `node index.mjs -- <kcmt-python args...>`.
 // `minimist` treats `--` as end-of-options, so we must strip it first.
 const rawArgs = process.argv.slice(2);
 const dashDashIndex = rawArgs.indexOf('--');
@@ -31,7 +31,7 @@ const ErrorScreen = ({message}) =>
   h(
     Box,
     {flexDirection: 'column', padding: 1, borderStyle: 'round', borderColor: 'red'},
-    h(Text, null, gradientBanner('🚀 kcmt')),
+    h(Text, null, gradientBanner('🚀 kcmt-python')),
     h(Text, {dimColor: true}, 'Mode: TUI (Ink)'),
     h(Text, {color: 'redBright'}, `✖ ${message}`),
     h(Text, {dimColor: true}, 'Press Ctrl+C to exit.'),
@@ -138,11 +138,11 @@ export default function App() {
   }, [view]);
 
   if (status === 'error') {
-    return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt backend'});
+    return h(ErrorScreen, {message: error?.message || 'Failed to start kcmt-python backend'});
   }
 
   if (viewError) {
-    return h(ErrorScreen, {message: viewError.message || 'Failed to load kcmt UI'});
+    return h(ErrorScreen, {message: viewError.message || 'Failed to load kcmt-python UI'});
   }
 
   if (!viewComponent) {

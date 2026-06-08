@@ -485,6 +485,7 @@ pub fn run_file_workflow(
         telemetry,
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
+        overrides.model.is_some(),
         output_options,
         workflow_start,
     )
@@ -520,6 +521,7 @@ pub fn run_oneshot_workflow(
         telemetry,
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
+        overrides.model.is_some(),
         output_options,
         workflow_start,
     )
@@ -554,6 +556,7 @@ pub fn run_default_workflow(
         telemetry,
         max_attempts_from_retries(overrides.max_retries),
         overrides.prepare_workers,
+        overrides.model.is_some(),
         output_options,
         workflow_start,
     )
@@ -574,6 +577,7 @@ fn run_entries_workflow(
     mut telemetry: WorkflowTelemetry,
     max_attempts: usize,
     prepare_workers_override: Option<usize>,
+    explicit_model_override: bool,
     output_options: WorkflowOutputOptions,
     workflow_start: Instant,
 ) -> Result<String> {
@@ -592,8 +596,9 @@ fn run_entries_workflow(
         &usage_summary,
         &available,
     );
-    if !preferences.provider_rules.contains_key(&config.provider)
-        && config.model != provider_default_model(&config.provider)
+    if explicit_model_override
+        || (!preferences.provider_rules.contains_key(&config.provider)
+            && config.model != provider_default_model(&config.provider))
     {
         model_selection = ModelSelection {
             provider: config.provider.clone(),
@@ -1207,7 +1212,7 @@ fn provider_default_model(provider: &str) -> &'static str {
         "anthropic" => "claude-3-5-haiku-latest",
         "xai" => "grok-code-fast",
         "github" => "openai/gpt-4.1-mini",
-        _ => "gpt-5-mini-2025-08-07",
+        _ => "gpt-5.4-mini",
     }
 }
 
@@ -1602,7 +1607,7 @@ fn selected_workflow_config(
 
 fn default_provider_batch_model(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("gpt-5-mini-2025-08-07"),
+        "openai" => Some("gpt-5.4-mini"),
         "xai" => Some("grok-4.3"),
         _ => None,
     }
@@ -2720,7 +2725,7 @@ mod tests {
             ProviderConfigEntry {
                 endpoint: Some("https://api.openai.com/v1".to_string()),
                 api_key_env: Some("OPENAI_TEST_KEY".to_string()),
-                preferred_model: Some("gpt-5-mini-2025-08-07".to_string()),
+                preferred_model: Some("gpt-5.4-mini".to_string()),
                 ..ProviderConfigEntry::default()
             },
         );
@@ -2735,16 +2740,16 @@ mod tests {
         );
         let config = WorkflowConfig {
             provider: "openai".to_string(),
-            model: "gpt-5-mini-2025-08-07".to_string(),
+            model: "gpt-5.4-mini".to_string(),
             llm_endpoint: "https://api.openai.com/v1".to_string(),
             api_key_env: "OPENAI_TEST_KEY".to_string(),
             use_batch: true,
-            batch_model: Some("gpt-5-mini-2025-08-07".to_string()),
+            batch_model: Some("gpt-5.4-mini".to_string()),
             providers,
             model_priority: vec![
                 ModelPreference {
                     provider: "openai".to_string(),
-                    model: "gpt-5-mini-2025-08-07".to_string(),
+                    model: "gpt-5.4-mini".to_string(),
                 },
                 ModelPreference {
                     provider: "xai".to_string(),
@@ -2774,11 +2779,11 @@ mod tests {
     fn selected_workflow_config_disables_batch_for_non_batch_provider_selection() {
         let config = WorkflowConfig {
             provider: "openai".to_string(),
-            model: "gpt-5-mini-2025-08-07".to_string(),
+            model: "gpt-5.4-mini".to_string(),
             llm_endpoint: "https://api.openai.com/v1".to_string(),
             api_key_env: "OPENAI_TEST_KEY".to_string(),
             use_batch: true,
-            batch_model: Some("gpt-5-mini-2025-08-07".to_string()),
+            batch_model: Some("gpt-5.4-mini".to_string()),
             ..WorkflowConfig::default()
         };
         let selection = ModelSelection {

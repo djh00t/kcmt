@@ -824,21 +824,21 @@ fn runtime_benchmark_scenarios(
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:status-repo-path"),
             workflow_contract_id: "status-repo-path",
-            command_label: "kcmt status --repo-path <repo>".to_string(),
+            command_label: "kcmt-python status --repo-path <repo>".to_string(),
             expected_stdout_fragments: &["Commit status"],
             file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:oneshot-repo-path"),
             workflow_contract_id: "oneshot-repo-path",
-            command_label: "kcmt --oneshot --repo-path <repo>".to_string(),
+            command_label: "kcmt-python --oneshot --repo-path <repo>".to_string(),
             expected_stdout_fragments: &["✓ "],
             file_target: None,
         },
         RuntimeScenario {
             scenario_id: format!("{corpus_id}:file-repo-path"),
             workflow_contract_id: "file-repo-path",
-            command_label: format!("kcmt --file {target} --repo-path <repo>"),
+            command_label: format!("kcmt-python --file {target} --repo-path <repo>"),
             expected_stdout_fragments: &["✓ "],
             file_target: Some(target),
         },
@@ -849,7 +849,7 @@ fn runtime_benchmark_scenarios(
             RuntimeScenario {
                 scenario_id: format!("{corpus_id}:default-repo-path"),
                 workflow_contract_id: "default-repo-path",
-                command_label: "kcmt --repo-path <repo>".to_string(),
+                command_label: "kcmt-python --repo-path <repo>".to_string(),
                 expected_stdout_fragments: &["✓ ", "Committed "],
                 file_target: None,
             },
@@ -860,7 +860,7 @@ fn runtime_benchmark_scenarios(
             scenarios.push(RuntimeScenario {
                 scenario_id: format!("{corpus_id}:file-{}", file_target.id),
                 workflow_contract_id: "file-repo-path",
-                command_label: format!("kcmt --file {} --repo-path <repo>", file_target.path),
+                command_label: format!("kcmt-python --file {} --repo-path <repo>", file_target.path),
                 expected_stdout_fragments: &["✓ "],
                 file_target: Some(file_target.path),
             });
@@ -1170,7 +1170,7 @@ fn prepare_status_snapshot(
     let scenario = RuntimeScenario {
         scenario_id: "prep:file-repo-path".to_string(),
         workflow_contract_id: "file-repo-path",
-        command_label: format!("kcmt --file {target} --repo-path <repo>"),
+        command_label: format!("kcmt-python --file {target} --repo-path <repo>"),
         expected_stdout_fragments: &["✓ "],
         file_target: Some(target),
     };
@@ -1202,7 +1202,7 @@ fn scenario_command(
             let mut command = python_command
                 .ok_or_else(|| anyhow::anyhow!("Python runtime executable is unavailable"))?
                 .to_vec();
-            command.extend(["-m".to_string(), "kcmt.main".to_string()]);
+            command.extend(["-m".to_string(), "kcmt_python.main".to_string()]);
             command
         }
         RuntimeKind::Rust => vec![rust_bin

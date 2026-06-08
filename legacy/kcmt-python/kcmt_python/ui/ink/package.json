@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
-  "description": "Ink-based interactive UI for kcmt",
+  "description": "Ink-based interactive UI for kcmt-python",
   "scripts": {
     "test": "node --test src/components/workflow-progress-model.test.mjs"
   },

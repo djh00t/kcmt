@@ -1,4 +1,4 @@
-"""LLM integration for kcmt.
+"""LLM integration for kcmt-python.
 
 Enhancements (2025-09-22):
  - Added `KCMT_LLM_REQUEST_TIMEOUT` env var for per-request HTTP timeout.
@@ -30,7 +30,7 @@ from .providers.base import BaseDriver, resolve_default_request_timeout
 from .providers.openai_driver import OpenAIDriver
 from .providers.xai_driver import XAIDriver
 
-# Compatibility shim for older tests that expect kcmt.llm.OpenAI
+# Compatibility shim for older tests that expect kcmt_python.llm.OpenAI
 # to be available for monkeypatching. We avoid importing openai at
 # module import time unless necessary.
 _openai: OpenAIModule | None = import_openai()

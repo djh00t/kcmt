@@ -1,7 +1,7 @@
 import os
 
-from kcmt.config import Config, clear_active_config, set_active_config
-from kcmt.core import KlingonCMTWorkflow
+from kcmt_python.config import Config, clear_active_config, set_active_config
+from kcmt_python.core import KlingonCMTWorkflow
 
 
 def test_deletion_only_commit(tmp_path, monkeypatch):
@@ -29,7 +29,7 @@ def test_deletion_only_commit(tmp_path, monkeypatch):
     def identity(self, message):  # noqa: D401, ARG002
         return message
 
-    from kcmt.commit import CommitGenerator as CG
+    from kcmt_python.commit import CommitGenerator as CG
 
     monkeypatch.setattr(CG, "validate_and_fix_commit_message", identity)
 

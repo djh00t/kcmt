@@ -34,8 +34,8 @@ def test_untracked_directory_files_committed(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     _add_repo_to_sys_path(Path.cwd())
-    from kcmt import commit as commit_module  # type: ignore
-    from kcmt.core import KlingonCMTWorkflow  # type: ignore
+    from kcmt_python import commit as commit_module  # type: ignore
+    from kcmt_python.core import KlingonCMTWorkflow  # type: ignore
 
     def fake_generate(
         _diff: str, context: str = "", style: str = "conventional"
@@ -80,9 +80,9 @@ def test_untracked_files_skip_per_file_git_diff(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     _add_repo_to_sys_path(Path.cwd())
-    from kcmt import commit as commit_module  # type: ignore
-    from kcmt.core import KlingonCMTWorkflow  # type: ignore
-    from kcmt.git import GitRepo  # type: ignore
+    from kcmt_python import commit as commit_module  # type: ignore
+    from kcmt_python.core import KlingonCMTWorkflow  # type: ignore
+    from kcmt_python.git import GitRepo  # type: ignore
 
     def fake_generate(
         _diff: str, context: str = "", style: str = "conventional"

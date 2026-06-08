@@ -1,9 +1,9 @@
 import os
 import subprocess
 
-from kcmt.commit import CommitGenerator
-from kcmt.config import Config, set_active_config
-from kcmt.exceptions import LLMError
+from kcmt_python.commit import CommitGenerator
+from kcmt_python.config import Config, set_active_config
+from kcmt_python.exceptions import LLMError
 
 
 def test_deletion_diff_path(tmp_path):

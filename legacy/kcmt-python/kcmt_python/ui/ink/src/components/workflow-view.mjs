@@ -382,7 +382,7 @@ export default function WorkflowView({onBack} = {}) {
   }
 
   const headerElements = [
-    h(Text, {key: 'hdr-banner'}, chalk.bold.cyan(`kcmt :: provider ${provider} :: repo ${repo}`)),
+    h(Text, {key: 'hdr-banner'}, chalk.bold.cyan(`kcmt-python :: provider ${provider} :: repo ${repo}`)),
     h(Text, {key: 'hdr-provider'}, `Provider: ${provider}`),
     h(Text, {key: 'hdr-model'}, `Model: ${model}`),
     h(Text, {key: 'hdr-endpoint'}, `Endpoint: ${endpoint}`),

@@ -3,9 +3,8 @@ import sys
 import types
 
 import pytest
-
-from kcmt.config import DEFAULT_MODELS, Config
-from kcmt.providers import openai_driver
+from kcmt_python.config import DEFAULT_MODELS, Config
+from kcmt_python.providers import openai_driver
 
 
 class _FakeCompletionMsg:
@@ -42,8 +41,8 @@ def _reload_llm_with_fake(monkeypatch, content=None, error=None):
     monkeypatch.setenv("XAI_API_KEY", "fake_api_key_for_testing")
 
     # Ensure config loaded and llm reloaded so it picks up env and fake OpenAI
-    sys.modules.pop("kcmt.config", None)
-    importlib.import_module("kcmt.config")
+    sys.modules.pop("kcmt_python.config", None)
+    importlib.import_module("kcmt_python.config")
 
     # Stub the external 'openai' dependency before importing klingon_cmt.llm
     monkeypatch.setitem(
@@ -54,7 +53,7 @@ def _reload_llm_with_fake(monkeypatch, content=None, error=None):
         ),
     )
 
-    import kcmt.llm as llm_module
+    import kcmt_python.llm as llm_module
 
     importlib.reload(llm_module)
     return llm_module
@@ -145,7 +144,7 @@ def test_llm_batch_invocation_uses_driver_batch(monkeypatch):
         batch_model="gpt-4.1-mini",
         batch_timeout_seconds=1000,  # Must be >= BATCH_TIMEOUT_MIN_SECONDS (900)
     )
-    from kcmt import llm as llm_module  # noqa: PLC0415
+    from kcmt_python import llm as llm_module  # noqa: PLC0415
 
     client = llm_module.LLMClient(config=config)
     statuses: list[str] = []

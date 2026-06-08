@@ -817,7 +817,7 @@ def render_benchmark_markdown_report(
         sample_count = len(sample_diffs())
 
     lines: list[str] = [
-        "# kcmt Benchmark Report",
+        "# kcmt-python Benchmark Report",
         "",
         "## Run Summary",
         f"- Timestamp: {clean_ts}",
@@ -1252,19 +1252,19 @@ def _runtime_benchmark_scenarios(
         _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:status-repo-path",
             workflow_contract_id="status-repo-path",
-            command_label="kcmt status --repo-path <repo>",
+            command_label="kcmt-python status --repo-path <repo>",
             expected_stdout_fragment="Commit status",
         ),
         _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:oneshot-repo-path",
             workflow_contract_id="oneshot-repo-path",
-            command_label="kcmt --oneshot --repo-path <repo>",
+            command_label="kcmt-python --oneshot --repo-path <repo>",
             expected_stdout_fragment="✓ ",
         ),
         _RuntimeBenchmarkScenario(
             scenario_id=f"{metadata['id']}:file-repo-path",
             workflow_contract_id="file-repo-path",
-            command_label=f"kcmt --file {target} --repo-path <repo>",
+            command_label=f"kcmt-python --file {target} --repo-path <repo>",
             expected_stdout_fragment="✓ ",
             file_target=target,
         ),
@@ -1275,7 +1275,7 @@ def _runtime_benchmark_scenarios(
             _RuntimeBenchmarkScenario(
                 scenario_id=f"{metadata['id']}:default-repo-path",
                 workflow_contract_id="default-repo-path",
-                command_label="kcmt --repo-path <repo>",
+                command_label="kcmt-python --repo-path <repo>",
                 expected_stdout_fragment="✓ ",
             ),
         )
@@ -1292,7 +1292,7 @@ def _runtime_benchmark_scenarios(
                 _RuntimeBenchmarkScenario(
                     scenario_id=f"{metadata['id']}:file-{target_id}",
                     workflow_contract_id="file-repo-path",
-                    command_label=f"kcmt --file {target_path} --repo-path <repo>",
+                    command_label=f"kcmt-python --file {target_path} --repo-path <repo>",
                     expected_stdout_fragment="✓ ",
                     file_target=target_path,
                 )
@@ -1387,7 +1387,7 @@ def _materialize_runtime_corpus(
 
 
 def _runtime_benchmark_python_command() -> list[str]:
-    return [sys.executable, "-m", "kcmt.main"]
+    return [sys.executable, "-m", "kcmt_python.main"]
 
 
 def default_runtime_benchmark_rust_bin() -> Path:
@@ -1479,7 +1479,7 @@ def _prepare_status_snapshot(
         _RuntimeBenchmarkScenario(
             scenario_id="prep:file-repo-path",
             workflow_contract_id="file-repo-path",
-            command_label=f"kcmt --file {target} --repo-path <repo>",
+            command_label=f"kcmt-python --file {target} --repo-path <repo>",
             expected_stdout_fragment="✓ ",
         ),
         metadata,
@@ -2025,7 +2025,7 @@ def run_runtime_benchmark(
 
 def render_runtime_benchmark_report(report: RuntimeBenchmarkRun) -> str:
     lines = [
-        "# kcmt Runtime Benchmark",
+        "# kcmt-python Runtime Benchmark",
         "",
         f"- Timestamp: {report.timestamp}",
         f"- Command set: {report.command_set}",

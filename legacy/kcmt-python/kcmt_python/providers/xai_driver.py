@@ -3,8 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-
-from kcmt.providers.openai_driver import OpenAIDriver
+from kcmt_python.providers.openai_driver import OpenAIDriver
 
 # Currently XAI path reused OpenAI semantics with slight diff cleaning.
 # This driver serves as a placeholder for future divergence (rate limits,
@@ -77,7 +76,7 @@ class XAIDriver(OpenAIDriver):
         # If nothing came back, try dataset fallback for xai
         if not out:
             try:
-                from kcmt.providers.pricing import build_enrichment_context
+                from kcmt_python.providers.pricing import build_enrichment_context
             except ImportError:
                 pass
             else:
@@ -99,7 +98,7 @@ class XAIDriver(OpenAIDriver):
                     pass
         # Enrich as xai
         try:
-            from kcmt.providers.pricing import enrich_ids as _enrich
+            from kcmt_python.providers.pricing import enrich_ids as _enrich
         except ImportError:
             return out
         try:

@@ -74,8 +74,8 @@ impl Drop for TempDir {
 const PROVIDERS: &[ProviderCase] = &[
     ProviderCase {
         provider: "openai",
-        model: "gpt-5-mini-2025-08-07",
-        batch_model: Some("gpt-5-mini-2025-08-07"),
+        model: "gpt-5.4-mini",
+        batch_model: Some("gpt-5.4-mini"),
         endpoint: "https://api.openai.com/v1",
         api_key_env: "OPENAI_API_KEY",
         supports_batch: true,

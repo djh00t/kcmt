@@ -689,7 +689,7 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
             {
                 "message": (
                     "Ink benchmark UI only supports provider benchmarking. "
-                    "Use `kcmt benchmark runtime ...` in the legacy CLI for "
+                    "Use `kcmt-python benchmark runtime ...` in the legacy CLI for "
                     "runtime timing."
                 )
             },
@@ -701,7 +701,7 @@ def _action_benchmark(repo_path: str, payload: dict[str, Any]) -> int:
             {
                 "message": (
                     "Runtime benchmark options are not supported in the Ink "
-                    "benchmark UI. Use `kcmt benchmark runtime ...` instead."
+                    "benchmark UI. Use `kcmt-python benchmark runtime ...` instead."
                 )
             },
         )
@@ -958,7 +958,7 @@ _ACTIONS = {
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="kcmt Ink backend")
+    parser = argparse.ArgumentParser(description="kcmt-python Ink backend")
     parser.add_argument("action", choices=sorted(_ACTIONS.keys()))
     parser.add_argument("--repo-path", dest="repo_path", default=".")
     parser.add_argument("--payload", default="{}")

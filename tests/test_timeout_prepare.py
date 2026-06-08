@@ -3,8 +3,8 @@ import time
 from collections import defaultdict
 from threading import Lock
 
-from kcmt.config import Config, clear_active_config, set_active_config
-from kcmt.core import KlingonCMTWorkflow
+from kcmt_python.config import Config, clear_active_config, set_active_config
+from kcmt_python.core import KlingonCMTWorkflow
 
 
 def test_per_file_timeout(monkeypatch, tmp_path):
@@ -29,14 +29,14 @@ def test_per_file_timeout(monkeypatch, tmp_path):
 
     cfg = Config(
         provider="openai",
-        model="gpt-5-mini-2025-08-07",
+        model="gpt-5.4-mini",
         llm_endpoint="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo),
     )
     set_active_config(cfg)
 
-    import kcmt.commit as commit_module  # noqa: PLC0415
+    import kcmt_python.commit as commit_module  # noqa: PLC0415
 
     call_counts = defaultdict(int)
     lock = Lock()
@@ -99,15 +99,15 @@ def test_prepare_failure_limit(monkeypatch, tmp_path):
 
     cfg = Config(
         provider="openai",
-        model="gpt-5-mini-2025-08-07",
+        model="gpt-5.4-mini",
         llm_endpoint="https://api.openai.com/v1",
         api_key_env="OPENAI_API_KEY",
         git_repo_path=str(repo),
     )
     set_active_config(cfg)
 
-    from kcmt.core import KlingonCMTWorkflow  # noqa: PLC0415
-    from kcmt.exceptions import LLMError  # noqa: PLC0415
+    from kcmt_python.core import KlingonCMTWorkflow  # noqa: PLC0415
+    from kcmt_python.exceptions import LLMError  # noqa: PLC0415
 
     def explode_prepare(self, change):  # noqa: D401, ARG002
         raise LLMError("synthetic failure")

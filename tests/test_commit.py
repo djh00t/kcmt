@@ -1,9 +1,8 @@
 import types
 
 import pytest
-
-from kcmt.commit import CommitGenerator
-from kcmt.exceptions import ValidationError
+from kcmt_python.commit import CommitGenerator
+from kcmt_python.exceptions import ValidationError
 
 
 def _new_commit_gen(fake_git=None, fake_llm=None):

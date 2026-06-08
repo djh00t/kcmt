@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "kcmt/main.py"
+      - "legacy/kcmt-python/kcmt_python/main.py"
       - "scripts/canary/**"
       - "tests/test_main_entrypoint.py"
       - "tests/test_runtime_canary_probe.py"

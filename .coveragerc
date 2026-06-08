@@ -1,13 +1,18 @@
 [run]
+source = legacy/kcmt-python/kcmt_python
+
+[report]
 omit =
-    kcmt/ink_backend.py
-    kcmt/legacy_cli.py
-    kcmt/benchmark.py
-    kcmt/ui/*
-    kcmt/providers/*
-    kcmt/cli.py
-    kcmt/commit.py
-    kcmt/llm.py
-    kcmt/core.py
-    kcmt/git.py
-    kcmt/config.py
+    legacy/kcmt-python/kcmt_python/_optional.py
+    legacy/kcmt-python/kcmt_python/benchmark.py
+    legacy/kcmt-python/kcmt_python/cli.py
+    legacy/kcmt-python/kcmt_python/commit.py
+    legacy/kcmt-python/kcmt_python/config.py
+    legacy/kcmt-python/kcmt_python/core.py
+    legacy/kcmt-python/kcmt_python/exceptions.py
+    legacy/kcmt-python/kcmt_python/git.py
+    legacy/kcmt-python/kcmt_python/ink_backend.py
+    legacy/kcmt-python/kcmt_python/legacy_cli.py
+    legacy/kcmt-python/kcmt_python/llm.py
+    legacy/kcmt-python/kcmt_python/providers/*.py
+    legacy/kcmt-python/kcmt_python/ui/**/*.py

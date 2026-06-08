@@ -2,9 +2,9 @@ import json
 import subprocess
 from pathlib import Path
 
-import kcmt.cli as cli_module
-from kcmt.config import config_file_path, state_dir
-from kcmt.legacy_cli import LegacyCLI
+import kcmt_python.cli as cli_module
+from kcmt_python.config import config_file_path, state_dir
+from kcmt_python.legacy_cli import LegacyCLI
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -107,7 +107,7 @@ def test_cli_executes_workflow_success(monkeypatch, tmp_path):
 
 def test_cli_handles_workflow_failure(monkeypatch):
     """Test that CLI handles workflow failures by returning exit code 1."""
-    from kcmt.exceptions import KlingonCMTError
+    from kcmt_python.exceptions import KlingonCMTError
 
     class _FakeWorkflow:
         def __init__(self, *_, **__):
@@ -228,7 +228,7 @@ def test_cli_compact_mode_snapshot(monkeypatch, tmp_path, capsys):
                     self.commit_hash = "abc12345"
                     self.message = "feat(core): add tests"
                     self.error = None
-                    self.file_path = "kcmt/core.py"
+                    self.file_path = "kcmt_python/core.py"
 
             return {
                 "deletions_committed": [],
@@ -284,7 +284,7 @@ def test_cli_compact_mode_snapshot(monkeypatch, tmp_path, capsys):
     status_code = cli_status.run(["status", "--repo-path", str(tmp_path)])
     status_output = capsys.readouterr().out
     assert status_code == 0
-    assert "kcmt status" in status_output
+    assert "kcmt-python status" in status_output
     assert "Summary" in status_output
     assert "Commit status" in status_output
 
@@ -294,7 +294,7 @@ def test_cli_status_without_snapshot(monkeypatch, tmp_path, capsys):
     code = cli.run(["status", "--repo-path", str(tmp_path)])
     output = capsys.readouterr().out
     assert code == 1
-    assert "No kcmt run history" in output
+    assert "No kcmt-python run history" in output
 
 
 def test_cli_status_raw_snapshot(tmp_path, capsys):

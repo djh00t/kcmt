@@ -66,7 +66,7 @@ to publish commits.
 ```bash
 test -n "$OPENAI_API_KEY" && \
   ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
-    --model gpt-5-mini-2025-08-07 --file path/to/changed-file --no-auto-push --repo-path .
+    --model gpt-5.4-mini --file path/to/changed-file --no-auto-push --repo-path .
 
 test -n "$ANTHROPIC_API_KEY" && \
   ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
@@ -74,7 +74,7 @@ test -n "$ANTHROPIC_API_KEY" && \
 
 test -n "$OPENAI_API_KEY" && \
   ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
-    --batch --batch-model gpt-5-mini-2025-08-07 --batch-timeout 900 \
+    --batch --batch-model gpt-5.4-mini --batch-timeout 900 \
     --no-auto-push --repo-path .
 ```
 

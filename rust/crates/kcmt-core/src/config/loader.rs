@@ -78,7 +78,7 @@ struct ProviderDefaults {
 const PROVIDER_DEFAULTS: &[ProviderDefaults] = &[
     ProviderDefaults {
         provider: "openai",
-        model: "gpt-5-mini-2025-08-07",
+        model: "gpt-5.4-mini",
         endpoint: "https://api.openai.com/v1",
         api_key_env: "OPENAI_API_KEY",
     },
@@ -350,7 +350,7 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
 
 fn default_batch_model(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("gpt-5-mini-2025-08-07"),
+        "openai" => Some("gpt-5.4-mini"),
         "xai" => Some("grok-4.3"),
         _ => None,
     }
@@ -575,7 +575,7 @@ mod tests {
     "openai": {
       "endpoint": "https://api.openai.com/v1",
       "api_key_env": "OPENAI_API_KEY",
-      "preferred_model": "gpt-5-mini-2025-08-07"
+      "preferred_model": "gpt-5.4-mini"
     },
     "anthropic": {
       "endpoint": "https://api.anthropic.com",
@@ -585,7 +585,7 @@ mod tests {
   },
   "model_priority": [
     {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
-    {"provider": "openai", "model": "gpt-5-mini-2025-08-07"}
+    {"provider": "openai", "model": "gpt-5.4-mini"}
   ]
 }"#,
         )
@@ -599,11 +599,11 @@ mod tests {
         let cfg = load_config(&repo, &overrides).expect("config");
 
         assert_eq!(cfg.provider, "openai");
-        assert_eq!(cfg.model, "gpt-5-mini-2025-08-07");
+        assert_eq!(cfg.model, "gpt-5.4-mini");
         assert_eq!(cfg.llm_endpoint, "https://api.openai.com/v1");
         assert_eq!(cfg.api_key_env, "OPENAI_API_KEY");
         assert_eq!(cfg.model_priority.len(), 1);
         assert_eq!(cfg.model_priority[0].provider, "openai");
-        assert_eq!(cfg.model_priority[0].model, "gpt-5-mini-2025-08-07");
+        assert_eq!(cfg.model_priority[0].model, "gpt-5.4-mini");
     }
 }

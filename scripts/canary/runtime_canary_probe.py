@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime canary probe scenarios for kcmt wrapper routing."""
+"""Runtime canary probe scenarios for kcmt-python wrapper routing."""
 
 from __future__ import annotations
 
@@ -101,9 +101,9 @@ def build_probe_scenarios(rust_bin: str) -> list[ProbeScenario]:
 
         return str(Path(sys.executable).resolve().parent / binary_name)
 
-    kcmt_cmd = _resolve_entrypoint("kcmt")
-    commit_cmd = _resolve_entrypoint("commit")
-    kc_cmd = _resolve_entrypoint("kc")
+    kcmt_cmd = _resolve_entrypoint("kcmt-python")
+    commit_cmd = _resolve_entrypoint("commit-python")
+    kc_cmd = _resolve_entrypoint("kc-python")
 
     return [
         ProbeScenario(
@@ -261,7 +261,7 @@ def run_canary_probe(scenarios: Sequence[ProbeScenario]) -> tuple[bool, list[dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run kcmt Rust runtime canary probes")
+    parser = argparse.ArgumentParser(description="Run kcmt-python Rust runtime canary probes")
     parser.add_argument(
         "--rust-bin",
         default=str(Path("rust/target/release/kcmt").resolve()),

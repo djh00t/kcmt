@@ -9,11 +9,14 @@ import time
 from typing import Any, Callable
 
 import httpx
-
-from kcmt._optional import OpenAIModule, import_openai
-from kcmt.config import BATCH_TIMEOUT_MIN_SECONDS, DEFAULT_BATCH_TIMEOUT_SECONDS, Config
-from kcmt.exceptions import LLMError
-from kcmt.providers.base import BaseDriver, resolve_default_request_timeout
+from kcmt_python._optional import OpenAIModule, import_openai
+from kcmt_python.config import (
+    BATCH_TIMEOUT_MIN_SECONDS,
+    DEFAULT_BATCH_TIMEOUT_SECONDS,
+    Config,
+)
+from kcmt_python.exceptions import LLMError
+from kcmt_python.providers.base import BaseDriver, resolve_default_request_timeout
 
 # Optional dependency: import module, not symbols, for easier test stubbing
 _openai: OpenAIModule | None = import_openai()
@@ -46,7 +49,7 @@ class OpenAIDriver(BaseDriver):
         llm_module = None
         client_factory: Callable[..., Any] | None = None
         try:  # pragma: no cover - relies on package layout at runtime
-            from kcmt import llm as _llm_mod
+            from kcmt_python import llm as _llm_mod
 
             llm_module = _llm_mod
             client_factory = getattr(_llm_mod, "OpenAI", None)
@@ -1146,7 +1149,7 @@ class OpenAIDriver(BaseDriver):
         if not out:
             try:
                 try:
-                    from kcmt.providers.pricing import build_enrichment_context
+                    from kcmt_python.providers.pricing import build_enrichment_context
                 except ImportError as import_err:
                     raise RuntimeError("pricing helper not available") from import_err
                 alias_lut, _ctx, _mx = build_enrichment_context()
@@ -1178,7 +1181,7 @@ class OpenAIDriver(BaseDriver):
 
         # Enrich with pricing/context/max_output (non-fatal on errors)
         try:
-            from kcmt.providers.pricing import enrich_ids as _enrich
+            from kcmt_python.providers.pricing import enrich_ids as _enrich
         except ImportError:
             return out
         try:

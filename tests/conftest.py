@@ -22,9 +22,9 @@ def reset_config(
     monkeypatch.setenv("KCMT_CONFIG_HOME", str(tmp_path / ".kcmt"))
 
     # Ensure no persisted config interferes
-    sys.modules.pop("kcmt.config", None)
+    sys.modules.pop("kcmt_python.config", None)
 
-    from kcmt.config import clear_active_config
+    from kcmt_python.config import clear_active_config
 
     clear_active_config()
     yield

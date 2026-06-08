@@ -110,7 +110,7 @@ jobs:
               "uv","run","pytest","-n","auto","-ra","-vv",
               "-W","default","-W","error::DeprecationWarning","-W","error::ResourceWarning",
               "--strict-config","--strict-markers",
-              "--cov=kcmt","--cov-branch","--cov-report=term-missing:skip-covered",
+              "--cov=kcmt_python.main","--cov=kcmt_python","--cov-branch","--cov-report=term-missing:skip-covered",
           ]
           sys.exit(subprocess.call(cmd))
           PY

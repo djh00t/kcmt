@@ -5,8 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-
-from kcmt.config import clear_active_config
+from kcmt_python.config import clear_active_config
 
 
 def _reload_with_anthropic(
@@ -17,7 +16,7 @@ def _reload_with_anthropic(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("KCMT_PROVIDER", "anthropic")
     # Remove cached modules so config re-evaluates env
-    for mod in ["kcmt.config", "kcmt.llm"]:
+    for mod in ["kcmt_python.config", "kcmt_python.llm"]:
         if mod in sys.modules:
             sys.modules.pop(mod)
     # Remove persisted config if present so provider auto-select runs fresh
@@ -56,7 +55,7 @@ def _reload_with_anthropic(
         return _Resp(status_code=200)
 
     monkeypatch.setattr(httpx, "post", fake_post)
-    import kcmt.llm as llm
+    import kcmt_python.llm as llm
 
     importlib.reload(llm)
     return llm

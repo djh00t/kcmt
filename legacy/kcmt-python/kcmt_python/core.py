@@ -1,4 +1,4 @@
-"""Core workflow logic for kcmt."""
+"""Core workflow logic for kcmt-python."""
 
 from __future__ import annotations
 
@@ -249,7 +249,7 @@ class KlingonCMTWorkflow:
         reset = RESET if colorize else ""
 
         return (
-            f"{icon} kcmt "
+            f"{icon} kcmt-python "
             f"{stage_color}{stage_label:<7}{reset} │ "
             f"Δ {_num(diffs)} │ "
             f"req {_num(requests)} │ "
@@ -264,10 +264,12 @@ class KlingonCMTWorkflow:
         if not self.profile:
             return
         details = f" {extra}" if extra else ""
-        print(f"[kcmt-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}")
+        print(
+            f"[kcmt-python-profile] {label}: {elapsed_seconds * 1000.0:.1f} ms{details}"
+        )
 
     def execute_workflow(self) -> Dict[str, Any]:
-        """Execute the complete kcmt workflow."""
+        """Execute the complete kcmt-python workflow."""
         self._prepare_failure_limit_hit = False
         self._prepare_failure_limit_message = ""
         results: Dict[str, Any] = {
@@ -973,18 +975,18 @@ class KlingonCMTWorkflow:
                 change=change,
                 message=None,
                 error=(
-                    "Internal kcmt error preparing commit for "
+                    "Internal kcmt-python error preparing commit for "
                     f"{change.file_path}: {exc}"
                 ),
             )
-        # Defensive: unexpected exceptions outside kcmt domain should not
+        # Defensive: unexpected exceptions outside kcmt-python domain should not
         # crash the entire preparation; convert to generic error.
         except Exception as exc:  # pragma: no cover  # noqa: BLE001
             return PreparedCommit(
                 change=change,
                 message=None,
                 error=(
-                    "Unexpected non-kcmt error preparing commit for "
+                    "Unexpected non-kcmt-python error preparing commit for "
                     f"{change.file_path}: {exc}"
                 ),
             )
@@ -1054,7 +1056,7 @@ class KlingonCMTWorkflow:
                 change=change,
                 message=None,
                 error=(
-                    "Unexpected non-kcmt error preparing commit for "
+                    "Unexpected non-kcmt-python error preparing commit for "
                     f"{change.file_path}: {exc}"
                 ),
             )

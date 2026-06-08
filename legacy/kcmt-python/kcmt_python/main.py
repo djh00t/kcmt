@@ -1,4 +1,4 @@
-"""Main entry point for kcmt."""
+"""Main entry point for kcmt-python."""
 
 from __future__ import annotations
 

@@ -2,7 +2,7 @@ import {spawn, spawnSync} from 'child_process';
 import EventEmitter from 'events';
 
 const PYTHON_EXECUTABLE = process.env.KCMT_PYTHON_EXECUTABLE || 'python3';
-const BACKEND_MODULE = process.env.KCMT_BACKEND_MODULE || 'kcmt.ink_backend';
+const BACKEND_MODULE = process.env.KCMT_BACKEND_MODULE || 'kcmt_python.ink_backend';
 
 function parseStdout(stdout) {
   const lines = String(stdout || '')

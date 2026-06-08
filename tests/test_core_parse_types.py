@@ -1,4 +1,4 @@
-from kcmt.core import KlingonCMTWorkflow
+from kcmt_python.core import KlingonCMTWorkflow
 
 
 def test_parse_git_diff_detects_deleted_and_added():

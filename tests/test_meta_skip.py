@@ -1,7 +1,7 @@
 import os
 
-from kcmt.config import Config, clear_active_config, set_active_config
-from kcmt.core import KlingonCMTWorkflow
+from kcmt_python.config import Config, clear_active_config, set_active_config
+from kcmt_python.core import KlingonCMTWorkflow
 
 
 def test_meta_files_committed(tmp_path, monkeypatch):
@@ -33,7 +33,7 @@ def test_meta_files_committed(tmp_path, monkeypatch):
     )
     set_active_config(cfg)
 
-    from kcmt.commit import CommitGenerator
+    from kcmt_python.commit import CommitGenerator
 
     # Map filenames to their commit messages
     commit_messages = {

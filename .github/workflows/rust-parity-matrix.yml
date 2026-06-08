@@ -5,7 +5,7 @@ on:
   pull_request:
     paths:
       - "rust/**"
-      - "kcmt/main.py"
+      - "legacy/kcmt-python/kcmt_python/main.py"
       - "tests/test_main_entrypoint.py"
       - "tests/test_rust_workflow_parity_bdd.py"
       - "tests/features/rust_workflow_parity.feature"

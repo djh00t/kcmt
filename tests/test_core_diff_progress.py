@@ -30,7 +30,7 @@ def test_process_per_file_commits_reports_diff_stage_for_untracked_files(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     _add_repo_to_sys_path(Path.cwd())
-    from kcmt.core import KlingonCMTWorkflow  # type: ignore
+    from kcmt_python.core import KlingonCMTWorkflow  # type: ignore
 
     wf = KlingonCMTWorkflow(repo_path=str(tmp_path), show_progress=True)
     captured_snapshots: list[dict[str, float]] = []

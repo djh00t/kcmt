@@ -1049,7 +1049,7 @@ mod tests {
         let request = OpenAiClient::build_chat_request(
             "https://api.openai.com/v1",
             "sk-test",
-            "gpt-5-mini-2025-08-07",
+            "gpt-5.4-mini",
             &[ProviderMessage::user("prompt")],
         );
 
@@ -1370,7 +1370,7 @@ mod tests {
     #[test]
     fn openai_batch_gpt5_uses_max_completion_tokens() {
         let jsonl = OpenAiClient::build_batch_jsonl(
-            "gpt-5-mini-2025-08-07",
+            "gpt-5.4-mini",
             &[OpenAiBatchJob {
                 custom_id: "alpha.py".to_string(),
                 messages: vec![ProviderMessage::user("prompt")],

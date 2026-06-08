@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 
-from kcmt import main as main_mod
+from kcmt_python import main as main_mod
 
 
 class _StdoutStub:
@@ -160,7 +160,9 @@ def test_run_rust_runtime_executes_binary_and_returns_code(monkeypatch):
     monkeypatch.setattr(main_mod, "_should_use_rust_runtime", lambda _args: True)
     monkeypatch.setattr(main_mod, "_resolve_rust_binary", lambda: "/tmp/kcmt-rust")
     monkeypatch.setattr(main_mod.os.path, "exists", lambda _: True)
-    monkeypatch.setattr(main_mod.sys, "argv", ["kcmt", "status", "--repo-path", "."])
+    monkeypatch.setattr(
+        main_mod.sys, "argv", ["kcmt-python", "status", "--repo-path", "."]
+    )
     monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
 
     assert main_mod._run_rust_runtime() == 7
@@ -181,7 +183,7 @@ def test_run_rust_runtime_preserves_status_raw_args(monkeypatch):
     monkeypatch.setattr(
         main_mod.sys,
         "argv",
-        ["kcmt", "status", "--repo-path", "/tmp/repo", "--raw"],
+        ["kcmt-python", "status", "--repo-path", "/tmp/repo", "--raw"],
     )
     monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
 
@@ -204,7 +206,7 @@ def test_run_rust_runtime_preserves_configure_all_args(monkeypatch):
         main_mod.sys,
         "argv",
         [
-            "kcmt",
+            "kcmt-python",
             "--configure-all",
             "--provider",
             "anthropic",
@@ -245,7 +247,7 @@ def test_run_rust_runtime_preserves_bare_configure_args(monkeypatch):
     monkeypatch.setattr(
         main_mod.sys,
         "argv",
-        ["kcmt", "--configure", "--repo-path", "/tmp/repo"],
+        ["kcmt-python", "--configure", "--repo-path", "/tmp/repo"],
     )
     monkeypatch.setattr(main_mod.subprocess, "run", _fake_run)
 
