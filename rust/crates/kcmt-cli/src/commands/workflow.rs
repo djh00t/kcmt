@@ -33,7 +33,9 @@ use kcmt_provider::clients::{
 };
 use kcmt_provider::error_map::normalize_error;
 use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
-use kcmt_tui::{WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiState};
+use kcmt_tui::{
+    spawn_workflow_tui, WorkflowTuiContext, WorkflowTuiEvent, WorkflowTuiSession, WorkflowTuiState,
+};
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -169,6 +171,7 @@ struct PreparationResult {
 #[derive(Debug, Clone)]
 struct WorkflowProgress {
     enabled: bool,
+    live_tui: bool,
     tui_echo: bool,
     mode: &'static str,
     total: usize,
@@ -194,7 +197,8 @@ impl WorkflowProgress {
         };
         let progress = Self {
             enabled: progress_enabled(options) && total > 0,
-            tui_echo: options.tui && !options.tui_model_export && progress_enabled(options),
+            live_tui: options.tui,
+            tui_echo: !options.tui && options.tui_model_export && progress_enabled(options),
             mode,
             total,
             queued: Arc::new(AtomicUsize::new(0)),
@@ -204,6 +208,15 @@ impl WorkflowProgress {
         };
         progress.summary("start");
         progress
+    }
+
+    fn start_tui_session(&self) -> Option<WorkflowTuiSession> {
+        if !self.enabled || !kcmt_tui::should_enable_tui(false) {
+            return None;
+        }
+        self.tui_state
+            .as_ref()
+            .and_then(|state| spawn_workflow_tui(Arc::clone(state)).ok())
     }
 
     fn queued(&self, stage: &'static str, file_path: &str) {
@@ -297,7 +310,7 @@ impl WorkflowProgress {
     }
 
     fn render(&self, stage: &'static str, file_path: Option<&str>, status: Option<&str>) {
-        if !self.enabled {
+        if !self.enabled || self.live_tui {
             return;
         }
         let queued = self.queued.load(Ordering::Relaxed);
@@ -616,6 +629,7 @@ fn run_entries_workflow(
             last_screen: preferences.tui.last_screen.clone(),
         },
     );
+    let _workflow_tui_session = progress.start_tui_session();
     let wait_start = Instant::now();
     let preparation = prepare_messages_for_entries(
         &repo_path,
