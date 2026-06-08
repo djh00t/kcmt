@@ -171,6 +171,7 @@ struct PreparationResult {
 #[derive(Debug, Clone)]
 struct WorkflowProgress {
     enabled: bool,
+    live_tui: bool,
     tui_echo: bool,
     mode: &'static str,
     total: usize,
@@ -196,6 +197,7 @@ impl WorkflowProgress {
         };
         let progress = Self {
             enabled: progress_enabled(options) && total > 0,
+            live_tui: options.tui,
             tui_echo: !options.tui && options.tui_model_export && progress_enabled(options),
             mode,
             total,
@@ -308,7 +310,7 @@ impl WorkflowProgress {
     }
 
     fn render(&self, stage: &'static str, file_path: Option<&str>, status: Option<&str>) {
-        if !self.enabled {
+        if !self.enabled || self.live_tui {
             return;
         }
         let queued = self.queued.load(Ordering::Relaxed);

@@ -875,7 +875,9 @@ fn workflow_stage_label_text(stage: &str) -> &'static str {
         "prepared" => "message prepared",
         "commit" => "writing commit",
         "done" => "commit complete",
-        stage if stage.contains("failed") => "commit failed",
+        "prepare_failed" => "prepare failed",
+        "commit_failed" => "commit failed",
+        stage if stage.contains("failed") => "failed",
         _ => "pending",
     }
 }
