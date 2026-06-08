@@ -1,4 +1,4 @@
-"""Commit message generation logic for kcmt."""
+"""Commit message generation logic for kcmt-python."""
 
 import inspect
 import os

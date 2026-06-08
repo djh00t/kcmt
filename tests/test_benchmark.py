@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-import kcmt.benchmark as bench
+import kcmt_python.benchmark as bench
 
 
 @dataclass
@@ -380,7 +380,7 @@ def test_render_benchmark_markdown_report_remains_provider_focused() -> None:
         params={"providers": ["openai"], "limit": 1},
     )
 
-    assert "# kcmt Benchmark Report" in report
+    assert "# kcmt-python Benchmark Report" in report
     assert "## Run Summary" in report
     assert "Providers: openai" in report
     assert "gpt-5-mini" in report

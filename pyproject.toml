@@ -3,7 +3,7 @@ requires = ["hatchling>=1.21.1"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kcmt"
+name = "kcmt-python"
 dynamic = ["version"]
 description = "AI-powered atomic Git staging and committing tool with LLM-generated conventional commits"
 readme = "README.md"
@@ -51,23 +51,23 @@ Repository = "https://github.com/djh00t/kcmt"
 Issues = "https://github.com/djh00t/kcmt/issues"
 
 [project.scripts]
-kcmt = "kcmt.main:main"
-commit = "kcmt.main:main"
-kc = "kcmt.main:main"
+kcmt-python = "kcmt_python.main:main"
+commit-python = "kcmt_python.main:main"
+kc-python = "kcmt_python.main:main"
 
 [tool.hatch.version]
-path = "kcmt/__init__.py"
+path = "legacy/kcmt-python/kcmt_python/__init__.py"
 pattern = "__version__\\s*=\\s*[\"'](?P<version>[^\"']+)[\"']"
 [tool.hatch.build.targets.wheel]
-packages = ["kcmt"]
+packages = ["legacy/kcmt-python/kcmt_python"]
 include = ["LICENSE"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-  "kcmt",
+  "legacy/kcmt-python/kcmt_python",
   "README.md",
   "LICENSE",
-  "kcmt/ui/ink",
+  "legacy/kcmt-python/kcmt_python/ui/ink",
 ]
 
 [dependency-groups]
@@ -93,13 +93,13 @@ name = "cz_conventional_commits"
 version = "0.3.2"
 tag_format = "v$version"
 update_changelog_on_bump = false
-version_files = ["kcmt/__init__.py"]
+version_files = ["legacy/kcmt-python/kcmt_python/__init__.py"]
 message_template = "{{type}}({{scope}}): {{subject}}"
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["kcmt"]
+packages = ["kcmt_python"]
 show_error_codes = true
 pretty = true
 

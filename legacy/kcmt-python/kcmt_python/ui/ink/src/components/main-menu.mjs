@@ -70,7 +70,7 @@ export default function MainMenu({onNavigate} = {}) {
     h(
       Box,
       {flexDirection: 'column'},
-      h(Text, null, palette.multiline('kcmt ✨')),
+      h(Text, null, palette.multiline('kcmt-python ✨')),
       h(Text, {dimColor: true}, 'UI: TUI (Ink)'),
       repoInfo
         ? h(

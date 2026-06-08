@@ -1,5 +1,5 @@
-from kcmt.config import clear_active_config, load_config
-from kcmt.llm import LLMClient
+from kcmt_python.config import clear_active_config, load_config
+from kcmt_python.llm import LLMClient
 
 
 def _client(monkeypatch):
@@ -21,7 +21,7 @@ def _client(monkeypatch):
 
                     return type("R", (), {"choices": [_C()]})
 
-    monkeypatch.setattr("kcmt.llm.OpenAI", lambda base_url, api_key: _Dummy())
+    monkeypatch.setattr("kcmt_python.llm.OpenAI", lambda base_url, api_key: _Dummy())
     return LLMClient(config=cfg)
 
 

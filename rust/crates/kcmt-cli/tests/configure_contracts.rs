@@ -234,7 +234,7 @@ fn list_models_prints_supported_provider_defaults() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("openai"));
-    assert!(stdout.contains("gpt-5-mini-2025-08-07"));
+    assert!(stdout.contains("gpt-5.4-mini"));
     assert!(stdout.contains("anthropic"));
     assert!(stdout.contains("claude-3-5-haiku-latest"));
     assert!(stdout.contains("xai"));

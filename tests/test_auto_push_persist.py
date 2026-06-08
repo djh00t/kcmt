@@ -1,8 +1,8 @@
 import subprocess
 
-from kcmt import llm as llm_module
-from kcmt.cli import CLI
-from kcmt.config import load_persisted_config
+from kcmt_python import llm as llm_module
+from kcmt_python.cli import CLI
+from kcmt_python.config import load_persisted_config
 
 
 def _git(cmd, cwd):

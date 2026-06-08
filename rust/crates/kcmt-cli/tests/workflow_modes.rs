@@ -170,7 +170,7 @@ fn explicit_tui_workflow_exports_model_and_persists_screen() {
     let model = tui_model_from_stdout(&output.stdout);
     assert_eq!(model["screen"], "workflow");
     assert_eq!(model["provider"], "openai");
-    assert_eq!(model["model"], "gpt-5-mini-2025-08-07");
+    assert_eq!(model["model"], "gpt-5.4-mini");
     assert_eq!(model["current_phase"], "complete");
     assert_eq!(model["total_files"], 1);
     assert_eq!(model["committed"], 1);
@@ -1422,8 +1422,9 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
 #[test]
 fn file_mode_invokes_openai_responses_api_for_responses_only_models() {
     let repo = init_repo();
-    let (endpoint, request_rx) =
-        spawn_provider_response(r#"{"output_text":"fix(openai): use responses api."}"#);
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"output_text":"fix(openai): use responses api.","choices":[{"message":{"content":"fix(openai): use responses api."}}]}"#,
+    );
     fs::write(repo.join("tracked.py"), "print('seed')\n").expect("tracked seed");
     git(&repo, &["add", "tracked.py"]);
     git(&repo, &["commit", "-m", "chore(repo): seed"]);

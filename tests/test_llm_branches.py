@@ -38,8 +38,8 @@ def _reload_llm_with_fake(monkeypatch, content=None, error=None):
     # Choose provider xai (uses OpenAI style path but different env var)
     monkeypatch.setenv("XAI_API_KEY", "fake_api_key_for_testing")
     # Clear config + llm modules to ensure fresh load
-    sys.modules.pop("kcmt.config", None)
-    importlib.import_module("kcmt.config")
+    sys.modules.pop("kcmt_python.config", None)
+    importlib.import_module("kcmt_python.config")
 
     monkeypatch.setitem(
         sys.modules,
@@ -48,7 +48,7 @@ def _reload_llm_with_fake(monkeypatch, content=None, error=None):
             OpenAI=lambda **kwargs: _FakeOpenAI(_content=content, _error=error)
         ),
     )
-    import kcmt.llm as llm_module
+    import kcmt_python.llm as llm_module
 
     importlib.reload(llm_module)
     return llm_module

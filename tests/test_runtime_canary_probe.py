@@ -67,7 +67,7 @@ def test_run_canary_probe_reports_failures(monkeypatch):
 
     scenario = probe.ProbeScenario(
         id="unit-scenario",
-        command=("kcmt", "--help"),
+        command=("kcmt-python", "--help"),
         env={"KCMT_RUNTIME": "python", "KCMT_RUNTIME_TRACE": "1"},
         expected_runtime="python",
         expected_reason="runtime_python",
@@ -75,7 +75,7 @@ def test_run_canary_probe_reports_failures(monkeypatch):
 
     def _fake_run(_scenario):
         return subprocess.CompletedProcess(
-            args=["kcmt", "--help"],
+            args=["kcmt-python", "--help"],
             returncode=9,
             stdout="",
             stderr='{"selected_runtime":"python","decision_reason":"runtime_python","runtime_mode":"python","canary_enabled":false,"rust_binary":"/tmp/kcmt","rust_binary_exists":false}\n',

@@ -1,9 +1,8 @@
 import subprocess
 
 import pytest
-
-from kcmt.exceptions import GitError
-from kcmt.git import GitRepo
+from kcmt_python.exceptions import GitError
+from kcmt_python.git import GitRepo
 
 
 def test_gitrepo_init_validates_repo(monkeypatch):

@@ -190,7 +190,7 @@ class AnthropicDriver(BaseDriver):
             ids.append(smid)
         # Enrich (non-fatal if helper missing)
         try:
-            from kcmt.providers.pricing import enrich_ids as _enrich
+            from kcmt_python.providers.pricing import enrich_ids as _enrich
 
             emap = _enrich("anthropic", ids)
             enriched: list[dict[str, object]] = []

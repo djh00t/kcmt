@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import kcmt.ink_backend as ink_backend
+import kcmt_python.ink_backend as ink_backend
 
 
 def test_action_benchmark_rejects_runtime_mode_payload(monkeypatch):
@@ -23,7 +23,7 @@ def test_action_benchmark_rejects_runtime_mode_payload(monkeypatch):
             {
                 "message": (
                     "Ink benchmark UI only supports provider benchmarking. "
-                    "Use `kcmt benchmark runtime ...` in the legacy CLI for "
+                    "Use `kcmt-python benchmark runtime ...` in the legacy CLI for "
                     "runtime timing."
                 )
             },
@@ -52,7 +52,7 @@ def test_action_benchmark_rejects_runtime_specific_options(monkeypatch):
             {
                 "message": (
                     "Runtime benchmark options are not supported in the Ink "
-                    "benchmark UI. Use `kcmt benchmark runtime ...` instead."
+                    "benchmark UI. Use `kcmt-python benchmark runtime ...` instead."
                 )
             },
         )

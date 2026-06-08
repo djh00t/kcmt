@@ -51,7 +51,7 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
         ProviderDefinition::new(
             "openai",
             "OpenAI",
-            "gpt-5-mini-2025-08-07",
+            "gpt-5.4-mini",
             "https://api.openai.com/v1",
             "OPENAI_API_KEY",
         ),
@@ -624,7 +624,7 @@ mod tests {
         let static_models = super::static_models(&definition);
 
         assert!(cached.is_none());
-        assert_eq!(static_models[0].id, "gpt-5-mini-2025-08-07");
+        assert_eq!(static_models[0].id, "gpt-5.4-mini");
     }
 
     #[test]

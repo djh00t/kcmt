@@ -1,4 +1,4 @@
-"""Command-line interface for kcmt."""
+"""Command-line interface for kcmt-python."""
 
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ class DecimalFriendlyJSONEncoder(json.JSONEncoder):
 
 
 class LegacyCLI:
-    """Command-line interface for kcmt."""
+    """Command-line interface for kcmt-python."""
 
     def __init__(self) -> None:
         self.parser = self._create_parser()
@@ -137,23 +137,23 @@ class LegacyCLI:
     # ------------------------------------------------------------------
     def _create_parser(self) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
-            prog="kcmt",
+            prog="kcmt-python",
             description="AI-powered atomic Git staging and committing tool",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Examples:
-  kcmt                                  # default workflow with live stats
-  kcmt --oneshot                        # commit a single auto-selected file
-  kcmt --file README.md                 # commit only README.md
-  kcmt --configure                      # interactive provider & model setup
-    kcmt --provider openai --model gpt-5-mini-2025-08-07
+  kcmt-python                                  # default workflow with live stats
+  kcmt-python --oneshot                        # commit a single auto-selected file
+  kcmt-python --file README.md                 # commit only README.md
+  kcmt-python --configure                      # interactive provider & model setup
+    kcmt-python --provider openai --model gpt-5.4-mini
             """,
         )
 
         subparsers = parser.add_subparsers(dest="command")
         status_parser = subparsers.add_parser(
             "status",
-            help="Show a formatted summary of the most recent kcmt run",
+            help="Show a formatted summary of the most recent kcmt-python run",
         )
         status_parser.add_argument(
             "--repo-path",
@@ -389,7 +389,7 @@ Examples:
         if not self._profile_enabled:
             return
         details = f" {extra}" if extra else ""
-        print(f"[kcmt-profile] {label}: {elapsed_ms:.1f} ms{details}")
+        print(f"[kcmt-python-profile] {label}: {elapsed_ms:.1f} ms{details}")
 
     @contextmanager
     def _profile_timer(
@@ -488,7 +488,7 @@ Examples:
             ):
                 persisted_config = load_persisted_config(repo_root)
 
-            # Check if this is the first time running kcmt in this repo
+            # Check if this is the first time running kcmt-python in this repo
             config: Optional[Config] = None
             if not persisted_config:
                 if non_interactive:
@@ -504,8 +504,8 @@ Examples:
                         save_config(config, repo_root)
                 else:
                     self._print_info(
-                        "🚀 Welcome to kcmt! This appears to be your first "
-                        "time using kcmt in this repository."
+                        "🚀 Welcome to kcmt-python! This appears to be your first "
+                        "time using kcmt-python in this repository."
                     )
                     self._print_info(
                         "Let's set up your preferred AI provider for "
@@ -592,7 +592,7 @@ Examples:
                     pass
                 else:
                     self._print_error(
-                        "No API key available. Run 'kcmt --configure' to "
+                        "No API key available. Run 'kcmt-python --configure' to "
                         "select a provider."
                     )
                     return 2
@@ -610,7 +610,7 @@ Examples:
             return 1
         except LLMError as err:
             self._print_error(
-                "LLM failure: {}\nRun 'kcmt --configure' to update your "
+                "LLM failure: {}\nRun 'kcmt-python --configure' to update your "
                 "provider settings.".format(err)
             )
             return 1
@@ -2569,7 +2569,7 @@ Examples:
     def _execute_status(self, args: argparse.Namespace, repo_root: Path) -> int:
         snapshot = self._load_run_snapshot(repo_root)
         if not snapshot:
-            self._print_warning("No kcmt run history found for this repository.")
+            self._print_warning("No kcmt-python run history found for this repository.")
             return 1
         if getattr(args, "raw", False):
             print(
@@ -2590,7 +2590,7 @@ Examples:
         repo_display = snapshot.get("repo_path") or (
             str(self._repo_root) if self._repo_root else "<unknown>"
         )
-        header = f"{BOLD}{CYAN}kcmt status{RESET} :: {CYAN}{repo_display}{RESET}"
+        header = f"{BOLD}{CYAN}kcmt-python status{RESET} :: {CYAN}{repo_display}{RESET}"
         print(header)
         timestamp = snapshot.get("timestamp")
         duration = float(snapshot.get("duration_seconds", 0.0) or 0.0)
@@ -2611,7 +2611,7 @@ Examples:
         self, config: Config, args: Optional[argparse.Namespace] = None
     ) -> None:
         repo = Path(config.git_repo_path).resolve()
-        banner = f"{BOLD}{CYAN}kcmt :: provider {config.provider} :: repo {repo}{RESET}"
+        banner = f"{BOLD}{CYAN}kcmt-python :: provider {config.provider} :: repo {repo}{RESET}"
         print(banner)
 
     def _print_heading(self, title: str) -> None:

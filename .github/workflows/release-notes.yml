@@ -23,28 +23,57 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Sync dependencies (dev)
         run: uv sync --group dev
+
+      - name: Verify release version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' rust/Cargo.toml | head -n 1)"
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Cargo version v$VERSION does not match tag $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes and changelog
         id: notes
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.version.outputs.version }}"
           uv run cz changelog --dry-run --unreleased-version="$VERSION" > release_notes.md
           uv run cz changelog --unreleased-version="$VERSION" --file CHANGELOG.generated.md
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build distributions
+      - name: Build Rust release binaries
+        shell: bash
         run: |
-          uv run python -m build
+          cargo build --locked --release --manifest-path rust/Cargo.toml -p kcmt-cli
+
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          ARCH="$(uname -m)"
+          ARCHIVE_DIR="dist/kcmt-${VERSION}-${OS}-${ARCH}"
+          mkdir -p "$ARCHIVE_DIR"
+          cp rust/target/release/kcmt rust/target/release/commit rust/target/release/kc "$ARCHIVE_DIR"/
+          [ -f README.md ] && cp README.md "$ARCHIVE_DIR"/
+          [ -f LICENSE ] && cp LICENSE "$ARCHIVE_DIR"/
+          tar -C dist -czf "dist/kcmt-${VERSION}-${OS}-${ARCH}.tar.gz" "kcmt-${VERSION}-${OS}-${ARCH}"
+          git archive --format=tar.gz --prefix="kcmt-${VERSION}/" HEAD -o "dist/kcmt-${VERSION}-source.tar.gz"
+          sha256sum "dist/kcmt-${VERSION}-${OS}-${ARCH}.tar.gz" "dist/kcmt-${VERSION}-source.tar.gz" > dist/SHA256SUMS
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: v${{ steps.notes.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
           body_path: release_notes.md
           files: |
             CHANGELOG.generated.md
-            dist/*.whl
             dist/*.tar.gz
+            dist/SHA256SUMS

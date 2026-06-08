@@ -1,4 +1,4 @@
-from kcmt.exceptions import (
+from kcmt_python.exceptions import (
     ConfigError,
     GitError,
     KlingonCMTError,

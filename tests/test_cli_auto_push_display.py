@@ -1,4 +1,4 @@
-from kcmt.cli import CLI
+from kcmt_python.cli import CLI
 
 
 def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
@@ -25,7 +25,7 @@ def test_cli_auto_push_display(monkeypatch, tmp_path, capsys):
             return []
 
     monkeypatch.setenv("KLINGON_CMT_AUTO_PUSH", "1")
-    monkeypatch.setattr("kcmt.cli.KlingonCMTWorkflow", _FakeWorkflow)
+    monkeypatch.setattr("kcmt_python.cli.KlingonCMTWorkflow", _FakeWorkflow)
     cli = CLI()
     code = cli.run(
         [

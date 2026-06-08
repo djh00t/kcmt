@@ -1,4 +1,4 @@
-"""Git operations for kcmt."""
+"""Git operations for kcmt-python."""
 
 import difflib
 import os

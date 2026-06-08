@@ -1,7 +1,7 @@
 import types
 
-from kcmt.config import clear_active_config, load_config
-from kcmt.core import CommitResult, KlingonCMTWorkflow
+from kcmt_python.config import clear_active_config, load_config
+from kcmt_python.core import CommitResult, KlingonCMTWorkflow
 
 
 def _mk_workflow(auto_push: bool):
@@ -36,7 +36,7 @@ def test_auto_push_triggers_on_success(monkeypatch):
                     success=True,
                     commit_hash="abcd1234",
                     message="chore(core): test auto push",
-                    file_path="kcmt/core.py",
+                    file_path="kcmt_python/core.py",
                 )
             ],
             wf,
@@ -72,7 +72,7 @@ def test_auto_push_not_triggered_when_disabled(monkeypatch):
                     success=True,
                     commit_hash="deadbeef",
                     message="chore(core): no push",
-                    file_path="kcmt/core.py",
+                    file_path="kcmt_python/core.py",
                 )
             ],
             wf,
@@ -106,7 +106,7 @@ def test_auto_push_not_triggered_on_no_success(monkeypatch):
                     commit_hash=None,
                     message=None,
                     error="failure",
-                    file_path="kcmt/core.py",
+                    file_path="kcmt_python/core.py",
                 )
             ],
             wf,

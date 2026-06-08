@@ -1,4 +1,4 @@
-"""Configuration management for kcmt."""
+"""Configuration management for kcmt-python."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ BATCH_TIMEOUT_MIN_SECONDS = 900
 
 DEFAULT_MODELS = {
     "openai": {
-        "model": "gpt-5-mini-2025-08-07",
+        "model": "gpt-5.4-mini",
         "endpoint": "https://api.openai.com/v1",
         "api_key_env": "OPENAI_API_KEY",
     },
@@ -60,7 +60,7 @@ _FUZZY_ENV_HINTS = {
 
 @dataclass
 class Config:
-    """Runtime configuration for kcmt."""
+    """Runtime configuration for kcmt-python."""
 
     provider: str
     model: str

@@ -79,13 +79,13 @@ jobs:
         run: uv run cz check --rev-range origin/${{ github.base_ref }}..HEAD
 
       - name: Ruff (lint)
-        run: uv run ruff check kcmt tests
+        run: uv run ruff check legacy/kcmt-python/kcmt_python tests
 
       - name: Black (format check)
-        run: uv run black --check kcmt tests
+        run: uv run black --check legacy/kcmt-python/kcmt_python tests
 
       - name: isort (imports check)
-        run: uv run isort --check-only kcmt tests
+        run: uv run isort --check-only legacy/kcmt-python/kcmt_python tests
 
       - name: Mypy (type check)
         run: uv run mypy --config-file pyproject.toml
@@ -110,7 +110,7 @@ jobs:
               "uv","run","pytest","-n","auto","-ra","-vv",
               "-W","default","-W","error::DeprecationWarning","-W","error::ResourceWarning",
               "--strict-config","--strict-markers",
-              "--cov=kcmt","--cov-branch","--cov-report=term-missing:skip-covered",
+              "--cov=kcmt_python.main","--cov=kcmt_python","--cov-branch","--cov-report=term-missing:skip-covered",
           ]
           sys.exit(subprocess.call(cmd))
           PY

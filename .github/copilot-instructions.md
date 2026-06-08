@@ -4,8 +4,8 @@ These guidelines help GitHub Copilot propose changes that respect the repository
 
 ## Project priorities
 - Treat Python 3.12+ as the baseline for all runtime and typing features.
-- Keep suggestions focused on the `kcmt/` package and its supporting tests under `tests/`.
-- Preserve the CLI contract in `kcmt/cli.py` and leave user-facing behavior unchanged unless explicitly requested.
+- Keep suggestions focused on the `kcmt_python/` package and its supporting tests under `tests/`.
+- Preserve the CLI contract in `kcmt_python/cli.py` and leave user-facing behavior unchanged unless explicitly requested.
 
 ## Coding conventions
 - Use four-space indentation and provide explicit type hints on new or modified functions.
@@ -14,8 +14,8 @@ These guidelines help GitHub Copilot propose changes that respect the repository
 - Name modules and functions in `snake_case`, classes in `CapWords`, and constants in `UPPER_SNAKE_CASE`.
 
 ## Architecture cues
-- Core workflow lives in `kcmt/core.py` and `kcmt/commit.py`; provider integrations reside in `kcmt/providers/`.
-- Configuration logic is centralized in `kcmt/config.py`; VCS helpers are in `kcmt/git.py`.
+- Core workflow lives in `kcmt_python/core.py` and `kcmt_python/commit.py`; provider integrations reside in `kcmt_python/providers/`.
+- Configuration logic is centralized in `kcmt_python/config.py`; VCS helpers are in `kcmt_python/git.py`.
 - Tests mirror the package structure. Add or update tests in `tests/` whenever behavior changes.
 
 ## Build, test, and validation steps
@@ -28,7 +28,7 @@ These guidelines help GitHub Copilot propose changes that respect the repository
 
 ## Documentation and CLI examples
 - Update `README.md` or docs under `docs/` when altering user-visible features or commands.
-- Provide CLI usage examples with `uv run kcmt ...` (aliases `commit` or `kc`) when documenting workflows.
+- Provide CLI usage examples with `uv run kcmt-python ...` (aliases `commit-python` or `kc-python`) when documenting workflows.
 
 ## Git & release safety
 - Follow Conventional Commits (`type(scope): subject`) if suggesting commit messages.

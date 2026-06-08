@@ -1,10 +1,9 @@
 import os
 
 import pytest
-
-from kcmt.config import clear_active_config, load_config
-from kcmt.exceptions import LLMError
-from kcmt.llm import LLMClient
+from kcmt_python.config import clear_active_config, load_config
+from kcmt_python.exceptions import LLMError
+from kcmt_python.llm import LLMClient
 
 pytestmark = pytest.mark.integration
 

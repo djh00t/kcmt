@@ -82,7 +82,7 @@ class CLI:
 
         If Node is available but packages are missing, this method will attempt
         a one-time automatic installation of dependencies using npm, pnpm, or yarn
-        (whichever is available). This behavior keeps `pip install kcmt` sufficient
+        (whichever is available). This behavior keeps `pip install kcmt-python` sufficient
         for Python dependencies while lazily preparing the interactive TUI on first use.
 
         Users can opt out of automatic installation by setting the environment variable
@@ -257,7 +257,7 @@ class CLI:
             return None
         env = os.environ.copy()
         env.setdefault("KCMT_PYTHON_EXECUTABLE", sys.executable)
-        env.setdefault("KCMT_BACKEND_MODULE", "kcmt.ink_backend")
+        env.setdefault("KCMT_BACKEND_MODULE", "kcmt_python.ink_backend")
         command = ["node", str(INK_APP_PATH)]
         if args:
             command.append("--")

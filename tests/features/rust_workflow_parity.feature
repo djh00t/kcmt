@@ -140,12 +140,12 @@ Feature: Rust workflow parity
 
   Scenario: Python entrypoint dispatches covered workflows to Rust by default
     Given a git repository with one changed tracked file
-    When the Python kcmt entrypoint commits the file in auto runtime mode
+    When the Python kcmt-python entrypoint commits the file in auto runtime mode
     Then the latest commit is written by the Rust runtime
 
   Scenario: Python entrypoint dispatches default non-interactive workflow to Rust
     Given a git repository with one changed tracked file
-    When the Python kcmt entrypoint runs the default workflow in auto runtime mode
+    When the Python kcmt-python entrypoint runs the default workflow in auto runtime mode
     Then the latest commit is written by the Rust runtime
 
   Scenario: Rust configure writes compatible config
@@ -156,21 +156,21 @@ Feature: Rust workflow parity
 
   Scenario: Python entrypoint dispatches non-interactive configure to Rust
     Given an empty runtime configuration home
-    When the Python kcmt entrypoint configures Anthropic in auto runtime mode
+    When the Python kcmt-python entrypoint configures Anthropic in auto runtime mode
     Then the Python entrypoint configure run is handled by Rust
     And the Rust configuration file contains the Anthropic provider settings
     And the Rust preferences file contains default selector preferences
 
   Scenario: Python entrypoint dispatches bare configure to Rust without prompting
     Given an empty runtime configuration home
-    When the Python kcmt entrypoint runs bare configure in auto runtime mode
+    When the Python kcmt-python entrypoint runs bare configure in auto runtime mode
     Then the Python entrypoint configure run is handled by Rust
     And the Rust configuration file contains the default OpenAI provider settings
     And the Rust preferences file contains default selector preferences
 
   Scenario: Python entrypoint dispatches configure-all to Rust
     Given an existing OpenAI runtime configuration
-    When the Python kcmt entrypoint configures all providers in auto runtime mode
+    When the Python kcmt-python entrypoint configures all providers in auto runtime mode
     Then the Python entrypoint configure run is handled by Rust
     And the Rust configuration keeps the OpenAI primary provider
     And the Rust configuration file contains the Anthropic configure-all provider settings

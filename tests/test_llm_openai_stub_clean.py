@@ -1,11 +1,11 @@
-from kcmt.config import clear_active_config, load_config
+from kcmt_python.config import clear_active_config, load_config
 
 
 def test_llm_openai_basic(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     clear_active_config()
 
-    from kcmt import llm as llm_module  # noqa: PLC0415
+    from kcmt_python import llm as llm_module  # noqa: PLC0415
 
     # Provide a dummy OpenAI client to prevent real HTTP calls in case
     # monkeypatching of _call_openai fails (defensive against upstream

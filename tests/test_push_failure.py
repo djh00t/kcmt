@@ -1,8 +1,8 @@
 import os
 
-from kcmt.commit import CommitGenerator
-from kcmt.config import Config, clear_active_config, set_active_config
-from kcmt.core import KlingonCMTWorkflow
+from kcmt_python.commit import CommitGenerator
+from kcmt_python.config import Config, clear_active_config, set_active_config
+from kcmt_python.core import KlingonCMTWorkflow
 
 
 def test_push_failure_recorded(tmp_path, monkeypatch):
@@ -35,8 +35,8 @@ def test_push_failure_recorded(tmp_path, monkeypatch):
     )
 
     # Monkeypatch push to raise error
-    from kcmt.exceptions import GitError
-    from kcmt.git import GitRepo
+    from kcmt_python.exceptions import GitError
+    from kcmt_python.git import GitRepo
 
     def failing_push(self, remote="origin", branch=None):  # noqa: D401, ARG001
         raise GitError("remote not found")

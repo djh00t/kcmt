@@ -186,7 +186,7 @@ pub fn default_models_for_provider(provider: &str) -> Vec<ModelCandidate> {
         "anthropic" => "claude-3-5-haiku-latest",
         "xai" => "grok-code-fast",
         "github" => "openai/gpt-4.1-mini",
-        _ => "gpt-5-mini-2025-08-07",
+        _ => "gpt-5.4-mini",
     };
     vec![ModelCandidate {
         provider: provider.to_string(),

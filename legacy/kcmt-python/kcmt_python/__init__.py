@@ -1,4 +1,4 @@
-"""kcmt - AI-powered atomic Git staging and committing tool."""
+"""kcmt-python - AI-powered atomic Git staging and committing tool."""
 
 from importlib import import_module
 from typing import TYPE_CHECKING
@@ -36,31 +36,31 @@ def __getattr__(name: str) -> object:
     """Lazy attribute loader to avoid importing heavy modules at package import time.
 
     This prevents environment-dependent modules (e.g., those that read env in
-    kcmt.config) from being imported unless explicitly accessed.
+    kcmt_python.config) from being imported unless explicitly accessed.
     """
     mapping = {
         # Config
-        "Config": ("kcmt.config", "Config"),
-        "load_config": ("kcmt.config", "load_config"),
-        "get_active_config": ("kcmt.config", "get_active_config"),
-        "set_active_config": ("kcmt.config", "set_active_config"),
-        "save_config": ("kcmt.config", "save_config"),
+        "Config": ("kcmt_python.config", "Config"),
+        "load_config": ("kcmt_python.config", "load_config"),
+        "get_active_config": ("kcmt_python.config", "get_active_config"),
+        "set_active_config": ("kcmt_python.config", "set_active_config"),
+        "save_config": ("kcmt_python.config", "save_config"),
         # LLM
-        "LLMClient": ("kcmt.llm", "LLMClient"),
+        "LLMClient": ("kcmt_python.llm", "LLMClient"),
         # Git
-        "GitRepo": ("kcmt.git", "GitRepo"),
+        "GitRepo": ("kcmt_python.git", "GitRepo"),
         # Commit generation
-        "CommitGenerator": ("kcmt.commit", "CommitGenerator"),
+        "CommitGenerator": ("kcmt_python.commit", "CommitGenerator"),
         # Core workflow
-        "KlingonCMTWorkflow": ("kcmt.core", "KlingonCMTWorkflow"),
-        "FileChange": ("kcmt.core", "FileChange"),
-        "CommitResult": ("kcmt.core", "CommitResult"),
+        "KlingonCMTWorkflow": ("kcmt_python.core", "KlingonCMTWorkflow"),
+        "FileChange": ("kcmt_python.core", "FileChange"),
+        "CommitResult": ("kcmt_python.core", "CommitResult"),
         # Exceptions
-        "KlingonCMTError": ("kcmt.exceptions", "KlingonCMTError"),
-        "GitError": ("kcmt.exceptions", "GitError"),
-        "LLMError": ("kcmt.exceptions", "LLMError"),
-        "ConfigError": ("kcmt.exceptions", "ConfigError"),
-        "ValidationError": ("kcmt.exceptions", "ValidationError"),
+        "KlingonCMTError": ("kcmt_python.exceptions", "KlingonCMTError"),
+        "GitError": ("kcmt_python.exceptions", "GitError"),
+        "LLMError": ("kcmt_python.exceptions", "LLMError"),
+        "ConfigError": ("kcmt_python.exceptions", "ConfigError"),
+        "ValidationError": ("kcmt_python.exceptions", "ValidationError"),
     }
     if name in mapping:
         mod_name, attr = mapping[name]
@@ -68,7 +68,7 @@ def __getattr__(name: str) -> object:
         value = getattr(mod, attr)
         globals()[name] = value  # cache for future access
         return value
-    raise AttributeError(f"module 'kcmt' has no attribute {name!r}")
+    raise AttributeError(f"module 'kcmt_python' has no attribute {name!r}")
 
 
 if TYPE_CHECKING:

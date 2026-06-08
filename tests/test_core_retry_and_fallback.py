@@ -3,10 +3,9 @@ import os
 import types
 
 import pytest
-
-from kcmt.commit import CommitGenerator
-from kcmt.config import Config, set_active_config
-from kcmt.exceptions import LLMError
+from kcmt_python.commit import CommitGenerator
+from kcmt_python.config import Config, set_active_config
+from kcmt_python.exceptions import LLMError
 
 
 def test_retry_exhaustion_without_fallback(monkeypatch, tmp_path):
@@ -36,7 +35,7 @@ def test_retry_exhaustion_without_fallback(monkeypatch, tmp_path):
 
     monkeypatch.setitem(
         importlib.sys.modules,
-        "kcmt.llm",
+        "kcmt_python.llm",
         types.SimpleNamespace(LLMClient=lambda *a, **k: _BadClient()),
     )
 
@@ -72,7 +71,7 @@ def test_empty_responses_raise_llmerror(monkeypatch, tmp_path):
 
     monkeypatch.setitem(
         importlib.sys.modules,
-        "kcmt.llm",
+        "kcmt_python.llm",
         types.SimpleNamespace(LLMClient=lambda *a, **k: _EmptyClient()),
     )
 

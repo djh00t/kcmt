@@ -1078,7 +1078,7 @@ def rust_kcmt_commits_file_with_max_retries_zero(
     workflow_context["retry_server"].shutdown()
 
 
-@when("the Python kcmt entrypoint commits the file in auto runtime mode")
+@when("the Python kcmt-python entrypoint commits the file in auto runtime mode")
 def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
 ) -> None:
@@ -1090,7 +1090,7 @@ def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
         [
             os.environ.get("PYTHON", "python"),
             "-m",
-            "kcmt.main",
+            "kcmt_python.main",
             "--file",
             "tracked.py",
             "--no-auto-push",
@@ -1108,7 +1108,9 @@ def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
     workflow_context["stderr"] = result.stderr
 
 
-@when("the Python kcmt entrypoint runs the default workflow in auto runtime mode")
+@when(
+    "the Python kcmt-python entrypoint runs the default workflow in auto runtime mode"
+)
 def python_kcmt_entrypoint_runs_default_workflow_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
 ) -> None:
@@ -1120,7 +1122,7 @@ def python_kcmt_entrypoint_runs_default_workflow_in_auto_runtime_mode(
         [
             os.environ.get("PYTHON", "python"),
             "-m",
-            "kcmt.main",
+            "kcmt_python.main",
             "--no-auto-push",
             "--repo-path",
             str(workflow_context["repo"]),
@@ -1163,7 +1165,7 @@ def rust_kcmt_configures_anthropic_non_interactively(
     workflow_context["output"] = output
 
 
-@when("the Python kcmt entrypoint configures Anthropic in auto runtime mode")
+@when("the Python kcmt-python entrypoint configures Anthropic in auto runtime mode")
 def python_kcmt_entrypoint_configures_anthropic_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
 ) -> None:
@@ -1175,7 +1177,7 @@ def python_kcmt_entrypoint_configures_anthropic_in_auto_runtime_mode(
         [
             os.environ.get("PYTHON", "python"),
             "-m",
-            "kcmt.main",
+            "kcmt_python.main",
             "--configure",
             "--provider",
             "anthropic",
@@ -1200,7 +1202,7 @@ def python_kcmt_entrypoint_configures_anthropic_in_auto_runtime_mode(
     workflow_context["stderr"] = result.stderr
 
 
-@when("the Python kcmt entrypoint runs bare configure in auto runtime mode")
+@when("the Python kcmt-python entrypoint runs bare configure in auto runtime mode")
 def python_kcmt_entrypoint_runs_bare_configure_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
 ) -> None:
@@ -1212,7 +1214,7 @@ def python_kcmt_entrypoint_runs_bare_configure_in_auto_runtime_mode(
         [
             os.environ.get("PYTHON", "python"),
             "-m",
-            "kcmt.main",
+            "kcmt_python.main",
             "--configure",
             "--repo-path",
             str(workflow_context["repo"]),
@@ -1228,7 +1230,7 @@ def python_kcmt_entrypoint_runs_bare_configure_in_auto_runtime_mode(
     workflow_context["stderr"] = result.stderr
 
 
-@when("the Python kcmt entrypoint configures all providers in auto runtime mode")
+@when("the Python kcmt-python entrypoint configures all providers in auto runtime mode")
 def python_kcmt_entrypoint_configures_all_providers_in_auto_runtime_mode(
     workflow_context: dict[str, Any],
 ) -> None:
@@ -1240,7 +1242,7 @@ def python_kcmt_entrypoint_configures_all_providers_in_auto_runtime_mode(
         [
             os.environ.get("PYTHON", "python"),
             "-m",
-            "kcmt.main",
+            "kcmt_python.main",
             "--configure-all",
             "--provider",
             "anthropic",
@@ -2286,7 +2288,7 @@ def rust_configuration_file_contains_default_openai_provider_settings(
 ) -> None:
     config = json.loads((workflow_context["config_home"] / "config.json").read_text())
     assert config["provider"] == "openai"
-    assert config["model"] == "gpt-5-mini-2025-08-07"
+    assert config["model"] == "gpt-5.4-mini"
     assert config["llm_endpoint"] == "https://api.openai.com/v1"
     assert config["api_key_env"] == "OPENAI_API_KEY"
     assert config["providers"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
@@ -2449,7 +2451,7 @@ def model_list_includes_all_supported_providers(
 ) -> None:
     output = workflow_context["output"]
     assert "openai" in output
-    assert "gpt-5-mini-2025-08-07" in output
+    assert "gpt-5.4-mini" in output
     assert "anthropic" in output
     assert "claude-3-5-haiku-latest" in output
     assert "xai" in output
@@ -2460,7 +2462,7 @@ def model_list_includes_all_supported_providers(
 def debug_model_list_is_structured_json(workflow_context: dict[str, Any]) -> None:
     payload = json.loads(workflow_context["output"])
     providers = {entry["provider"]: entry for entry in payload}
-    assert providers["openai"]["models"][0]["id"] == "gpt-5-mini-2025-08-07"
+    assert providers["openai"]["models"][0]["id"] == "gpt-5.4-mini"
     assert providers["openai"]["source"] == "static_fallback"
     assert providers["openai"]["error"]
     assert providers["github"]["models"][0]["api_key_env"] == "GITHUB_TOKEN"

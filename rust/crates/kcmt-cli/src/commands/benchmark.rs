@@ -22,7 +22,7 @@ use crate::commands::history::state_dir;
 const PROVIDER_DEFAULTS: &[(&str, &str, &str, &str)] = &[
     (
         "openai",
-        "gpt-5-mini-2025-08-07",
+        "gpt-5.4-mini",
         "https://api.openai.com/v1",
         "OPENAI_API_KEY",
     ),

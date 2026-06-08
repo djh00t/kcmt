@@ -1,4 +1,4 @@
-from kcmt.cli import CLI
+from kcmt_python.cli import CLI
 
 
 def test_cli_legacy_constructor(monkeypatch):

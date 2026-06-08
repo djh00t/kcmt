@@ -1,8 +1,8 @@
-"""Custom exceptions for the kcmt library."""
+"""Custom exceptions for the kcmt-python library."""
 
 
 class KlingonCMTError(Exception):
-    """Base exception for all kcmt related errors."""
+    """Base exception for all kcmt-python related errors."""
 
 
 class GitError(KlingonCMTError):
