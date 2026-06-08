@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "kcmt-bench"
-version = "0.1.0"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "kcmt-cli"
-version = "0.1.0"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1929,7 +1929,7 @@ dependencies = [
 
 [[package]]
 name = "kcmt-core"
-version = "0.1.0"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "gix",
@@ -1945,7 +1945,7 @@ dependencies = [
 
 [[package]]
 name = "kcmt-provider"
-version = "0.1.0"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "kcmt-tui"
-version = "0.1.0"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
