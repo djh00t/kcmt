@@ -214,7 +214,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
-                output_options.tui = workflow_tui_active;
+                output_options.tui = workflow_tui_interactive;
                 output_options.tui_model_export =
                     workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
                 add_dispatch_telemetry(
@@ -252,7 +252,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
                 };
                 let overrides = config_overrides(&args, repo_path.clone());
                 let mut output_options = output_options(&args);
-                output_options.tui = workflow_tui_active;
+                output_options.tui = workflow_tui_interactive;
                 output_options.tui_model_export =
                     workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
                 add_dispatch_telemetry(
@@ -288,7 +288,7 @@ fn dispatch(_entrypoint: &str, args: CliArgs, arg_parse_ms: f64) -> i32 {
             };
             let overrides = config_overrides(&args, repo_path.clone());
             let mut output_options = output_options(&args);
-            output_options.tui = workflow_tui_active;
+            output_options.tui = workflow_tui_interactive;
             output_options.tui_model_export =
                 workflow_tui_active && env_truthy("KCMT_TUI_MODEL_EXPORT");
             add_dispatch_telemetry(
