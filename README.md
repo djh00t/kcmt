@@ -57,6 +57,9 @@ Install from PyPI or GitHub with pip or uv:
   - uv:
     - uv pip install -e .
 
+For repo workflows, `make install` now installs the Rust CLI binaries and
+`make install-python` installs or upgrades the Python package in editable mode.
+
 Dependencies
 
 - openai>=2.14.0 (shared client for OpenAI-compatible providers)

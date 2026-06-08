@@ -1,11 +1,12 @@
-.PHONY: help install install-dev format ruff-fix lint test test-ink test-rust test-llm-matrix test-verbose test-strict coverage check quality-gates typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
+.PHONY: help install install-python install-dev format ruff-fix lint test test-ink test-rust test-llm-matrix test-verbose test-strict coverage check quality-gates typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
 	@echo "  help          Show this help message"
 	@echo ""
 	@echo "Development:"
-	@echo "  install       Install package for development"
+	@echo "  install       Install the Rust CLI binaries"
+	@echo "  install-python Install the Python package for development"
 	@echo "  install-dev   Install package and development dependencies"
 	@echo "  format        Format code with black and isort"
 	@echo "  lint          Lint code with ruff"
@@ -43,6 +44,9 @@ VERSION := $(shell python -c "import kcmt; print(kcmt.__version__)")
 
 # Installation targets
 install:
+	cargo install --locked --force --path rust/crates/kcmt-cli
+
+install-python:
 	$(UV) pip install -e .
 
 install-dev:
