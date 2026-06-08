@@ -65,3 +65,48 @@ def test_untracked_directory_files_committed(tmp_path, monkeypatch):
     log_output = _git(["log", "--pretty=%s"], tmp_path)
     lines = [ln for ln in log_output.split("\n") if ln]
     assert len(lines) == 2, lines
+
+
+def test_untracked_files_skip_per_file_git_diff(tmp_path, monkeypatch):
+    _git(["init", "-q"], tmp_path)
+    _git(["config", "user.name", "Tester"], tmp_path)
+    _git(["config", "user.email", "tester@example.com"], tmp_path)
+
+    nested = tmp_path / "newpkg"
+    nested.mkdir()
+    (nested / "alpha.py").write_text("print('alpha')\n")
+    (nested / "beta.py").write_text("print('beta')\n")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    _add_repo_to_sys_path(Path.cwd())
+    from kcmt import commit as commit_module  # type: ignore
+    from kcmt.core import KlingonCMTWorkflow  # type: ignore
+    from kcmt.git import GitRepo  # type: ignore
+
+    def fake_generate(
+        _diff: str, context: str = "", style: str = "conventional"
+    ) -> str:  # noqa: D401
+        _ = style
+        fname = context.split("File:", 1)[1].strip().split("/")[-1]
+        stem = fname.split(".")[0]
+        return f"feat(core): add {stem} module"
+
+    def explode_for_untracked(self, file_path: str) -> str:  # noqa: ARG001
+        raise AssertionError(
+            "slow per-file git diff path should not be used for untracked files"
+        )
+
+    monkeypatch.setattr(
+        commit_module.LLMClient,
+        "generate_commit_message",
+        staticmethod(fake_generate),
+    )
+    monkeypatch.setattr(GitRepo, "get_worktree_diff_for_path", explode_for_untracked)
+
+    wf = KlingonCMTWorkflow(repo_path=str(tmp_path), show_progress=False)
+    results = wf.execute_workflow()
+
+    file_commits = [r for r in results.get("file_commits", []) if r.success]
+    committed = sorted(c.file_path for c in file_commits if c.file_path)
+    assert committed == ["newpkg/alpha.py", "newpkg/beta.py"]
