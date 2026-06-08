@@ -163,3 +163,29 @@ def test_get_worktree_diff_handles_untracked(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", fake_run)
     diff = GitRepo.get_worktree_diff_for_path(repo, "file.txt")
     assert diff == "no-index diff\n"
+
+
+def test_build_untracked_diff_for_text_file(tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    (tmp_path / "notes.txt").write_text("hello\nworld\n")
+
+    diff = GitRepo.build_untracked_diff_for_path(repo, "notes.txt")
+
+    assert "diff --git a/notes.txt b/notes.txt" in diff
+    assert "new file mode 100644" in diff
+    assert "--- /dev/null" in diff
+    assert "+++ b/notes.txt" in diff
+    assert "+hello" in diff
+    assert "+world" in diff
+
+
+def test_build_untracked_diff_for_binary_file(tmp_path):
+    repo = object.__new__(GitRepo)
+    repo.repo_path = tmp_path
+    (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02")
+
+    diff = GitRepo.build_untracked_diff_for_path(repo, "image.bin")
+
+    assert "diff --git a/image.bin b/image.bin" in diff
+    assert "Binary files /dev/null and b/image.bin differ" in diff
