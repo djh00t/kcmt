@@ -423,18 +423,26 @@ class KlingonCMTWorkflow:
         # the original per-file fallback.
         file_changes: List[FileChange] = []
         collect_start = time.perf_counter()
+        self._stats.set_total(len(non_deletion_files))
 
         # Partition by porcelain status
         mod_paths: list[str] = []
-        other_entries: list[tuple[str, str]] = []
+        untracked_entries: list[tuple[str, str]] = []
+        fallback_entries: list[tuple[str, str]] = []
         for status, file_path in non_deletion_files:
             trimmed = status.strip()
             if trimmed.startswith("??"):
-                other_entries.append((status, file_path))
+                untracked_entries.append((status, file_path))
             elif "M" in trimmed:
                 mod_paths.append(file_path)
             else:
-                other_entries.append((status, file_path))
+                fallback_entries.append((status, file_path))
+
+        def append_change(change: FileChange) -> None:
+            file_changes.append(change)
+            self._stats.mark_diff()
+            self._progress_event("diff-ready", file=change.file_path)
+            self._print_progress(stage="diff")
 
         # Batched HEAD diff for modified tracked files
         if mod_paths:
@@ -452,13 +460,13 @@ class KlingonCMTWorkflow:
                     for p in mod_paths:
                         chg = by_path.get(p)
                         if chg and chg.diff_content.strip():
-                            file_changes.append(chg)
+                            append_change(chg)
                         else:
                             # Fallback per-file if missing from batch output
                             try:
                                 single = self.git_repo.get_worktree_diff_for_path(p)
                                 if single.strip():
-                                    file_changes.append(
+                                    append_change(
                                         FileChange(
                                             file_path=p,
                                             change_type="M",
@@ -481,7 +489,7 @@ class KlingonCMTWorkflow:
                         single = self.git_repo.get_worktree_diff_for_path(p)
                         self._metrics.record_diff(time.perf_counter() - start)
                         if single.strip():
-                            file_changes.append(
+                            append_change(
                                 FileChange(
                                     file_path=p,
                                     change_type="M",
@@ -497,8 +505,33 @@ class KlingonCMTWorkflow:
                             )
                         )
 
-        # Handle untracked and other entries with the existing per-file path
-        for status, file_path in other_entries:
+        # Handle untracked files without the slow per-file Git subprocess path.
+        for status, file_path in untracked_entries:
+            try:
+                diff_start = time.perf_counter()
+                single_diff = self.git_repo.build_untracked_diff_for_path(file_path)
+                diff_elapsed = time.perf_counter() - diff_start
+                self._metrics.record_diff(diff_elapsed)
+                if not single_diff.strip():
+                    continue
+                append_change(
+                    FileChange(
+                        file_path=file_path,
+                        change_type=self._change_type_from_status(status),
+                        diff_content=single_diff,
+                    )
+                )
+            except GitError as e:
+                result = CommitResult(
+                    success=False,
+                    error=f"Failed to capture diff for {file_path}: {e}",
+                    file_path=file_path,
+                )
+                results.append(result)
+                continue
+
+        # Handle tracked additions/renames/copies with the existing per-file path.
+        for status, file_path in fallback_entries:
             try:
                 diff_start = time.perf_counter()
                 single_diff = self.git_repo.get_worktree_diff_for_path(file_path)
@@ -507,12 +540,13 @@ class KlingonCMTWorkflow:
                 if not single_diff.strip():
                     continue
                 change_type = self._change_type_from_status(status)
-                change = FileChange(
-                    file_path=file_path,
-                    change_type=change_type,
-                    diff_content=single_diff,
+                append_change(
+                    FileChange(
+                        file_path=file_path,
+                        change_type=change_type,
+                        diff_content=single_diff,
+                    )
                 )
-                file_changes.append(change)
             except GitError as e:
                 result = CommitResult(
                     success=False,
@@ -876,8 +910,6 @@ class KlingonCMTWorkflow:
                 )
             )
 
-        self._progress_event("diff-ready", file=change.file_path)
-
         def _llm_progress(status: str) -> None:
             key = status.strip().lower()
             if key in {"request-sent", "request sent"}:
@@ -972,8 +1004,6 @@ class KlingonCMTWorkflow:
                 )
             )
 
-        self._progress_event("diff-ready", file=change.file_path)
-
         def _llm_progress(status: str) -> None:
             key = status.strip().lower()
             if key in {"request-sent", "request sent"}:
@@ -1051,6 +1081,7 @@ class KlingonCMTWorkflow:
         rate = snapshot["rate"]
 
         stage_styles = {
+            "diff": ("🔍", CYAN),
             "prepare": ("🧠", CYAN),
             "commit": ("🚀", GREEN),
             "done": ("🏁", YELLOW),
