@@ -1,5 +1,6 @@
 """Git operations for kcmt."""
 
+import difflib
 import os
 import subprocess
 from pathlib import Path
@@ -414,6 +415,39 @@ class GitRepo:
             )  # pragma: no cover - requires simulating git failure
 
         return no_index_result.stdout
+
+    def build_untracked_diff_for_path(self, file_path: str) -> str:
+        """Build a synthetic Git-style diff for an untracked file.
+
+        This avoids spawning multiple Git subprocesses for each untracked path
+        while still providing the LLM with a familiar patch-shaped payload.
+        """
+
+        abs_path = (self.repo_path / file_path).resolve()
+        try:
+            data = abs_path.read_bytes()
+        except OSError as exc:
+            raise GitError(
+                f"Failed to read untracked file for diff generation: {file_path}"
+            ) from exc
+
+        mode = "100755" if os.access(abs_path, os.X_OK) else "100644"
+        header = f"diff --git a/{file_path} b/{file_path}\nnew file mode {mode}\n"
+
+        if b"\x00" in data:
+            return header + f"Binary files /dev/null and b/{file_path} differ\n"
+
+        text = data.decode("utf-8", "surrogateescape")
+        body = "\n".join(
+            difflib.unified_diff(
+                [],
+                text.splitlines(),
+                fromfile="/dev/null",
+                tofile=f"b/{file_path}",
+                lineterm="",
+            )
+        )
+        return header + body + ("\n" if body else "")
 
     def get_head_diff_for_paths(
         self, file_paths: list[str], batch_size: int = 64
