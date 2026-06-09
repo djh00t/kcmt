@@ -3,7 +3,7 @@ class Kcmt < Formula
   homepage "https://github.com/djh00t/kcmt"
   version "0.3.2"
   url "https://github.com/djh00t/kcmt/archive/refs/tags/v#{version}.tar.gz"
-  sha256 "REPLACE_WITH_RELEASE_TARBALL_SHA256"
+  sha256 "1fa8338b016e839e3c1f1a02805e186986bba75c0dcb535b06137be0c71d205a"
   license "MIT"
 
   depends_on "rust" => :build
