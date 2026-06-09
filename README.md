@@ -1,576 +1,149 @@
-# kcmt-python — Klingon Commit AI-powered atomic automated conventional commits
+# kcmt - Rust-first atomic automated conventional commits
 
-kcmt-python is a commit tool with a Rust CLI and a legacy Python compatibility layer that helps you:
+kcmt is the Rust CLI for generating conventional commits from staged or working
+tree changes. The legacy Python package still exists under
+`legacy/kcmt-python/` for compatibility, but the repo now treats the Rust CLI
+as the primary surface.
 
-- Parse and stage changes atomically (file-by-file).
-- Generate clear, conventional-commit messages using an LLM.
-- Commit safely with validation, retries, real-time progress, and helpful output.
-- (Optional) auto-push successful commits to your remote.
+## What it does
 
-It’s designed to be drop-in for your local repositories and integrates with multiple hosted LLM providers (OpenAI, Anthropic, xAI, GitHub Models).
+- Parse and stage changes atomically, file by file.
+- Generate conventional-commit messages with provider-backed LLMs.
+- Validate commit messages, retry invalid output, and fail fast on repeated
+  bad responses.
+- Support OpenAI, Anthropic, xAI, and GitHub Models through the same config
+  and provider model selection flow.
+- Auto-push successful commits to `origin` by default.
+- Benchmark provider/model quality and compare Python vs Rust runtime behavior.
 
-Key features
+## Install
 
-- Atomic workflow: stage and commit per-file, with deletions handled first.
-- LLM-assisted messages: conventional commit style with validation, retries, and auto-fixes.
-- Strict failure on repeated invalid/empty LLM responses (no heuristic commit synthesis).
-- Prepare phase aborts after 25 per-file failures/timeouts to avoid wasting additional requests.
-- Built-in metrics summary (diff, queue, LLM, commit timings) to diagnose performance quickly.
-- Connection pooling for provider APIs and batched diff collection for speed on large repos.
-- Multi-provider support: OpenAI, Anthropic, xAI, and GitHub Models via a guided wizard.
-- Parallel preparation: generate per-file commit messages concurrently with live stats.
-- Automatic push to `origin` on success by default (use `--no-auto-push` to disable).
-- Pricing-aware model selection and a cross-provider pricing board (`--list-models`).
-- Built-in benchmarking across providers/models with a CLI leaderboard and optional JSON/CSV output.
-- Small and composable core: use the CLI or import the library directly.
+Install the Rust CLI from the repo root:
 
-Supported Python versions
+```sh
+make install
+```
 
-- Python 3.12+
+Or build the release binaries directly:
 
-## Governance
+```sh
+cargo build --locked --release --manifest-path rust/Cargo.toml -p kcmt-cli
+```
 
-- Planning and implementation governance is defined in `.specify/memory/constitution.md`.
-- For scoped feature work, follow `spec -> plan -> tasks -> implement`.
-- Changes that affect CLI compatibility, git safety, performance claims, or secret
-  handling should include explicit evidence in spec/plan/tasks artifacts.
+The release build produces these binaries:
 
-## Installation
+- `kcmt`
+- `commit`
+- `kc`
 
-Install the compiled Rust CLI with `make install` from the repo root. The legacy Python package remains available for editable development or compatibility workflows:
+If you are still using the legacy Python package for compatibility work, install
+that separately with:
 
-- PyPI:
-  - pip:
-    - pip install kcmt-python
-  - uv:
-    - uv pip install kcmt-python
+```sh
+make install-python
+```
 
-- Latest from GitHub:
-  - pip:
-    - pip install "git+<https://github.com/djh00t/kcmt.git>"
-  - uv:
-    - uv pip install "git+<https://github.com/djh00t/kcmt.git>"
+## Quick start
 
-- Local editable install (from the repo root):
-  - pip:
-    - pip install -e .
-  - uv:
-    - uv pip install -e .
-
-For repo workflows, `make install` installs the Rust CLI binaries and
-`make install-python` installs or upgrades the Python package in editable mode.
-
-Dependencies
-
-- openai>=2.14.0 (shared client for OpenAI-compatible providers)
-- httpx[http2]>=0.28.1 (Anthropic REST client)
-- genai-prices>=0.0.49 (pricing board for --list-models)
+```sh
+kcmt --help
+kcmt --configure
+kcmt status --repo-path .
+kcmt --oneshot --verbose
+kcmt --file README.md
+kcmt --provider xai --model grok-code-fast --api-key-env XAI_API_KEY
+```
 
 ## Configuration
 
-Run `kcmt-python --configure` inside a repository to write or refresh global config.
-Use `kcmt-python --configure --tui` to open the terminal menu shell when stdin/stdout
-are attached to a terminal. In the Rust path, the TUI shows the resolved
-provider/model/credential summary and saves on `s` or Enter; `q`/Esc exits
-without changing files. Non-TTY configure runs stay non-blocking and scriptable.
+Run `kcmt --configure` inside a repository to write or refresh global config.
+Use `kcmt --configure --tui` to open the terminal menu shell when stdin/stdout
+are attached to a terminal. The TUI shows the resolved
+provider/model/credential summary and saves on `s` or Enter; `q` or Esc exits
+without changing files.
 
-- Detects available API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GITHUB_TOKEN`).
-- Lets you choose the provider, tweak model/endpoint, and pick the env var to use.
-- Persists the selection to `~/.config/kcmt/config.json` (global, per-user).
-- Persists selector, prompt, and TUI defaults to `~/.config/kcmt/preferences.json`.
+`kcmt` keeps its settings in `~/.config/kcmt/config.json` and
+`~/.config/kcmt/preferences.json`.
 
-Per-provider settings
+Provider defaults:
 
-kcmt-python maintains a per-provider settings map in `~/.config/kcmt/config.json`. Each supported provider has:
+| Provider  | Default model             | Default endpoint                      |
+|-----------|---------------------------|---------------------------------------|
+| OpenAI    | `gpt-5.4-mini`           | `https://api.openai.com/v1`           |
+| Anthropic | `claude-3-5-haiku-latest`| `https://api.anthropic.com`           |
+| xAI       | `grok-code-fast`         | `https://api.x.ai/v1`                 |
+| GitHub    | `openai/gpt-4.1-mini`    | `https://models.github.ai/inference`  |
 
-- `name`: friendly display name
-- `endpoint`: base URL for API calls
-- `api_key_env`: fallback environment variable that holds your API key/token (kcmt-python stores the variable name, not the secret)
-- `keychain_account`: OS keychain account reference; credential resolution is explicit CLI input, then OS keychain, then environment variable
-- `preferred_model`: your saved default model for that provider
+Common config and provider commands:
 
-Use `--api-key-stdin --save-api-key` to save a provider key without putting it
-in shell history. kcmt-python stores the secret in the OS keychain and writes only the
-provider-specific account reference, such as `provider/anthropic/default`, to
-config. On macOS, saved keys prefer biometric-or-passcode keychain access
-control where available and fall back to normal keychain protection when the
-platform cannot apply that policy. Use `--no-biometric-keychain` to request the
-platform default policy explicitly. Linux builds keep using environment
-fallbacks until an OS keychain backend is added.
+- `kcmt --configure-all` - pick which providers to configure and set the API
+  key env var for each one.
+- `kcmt --verify-keys` - show which env vars are in use and whether they are
+  set.
+- `kcmt --list-models` - show a pricing-aware model board.
 
-Example (`~/.config/kcmt/config.json` excerpt):
+Provider/model benchmarking is available with `--benchmark`.
+Runtime benchmarking is a separate command:
 
-```json
-{
-  "provider": "openai",
-  "model": "gpt-5.4-mini",
-  "llm_endpoint": "https://api.openai.com/v1",
-  "api_key_env": "OPENAI_API_KEY",
-  "auto_push": true,
-  "providers": {
-    "openai": {
-      "name": "OpenAI",
-      "endpoint": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
-      "preferred_model": "gpt-5.4-mini"
-    },
-    "anthropic": {
-      "name": "Anthropic",
-      "endpoint": "https://api.anthropic.com",
-      "api_key_env": "ANTHROPIC_API_KEY",
-      "preferred_model": null
-    },
-    "xai": {
-      "name": "X.AI",
-      "endpoint": "https://api.x.ai/v1",
-      "api_key_env": "XAI_API_KEY",
-      "preferred_model": null
-    },
-    "github": {
-      "name": "GitHub Models",
-      "endpoint": "https://models.github.ai/inference",
-      "api_key_env": "GITHUB_TOKEN",
-      "preferred_model": null
-    }
-  }
-}
+```sh
+kcmt benchmark runtime --repo-path /path/to/generated/repo --runtime both --json
 ```
 
-First-use model selection
-
-- When you first run kcmt-python against a provider that doesn't yet have a `preferred_model`, the CLI shows a pricing-aware model menu and saves your selection under `providers[<provider>].preferred_model`.
-- Non-interactive runs skip the prompt and use the provider default (override with `--model`).
-
-Configure API keys for multiple providers
-
-- `kcmt-python --configure-all` lets you pick which providers to configure and select which environment variable holds each API key. Non-interactive Rust runs with `--provider`, `--model`, `--endpoint`, or `--api-key-env` update the target `providers[prov]` entry without clobbering an existing primary provider/model priority.
-- `kcmt-python --verify-keys` prints a concise table of providers, the env var in use, whether it’s set, and any detected alternatives in your environment.
-
-OpenAI batch mode
-
-- Enable with `--batch` (or via the configure menu) to route commit message generation through the OpenAI Batch API.
-- Pick the batch model interactively; defaults to your OpenAI preferred model. Override on the CLI with `--batch-model`.
-- kcmt-python polls batch jobs for at least 15 minutes by default (tunable upward via
-  `--batch-timeout` or `KCMT_BATCH_TIMEOUT`).
-- Rust batch mode uploads all file prompts before writing commits, maps responses by
-  `custom_id`, commits valid responses, and reports per-file failures for invalid
-  model/output or provider errors without printing API key values.
-
-### Rust-only install and live smoke
-
-Build the Rust binaries directly from the repo root:
-
-```shell
-cargo build --release --manifest-path rust/Cargo.toml -p kcmt-cli
-```
-
-Run Rust without the Python wrapper:
-
-```shell
-./rust/target/release/kcmt --repo-path .
-./rust/target/release/commit --repo-path .
-./rust/target/release/kc --repo-path .
-```
-
-To make `kcmt` resolve to Rust in a shell session, put the release directory
-before the Python environment on `PATH`:
-
-```shell
-export PATH="$(pwd)/rust/target/release:$PATH"
-kcmt --help
-```
-
-Optional live smoke commands use real provider keys only when the corresponding
-OS keychain entry or environment variable is already set. They do not print
-secret values; `status --raw` records credential references, not the key.
-
-```shell
-test -n "$OPENAI_API_KEY" && \
-  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
-    --model gpt-5.4-mini --file path/to/changed-file --no-auto-push --repo-path .
-
-test -n "$ANTHROPIC_API_KEY" && \
-  ./rust/target/release/kcmt --provider anthropic --api-key-env ANTHROPIC_API_KEY \
-    --model claude-sonnet-4-20250514 --file path/to/changed-file --no-auto-push --repo-path .
-
-test -n "$OPENAI_API_KEY" && \
-  ./rust/target/release/kcmt --provider openai --api-key-env OPENAI_API_KEY \
-    --batch --batch-model gpt-5.4-mini --batch-timeout 900 \
-    --no-auto-push --repo-path .
-```
-
-### Provider defaults
-
-| Provider  | Default model             | Default endpoint                         |
-|-----------|---------------------------|------------------------------------------|
-| OpenAI    | `gpt-5.4-mini`   | `https://api.openai.com/v1`              |
-| Anthropic | `claude-3-5-haiku-latest`  | `https://api.anthropic.com`             |
-| xAI       | `grok-code-fast`          | `https://api.x.ai/v1`                   |
-| GitHub    | `openai/gpt-4.1-mini`     | `https://models.github.ai/inference`    |
-
-You can still override values at runtime:
-
-```shell
-kcmt --provider openai --model gpt-5.4-mini --endpoint https://api.openai.com/v1 \
-     --api-key-env OPENAI_API_KEY --repo-path .
-```
-
-Additional environment tweaks remain available:
-
-- `KLINGON_CMT_LLM_MODEL`
-- `KLINGON_CMT_LLM_ENDPOINT`
-- `KLINGON_CMT_GIT_REPO_PATH`
-- `KLINGON_CMT_MAX_COMMIT_LENGTH` (applies to subject line validation; body is no longer truncated)
-- `KCMT_PROVIDER` – force provider selection for one-off runs without editing `~/.config/kcmt/config.json`
-  (useful when CI supplies secrets that differ from the persisted repo defaults)
-Deprecated: `KLINGON_CMT_ALLOW_FALLBACK` previously enabled a heuristic
-fallback subject after repeated LLM failures. This path has been removed;
-kcmt now fails fast with an explicit LLMError so you never get an invented
-message. The variable is ignored if set.
-  
-Additional LLM behaviour environment variables:
-
-- `KCMT_LLM_REQUEST_TIMEOUT` – per-request HTTP timeout (seconds, default 5)
-- `KCMT_PREPARE_PER_FILE_TIMEOUT` – per-file generation timeout in atomic workflow
-- `KCMT_PREPARE_WORKERS` – override number of concurrent LLM preparations (or use `--workers`)
-- `KCMT_OPENAI_DISABLE_REASONING` – disable reasoning / chain-of-thought (default on)
-- `KCMT_OPENAI_MINIMAL_PROMPT` – force minimal prompt style (adaptive toggle)
-- `KCMT_OPENAI_MAX_TOKENS` – max completion tokens for OpenAI-like providers
-- `KCMT_FAST_LOCAL_FOR_SMALL_DIFFS` – opt-in local conventional subject for tiny diffs (<=3 changed lines)
-- `KCMT_DISABLE_KEYCHAIN=1` – skip OS keychain lookup and saves for hermetic CI/test runs
-- `KLINGON_CMT_AUTO_PUSH=0|1` (disable or enable automatic `git push`; default is enabled)
-
-## List models and pricing
-
-`kcmt-python --list-models` prints supported provider models. When credentials are
-available, kcmt-python tries live provider model listing and falls back to curated
-defaults offline. Use `--debug` to see structured listings.
-
-Example:
-
-```shell
-kcmt-python --list-models
-```
-
-## Preferences, rules, and stats
-
-Provider rules and prompt profiles live in `~/.config/kcmt/preferences.json`.
-The first selector policy is `fastest_cheap`; provider presets include rules
-such as Anthropic `latest_haiku`. The commit workflow records local aggregate
-usage telemetry per repository without storing prompts, diffs, generated commit
-messages, or secret values.
-
-```shell
-kcmt-python stats --json --repo-path .
-printf '%s' "$ANTHROPIC_API_KEY" | kcmt-python --configure --provider anthropic --api-key-stdin --save-api-key
-printf '%s' "$ANTHROPIC_API_KEY" | kcmt-python --configure --provider anthropic --api-key-stdin --save-api-key --no-biometric-keychain
-```
+That compares the Python and Rust CLIs on the same repo corpus without mixing
+runtime timing into the provider-quality leaderboard.
 
 ## Benchmarking
 
-```shell
-kcmt-python --benchmark
+```sh
+kcmt --benchmark
+kcmt --benchmark --benchmark-limit 5
 ```
 
-Run a local benchmark across providers/models using a fixed set of example diffs. kcmt-python measures latency, estimates cost, and scores conventional-commit quality with lightweight heuristics.
+Benchmark output can be emitted as JSON or CSV with:
 
-Basic usage:
+- `--benchmark-json`
+- `--benchmark-csv`
 
-```shell
-kcmt-python --benchmark --benchmark-limit 5
-```
+Snapshots are saved under
+`~/.config/kcmt/repos/<repo-id>/benchmarks/benchmark-<timestamp>.json`.
 
-Options:
+## Homebrew
 
-- `--benchmark-limit INT` – max models per provider (default 0 = all models)
-- `--benchmark-timeout SECS` – per-call timeout
-- `--benchmark-json` – also emit machine-readable JSON
-- `--benchmark-csv` – also emit CSV rows
+See [docs/homebrew.md](docs/homebrew.md) for the current Homebrew packaging
+shape, release requirements, and tap guidance.
 
-Snapshots are saved under `~/.config/kcmt/repos/<repo-id>/benchmarks/benchmark-<timestamp>.json` for later comparison.
+## Release
 
-Runtime benchmarking is a separate mode:
+- Rust workspace version source: `rust/Cargo.toml`
+- Semver release tags: `vX.Y.Z`
+- Release notes generation: `.github/workflows/release-notes.yml`
+- Release artifacts: compiled Rust binaries plus source archives and checksums
 
-```shell
-python scripts/benchmark/generate_uncommitted_repo.py --file-count 1000 --json
-kcmt-python benchmark runtime --repo-path /path/to/generated/repo --runtime both --json
-```
+## Legacy Python package
 
-That command compares the Python and Rust CLIs on the same repo corpus without
-mixing runtime timing into the provider-quality leaderboard. The runtime JSON
-includes one baseline row and five optimization rows with timings, throughput,
-quality scores, failures, and the next bottleneck label for each iteration.
-
-## Quick start (CLI)
-
-```shell
-kcmt-python --configure              # guided setup -> ~/.config/kcmt/config.json
-kcmt-python                          # per-file atomic commits with live stats
-kcmt-python --workers 8              # explicitly set parallel LLM preparations
-kcmt-python --oneshot --verbose      # single best-effort commit
-kcmt-python --file README.md         # commit a specific file
-kcmt-python --provider xai --model grok-code-fast --api-key-env XAI_API_KEY
-```
-
-Exit codes
-
-- 0 on success
-- 1 on workflow error (input/validation/LLM/Git failures)
-- 2 on configuration error (no usable API key)
-
-## CLI reference
-
-`kcmt-python` accepts the following common options:
-
-- `--configure` – launch the interactive setup wizard.
-- `--configure-all` – select provider(s) and set which env var holds each API key.
-- `--verify-keys` – show which env var is used per provider and whether it’s set.
-- `--provider`, `--model`, `--endpoint`, `--api-key-env` – override saved provider details.
-- `--repo-path PATH` – target repository (defaults to current working directory).
-- `--max-commit-length INT` – validate (not hard truncate) the subject line length (default 72 for legacy compatibility; body is preserved).
-- `--auto-push` / `--no-auto-push` – enable/disable automatic push (default: enabled; can also set `KLINGON_CMT_AUTO_PUSH`).
-- `--max-retries INT` – provider request retries before fallback or failure (default 3).
-- `--oneshot` – pick one changed file, stage it, and commit it once.
-- `--file PATH` – stage & commit an explicit file.
-- `--no-progress` – disable the live stats bar.
-- `--verbose`, `-v` – emit detailed logs and per-file results.
-- `--list-models` – show a pricing comparison board of models across providers.
-- `--benchmark` – run the model benchmark and show leaderboards. Combine with
-  `--provider` / `--model` to focus a subset; see `docs/benchmark.md` for the
-  scoring rubric and pass/fail guidance. Missing credentials are listed in the
-  "Excluded Models" table at the end of each run.
-- `--benchmark-json` / `--benchmark-csv` – print results in machine-readable formats.
-- `benchmark runtime --repo-path PATH --runtime {python,rust,both} --json` –
-  compare Python and Rust local workflow timings on the same repo corpus.
-
-## Conventional commit automation
-
-kcmt-python now ships with a [Commitizen](https://commitizen-tools.github.io/commitizen/) configuration that mirrors the
-LLM-generated commit format. After installing the project you can:
-
-- run `cz check` to validate a message before committing manually;
-- run `cz commit` to invoke Commitizen's prompt flow while still benefitting from kcmt-python's
-  validation rules and version tracking (it watches `legacy/kcmt-python/kcmt_python/__init__.py`).
-
-The configuration lives in `pyproject.toml` under `[tool.commitizen]`, so any repository that
-adopts kcmt-python inherits the same conventional commit guardrails automatically.
-
-## Library usage examples
-
-### Generate a message from staged changes
-
-```python
-from kcmt_python.config import load_config
-from kcmt_python.commit import CommitGenerator
-
-cfg = load_config()  # also sets the active config for other helpers
-gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
-msg = gen.generate_from_staged(context="Refactor widgets", style="conventional")
-print(msg)
-```
-
-### Generate from working tree changes
-
-```python
-from kcmt_python.config import load_config
-from kcmt_python.commit import CommitGenerator
-
-cfg = load_config()
-gen = CommitGenerator(repo_path=cfg.git_repo_path, config=cfg)
-msg = gen.generate_from_working(context="Work in progress", style="conventional")
-print(msg)
-```
-
-### Run the full atomic workflow
-
-```python
-from kcmt_python.config import load_config
-from kcmt_python.core import KlingonCMTWorkflow
-
-cfg = load_config()
-wf = KlingonCMTWorkflow(repo_path=cfg.git_repo_path, max_retries=3, config=cfg)
-results = wf.execute_workflow()
-
-print(results["summary"])
-for result in results.get("file_commits", []):
-    print(result.success, result.commit_hash, result.message)
-```
-
-### Use `GitRepo` directly
-
-```python
-from kcmt_python.config import load_config
-from kcmt_python.git import GitRepo
-
-cfg = load_config()
-repo = GitRepo(cfg.git_repo_path, cfg)
-
-print(repo.get_working_diff())
-if repo.has_working_changes():
-    repo.stage_file("README.md")
-    repo.commit("docs: update readme")
-```
-
-## API documentation (high-level)
-
-Exceptions
-
-- kcmt_python.exceptions.KlingonCMTError: Base error
-- kcmt_python.exceptions.GitError: Git command errors
-- kcmt_python.exceptions.LLMError: LLM call errors
-- kcmt_python.exceptions.ConfigError: Config/ENV errors
-- kcmt_python.exceptions.ValidationError: Validation failures
-
-Configuration
-
-- kcmt_python.config.Config
-  - Fields: provider, model, llm_endpoint, api_key_env, git_repo_path, max_commit_length, auto_push, providers (per-provider map), provider_env_overrides (legacy mapping)
-- kcmt_python.config.load_config(overrides=None)
-  - Merge global `~/.config/kcmt/config.json`, environment, and optional overrides.
-- kcmt_python.config.save_config(config, repo_root=None)
-- kcmt_python.config.get_active_config() / set_active_config()
-
-LLM
-
-- kcmt_python.llm.LLMClient
-  - generate_commit_message(diff: str, context: str = "", style: str = "conventional") -> str
-
-Git operations
-
-- kcmt_python.git.GitRepo
-  - has_staged_changes() -> bool
-  - get_staged_diff() -> str
-  - has_working_changes() -> bool
-  - get_working_diff() -> str
-  - get_commit_diff(commit_hash: str) -> str
-  - get_recent_commits(count: int = 5) -> list[str]
-  - stage_file(file_path: str) -> None
-  - unstage(file_path: str) -> None
-  - commit(message: str) -> None
-  - process_deletions_first() -> list[str]
-  - push(remote: str = "origin", branch: str | None = None) -> str
-
-Commit generation
-
-- kcmt_python.commit.CommitGenerator
-  - generate_from_staged(context: str = "", style: str = "conventional") -> str
-  - generate_from_working(context: str = "", style: str = "conventional") -> str
-  - generate_from_commit(commit_hash: str, context: str = "", style: str = "conventional") -> str
-  - suggest_commit_message(diff: str, context: str = "", style: str = "conventional") -> str
-  - validate_conventional_commit(message: str) -> bool
-  - validate_and_fix_commit_message(message: str) -> str
-
-Core workflow
-
-- kcmt_python.core.FileChange
-  - file_path: str
-  - change_type: str  # "A" | "M" | "D"
-  - diff_content: str
-- kcmt_python.core.CommitResult
-  - success: bool
-  - commit_hash: str | None
-  - message: str | None
-  - error: str | None
-- kcmt_python.core.KlingonCMTWorkflow(repo_path: str | None = None, max_retries: int = 3)
-  - execute_workflow() -> dict
-    - deletions_committed: list[CommitResult]
-    - file_commits: list[CommitResult]
-    - errors: list[str]
-    - summary: str
-
-Notes on behavior
-
-- Deletions are committed first, one commit per deleted file with a generated message (`chore(<scope>): file deleted`).
-- Then remaining file changes are parsed from git diff and committed per-file.
-- Commit messages are validated and may be LLM-fixed on failure; retries are applied.
-- Fast fail: after retry exhaustion (currently two LLM attempts per file) kcmt-python raises an `LLMError`; no heuristic commit message is generated.
-- If `--auto-push` is enabled and at least one commit succeeds, kcmt-python attempts `git push origin <current-branch>` and records the result (`results['pushed']=True`).
+The legacy Python package lives in `legacy/kcmt-python/kcmt_python/`.
+Use `make install-python` if you need editable development or compatibility
+workflows around that package.
 
 ## Development
 
-Prereqs
-
-- Python 3.12+
-- A virtual environment
-- Git
-
-Set up
-
-- uv venv &amp;&amp; source .venv/bin/activate  # or python -m venv .venv
-- uv pip install -e .  # or pip install -e .
-- uv pip install pytest            # or pip install pytest
-
-Run tests (from project root)
-
-- make test                  # quiet pytest run via Makefile
-- uv run -m pytest tests     # or: pytest
-
-Lint/format (recommendations)
-
-- Use Black and isort (not enforced by this package directly).
-- Keep lines &lt;=80 chars where practical, file size &lt;500 lines for readability.
-
-Publishing
-
-- Version is defined in `legacy/kcmt-python/kcmt_python/__init__.py` (managed by hatch).
-- Build and publish via hatch (example):
-  - uv pip install hatch
-  - hatch build
-  - hatch publish  # configure as needed
-
-Security notes
-
-- Your GITHUB_TOKEN is used as the API key for the configured endpoint.
-- Treat it like any other secret; avoid checking it into logs or code.
-- Prefer passing the token via the CLI or securely provisioned environment.
-
-Git hook for commit messages
-
-- A `commit-msg` hook is provided under `.githooks/commit-msg` to enforce conventional commits locally. Enable it once per repo:
-
-```shell
-git config core.hooksPath .githooks
+```sh
+make check
+make quality-gates
+make test-rust
+make test-ink
 ```
 
-This runs `cz check` on commit messages and blocks non-compliant commits.
+The strict CI surface also includes the Rust release build and the UI tests in
+`legacy/kcmt-python/kcmt_python/ui/ink`.
 
-## Changelog
+## Testing
 
-- Current release: 0.3.2 — see GitHub Releases for full notes.
+For local validation, the repo's current CI-equivalent gates are:
+
+- `make check`
+- `make quality-gates`
 
 ## License
 
-MIT (see repository license)
-
-## Strict testing and CI quick reference
-
-Environment
-
-- uv venv && source .venv/bin/activate
-- uv sync --group dev
-- uv pip install -e .
-
-Lint/format/type-check
-
-- uv run ruff check legacy/kcmt-python/kcmt_python tests
-- uv run black --check legacy/kcmt-python/kcmt_python tests
-- uv run isort --check-only legacy/kcmt-python/kcmt_python tests
-- uv run mypy legacy/kcmt-python/kcmt_python
-
-Run tests
-
-- Basic: uv run pytest -ra -vv tests
-- Strict CI-like run (parallel, warnings as errors, coverage):
-  uv run pytest -n auto -ra -vv -W default -W error::DeprecationWarning -W error::ResourceWarning --strict-config --strict-markers --cov=kcmt_python --cov-branch --cov-report=term-missing:skip-covered --cov-fail-under=85 tests
-  - On Windows/PowerShell use a single line (no trailing `\`) or replace the
-    line continuation with a backtick (`` ` ``); PowerShell treats ``\`` as a
-    literal character and will otherwise break up the arguments.
-
-Make targets
-
-- make test
-- make test-verbose
-- make test-strict
-- make check     # lint + typecheck + strict tests
-
-<!-- temp change -->
+MIT
