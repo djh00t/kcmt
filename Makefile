@@ -1,4 +1,4 @@
-.PHONY: help install install-python install-dev format ruff-fix lint test test-ink test-rust test-llm-matrix test-verbose test-strict coverage check quality-gates typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test publish dev-setup dev-check quick-patch quick-minor quick-major
+.PHONY: help install install-python install-dev format ruff-fix lint test test-ink test-rust test-llm-matrix test-verbose test-strict coverage check quality-gates typecheck clean clean-build clean-cache clean-pyc clean-test build version bump-patch bump-minor bump-major release release-test homebrew-sync publish dev-setup dev-check quick-patch quick-minor quick-major
 # Default target
 help:
 	@echo "Available targets:"
@@ -27,6 +27,7 @@ help:
 	@echo "  bump-major    Bump major version (X.0.0)"
 	@echo "  release-test  Build release artifacts locally"
 	@echo "  release       Tag and push a semver release"
+	@echo "  homebrew-sync Update the kcmt-homebrew formula from release checksums"
 	@echo "  publish       Alias for release"
 
 # Variables
@@ -37,6 +38,8 @@ UV = uv
 RUST_MANIFEST = rust/Cargo.toml
 RUST_BIN_DIR = rust/target/release
 RUST_DIST_DIR = dist
+HOMEBREW_TAP_REPO ?= ../kcmt-homebrew
+HOMEBREW_FORMULA = Formula/kcmt.rb
 PYTEST = $(UV) run pytest
 TEST_ENV = KCMT_DISABLE_KEYCHAIN=1
 PYPI_TOKEN ?=
@@ -174,6 +177,8 @@ build: clean
 	[ -f README.md ] && cp README.md "$$archive_dir"/ || true; \
 	[ -f LICENSE ] && cp LICENSE "$$archive_dir"/ || true; \
 	tar -C $(RUST_DIST_DIR) -czf "$(RUST_DIST_DIR)/kcmt-$(VERSION)-$$(uname -s | tr '[:upper:]' '[:lower:]')-$$(uname -m).tar.gz" "kcmt-$(VERSION)-$$(uname -s | tr '[:upper:]' '[:lower:]')-$$(uname -m)"; \
+	git archive --format=tar.gz --prefix="kcmt-$(VERSION)/" HEAD -o "$(RUST_DIST_DIR)/kcmt-$(VERSION)-source.tar.gz"; \
+	sha256sum "$(RUST_DIST_DIR)/kcmt-$(VERSION)-$$(uname -s | tr '[:upper:]' '[:lower:]')-$$(uname -m).tar.gz" "$(RUST_DIST_DIR)/kcmt-$(VERSION)-source.tar.gz" > "$(RUST_DIST_DIR)/SHA256SUMS"; \
 	rm -rf "$$archive_dir"
 
 # Release
@@ -185,6 +190,20 @@ release: build
 	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
 	@git push origin v$(VERSION)
 	@echo "Pushed release tag v$(VERSION)"
+	@$(MAKE) homebrew-sync
+
+homebrew-sync:
+	@test -f "$(RUST_DIST_DIR)/SHA256SUMS" || (echo "Run make build or make release-test first." && exit 1)
+	@test -d "$(HOMEBREW_TAP_REPO)/.git" || (echo "Set HOMEBREW_TAP_REPO to a cloned kcmt-homebrew repo." && exit 1)
+	@echo "Syncing kcmt-homebrew formula from $(RUST_DIST_DIR)/SHA256SUMS..."
+	$(PYTHON) scripts/sync_homebrew_formula.py --tap-repo "$(HOMEBREW_TAP_REPO)" --version "$(VERSION)" --sums-file "$(RUST_DIST_DIR)/SHA256SUMS"
+	@if git -C "$(HOMEBREW_TAP_REPO)" diff --quiet -- "$(HOMEBREW_FORMULA)"; then \
+		echo "kcmt-homebrew formula already up to date."; \
+	else \
+		git -C "$(HOMEBREW_TAP_REPO)" add "$(HOMEBREW_FORMULA)"; \
+		git -C "$(HOMEBREW_TAP_REPO)" commit -m "build(homebrew): update kcmt formula for v$(VERSION)"; \
+		git -C "$(HOMEBREW_TAP_REPO)" push origin HEAD; \
+	fi
 
 publish: release
 

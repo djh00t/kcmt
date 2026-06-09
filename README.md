@@ -110,7 +110,7 @@ Snapshots are saved under
 ## Homebrew
 
 See [docs/homebrew.md](docs/homebrew.md) for the current Homebrew packaging
-shape, release requirements, and tap guidance.
+shape, release requirements, tap repo, and release sync flow.
 
 ## Release
 
