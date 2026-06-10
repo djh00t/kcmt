@@ -18,6 +18,15 @@ as the primary surface.
 
 ## Install
 
+Install the Rust CLI with Homebrew:
+
+```sh
+brew tap djh00t/kcmt-homebrew
+brew install kcmt
+```
+
+Homebrew installs the Rust CLI binaries without the legacy Python package.
+
 Install the Rust CLI from the repo root:
 
 ```sh
