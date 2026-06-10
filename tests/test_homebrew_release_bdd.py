@@ -19,6 +19,7 @@ scenarios("features/homebrew_release.feature")
 
 RELEASE_VERSION = "0.3.2"
 RELEASE_CHECKSUM = "1fa8338b016e839e3c1f1a02805e186986bba75c0dcb535b06137be0c71d205a"
+README_PATH = Path(__file__).resolve().parents[1] / "README.md"
 
 
 @given("a placeholder kcmt-homebrew formula", target_fixture="homebrew_context")
@@ -73,3 +74,30 @@ def formula_version_is_updated(homebrew_context: dict[str, Any]) -> None:
 def formula_checksum_is_updated(homebrew_context: dict[str, Any]) -> None:
     formula_text = Path(homebrew_context["formula_path"]).read_text(encoding="utf-8")
     assert f'sha256 "{RELEASE_CHECKSUM}"' in formula_text
+
+
+@given("the README install section", target_fixture="readme_install_section")
+def readme_install_section() -> str:
+    readme_text = README_PATH.read_text(encoding="utf-8")
+    start = readme_text.index("## Install")
+    end = readme_text.index("## Quick start")
+    return readme_text[start:end]
+
+
+@then("the install section includes the kcmt Homebrew tap")
+def install_section_includes_homebrew_tap(readme_install_section: str) -> None:
+    assert "brew tap djh00t/kcmt-homebrew" in readme_install_section
+
+
+@then("the install section installs kcmt from Homebrew")
+def install_section_installs_kcmt_from_homebrew(readme_install_section: str) -> None:
+    assert "brew install kcmt" in readme_install_section
+
+
+@then(
+    "the install section states Homebrew installs the Rust CLI without the legacy "
+    "Python package"
+)
+def install_section_states_homebrew_is_rust_only(readme_install_section: str) -> None:
+    assert "Homebrew installs the Rust CLI" in readme_install_section
+    assert "without the legacy Python package" in readme_install_section
