@@ -57,6 +57,22 @@ pub struct OpenAiBatchJob {
 pub struct OpenAiBatchResult {
     pub custom_id: String,
     pub content: String,
+    pub usage: Option<ProviderUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cached_input_tokens: Option<u64>,
+    pub cached_output_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCompletion {
+    pub content: String,
+    pub usage: Option<ProviderUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,11 +169,28 @@ impl OpenAiClient {
         model: &str,
         messages: &[ProviderMessage],
     ) -> Result<String> {
+        Ok(
+            Self::invoke_chat_with_usage(transport, endpoint, api_key, model, messages)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_chat_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<ProviderCompletion> {
         let request = Self::build_chat_request(endpoint, api_key, model, messages);
         let response = transport
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
-        Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+        Ok(ProviderCompletion {
+            content: Self::parse_chat_response(&response).map_err(|err| anyhow!(err))?,
+            usage: parse_provider_usage("openai", &response),
+        })
     }
 
     pub async fn invoke_responses(
@@ -167,11 +200,28 @@ impl OpenAiClient {
         model: &str,
         messages: &[ProviderMessage],
     ) -> Result<String> {
+        Ok(
+            Self::invoke_responses_with_usage(transport, endpoint, api_key, model, messages)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_responses_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<ProviderCompletion> {
         let request = Self::build_responses_request(endpoint, api_key, model, messages);
         let response = transport
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
-        Self::parse_responses_response(&response).map_err(|err| anyhow!(err))
+        Ok(ProviderCompletion {
+            content: Self::parse_responses_response(&response).map_err(|err| anyhow!(err))?,
+            usage: parse_provider_usage("openai", &response),
+        })
     }
 
     pub async fn invoke_model(
@@ -181,10 +231,24 @@ impl OpenAiClient {
         model: &str,
         messages: &[ProviderMessage],
     ) -> Result<String> {
+        Ok(
+            Self::invoke_model_with_usage(transport, endpoint, api_key, model, messages)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_model_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<ProviderCompletion> {
         if Self::requires_responses(model) {
-            Self::invoke_responses(transport, endpoint, api_key, model, messages).await
+            Self::invoke_responses_with_usage(transport, endpoint, api_key, model, messages).await
         } else {
-            Self::invoke_chat(transport, endpoint, api_key, model, messages).await
+            Self::invoke_chat_with_usage(transport, endpoint, api_key, model, messages).await
         }
     }
 
@@ -227,6 +291,9 @@ impl OpenAiClient {
                     }
                 });
                 body["body"][token_limit_key] = json!(token_limit);
+                if model.trim().to_ascii_lowercase().starts_with("gpt-6") {
+                    body["body"].as_object_mut().unwrap().remove("temperature");
+                }
                 body.to_string()
             })
             .collect::<Vec<_>>()
@@ -279,6 +346,7 @@ impl OpenAiClient {
                 Ok(content) => output.results.push(OpenAiBatchResult {
                     custom_id: custom_id.to_string(),
                     content,
+                    usage: parse_provider_usage("openai", body),
                 }),
                 Err(error) => output.failures.push(OpenAiBatchFailure {
                     custom_id: custom_id.to_string(),
@@ -478,11 +546,29 @@ impl AnthropicClient {
         system: &str,
         prompt: &str,
     ) -> Result<String> {
+        Ok(
+            Self::invoke_messages_with_usage(transport, endpoint, api_key, model, system, prompt)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_messages_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        system: &str,
+        prompt: &str,
+    ) -> Result<ProviderCompletion> {
         let request = Self::build_messages_request(endpoint, api_key, model, system, prompt);
         let response = transport
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
-        Self::parse_messages_response(&response).map_err(|err| anyhow!(err))
+        Ok(ProviderCompletion {
+            content: Self::parse_messages_response(&response).map_err(|err| anyhow!(err))?,
+            usage: parse_provider_usage("anthropic", &response),
+        })
     }
 
     pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
@@ -544,11 +630,28 @@ impl XaiClient {
         model: &str,
         messages: &[ProviderMessage],
     ) -> Result<String> {
+        Ok(
+            Self::invoke_chat_with_usage(transport, endpoint, api_key, model, messages)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_chat_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<ProviderCompletion> {
         let request = Self::build_chat_request(endpoint, api_key, model, messages);
         let response = transport
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
-        Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+        Ok(ProviderCompletion {
+            content: Self::parse_chat_response(&response).map_err(|err| anyhow!(err))?,
+            usage: parse_provider_usage("xai", &response),
+        })
     }
 
     pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
@@ -606,16 +709,18 @@ impl XaiClient {
                 });
                 continue;
             }
-            let content = result
+            let response = result
                 .get("batch_result")
                 .and_then(|value| value.get("response"))
                 .and_then(|value| value.get("chat_get_completion"))
-                .or_else(|| result.get("response"))
-                .and_then(|value| parse_openai_compatible_response(value).ok());
+                .or_else(|| result.get("response"));
+            let content = response.and_then(|value| parse_openai_compatible_response(value).ok());
             match content {
-                Some(content) => output
-                    .results
-                    .push(OpenAiBatchResult { custom_id, content }),
+                Some(content) => output.results.push(OpenAiBatchResult {
+                    custom_id,
+                    content,
+                    usage: response.and_then(|value| parse_provider_usage("xai", value)),
+                }),
                 None => output.failures.push(OpenAiBatchFailure {
                     custom_id,
                     error: "xAI batch response missing assistant content".to_string(),
@@ -763,11 +868,28 @@ impl GitHubModelsClient {
         model: &str,
         messages: &[ProviderMessage],
     ) -> Result<String> {
+        Ok(
+            Self::invoke_chat_with_usage(transport, endpoint, api_key, model, messages)
+                .await?
+                .content,
+        )
+    }
+
+    pub async fn invoke_chat_with_usage(
+        transport: &AsyncTransport,
+        endpoint: &str,
+        api_key: &str,
+        model: &str,
+        messages: &[ProviderMessage],
+    ) -> Result<ProviderCompletion> {
         let request = Self::build_chat_request(endpoint, api_key, model, messages);
         let response = transport
             .post_json(&request.url, request.header_map()?, &request.payload)
             .await?;
-        Self::parse_chat_response(&response).map_err(|err| anyhow!(err))
+        Ok(ProviderCompletion {
+            content: Self::parse_chat_response(&response).map_err(|err| anyhow!(err))?,
+            usage: parse_provider_usage("github", &response),
+        })
     }
 
     pub fn build_models_request(endpoint: &str, api_key: &str) -> ProviderRequest {
@@ -813,6 +935,12 @@ fn build_openai_compatible_request(
         "temperature": 1,
     });
     payload[openai_token_limit_key(model)] = json!(openai_token_limit(model));
+    if model.trim().to_ascii_lowercase().starts_with("gpt-6") {
+        payload.as_object_mut().unwrap().remove("temperature");
+    }
+    if model == "deepseek-flash" {
+        payload["reasoning_effort"] = json!("none");
+    }
 
     ProviderRequest {
         url: format!("{}/chat/completions", trim_endpoint(endpoint)),
@@ -835,6 +963,7 @@ fn build_bearer_models_request(endpoint: &str, api_key: &str) -> ProviderRequest
 fn openai_token_limit_key(model: &str) -> &'static str {
     let normalized = model.trim().to_ascii_lowercase();
     if normalized.starts_with("gpt-5")
+        || normalized.starts_with("gpt-6")
         || normalized.starts_with("o1")
         || normalized.starts_with("o3")
         || normalized.starts_with("o4")
@@ -851,6 +980,55 @@ fn openai_token_limit(model: &str) -> u32 {
     } else {
         512
     }
+}
+
+fn parse_provider_usage(provider: &str, payload: &Value) -> Option<ProviderUsage> {
+    let usage = payload.get("usage")?;
+    let anthropic = provider == "anthropic";
+    let input = usage
+        .get(if anthropic {
+            "input_tokens"
+        } else {
+            "prompt_tokens"
+        })
+        .or_else(|| usage.get("input_tokens"))?
+        .as_u64()?;
+    let output = usage
+        .get(if anthropic {
+            "output_tokens"
+        } else {
+            "completion_tokens"
+        })
+        .or_else(|| usage.get("output_tokens"))?
+        .as_u64()?;
+    let cached_input = if anthropic {
+        usage.get("cache_read_input_tokens")
+    } else {
+        usage
+            .pointer("/prompt_tokens_details/cached_tokens")
+            .or_else(|| usage.pointer("/input_tokens_details/cached_tokens"))
+            .or_else(|| usage.get("prompt_cache_hit_tokens"))
+    }
+    .and_then(Value::as_u64);
+    let cache_write = anthropic
+        .then(|| {
+            usage
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+        })
+        .flatten();
+    Some(ProviderUsage {
+        input_tokens: input
+            + cached_input.unwrap_or(0) * u64::from(anthropic)
+            + cache_write.unwrap_or(0),
+        output_tokens: output,
+        cached_input_tokens: cached_input,
+        cached_output_tokens: usage
+            .pointer("/completion_tokens_details/cached_tokens")
+            .or_else(|| usage.pointer("/output_tokens_details/cached_tokens"))
+            .and_then(Value::as_u64),
+        cache_write_input_tokens: cache_write,
+    })
 }
 
 fn parse_openai_compatible_response(payload: &Value) -> Result<String, String> {
@@ -1014,9 +1192,40 @@ mod tests {
     use crate::transport::{AsyncTransport, RetryPolicy};
 
     use super::{
-        AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderMessage,
-        XaiClient,
+        parse_provider_usage, AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient,
+        ProviderMessage, XaiClient,
     };
+
+    #[test]
+    fn usage_parser_keeps_provider_cache_breakdowns() {
+        let openai = parse_provider_usage(
+            "openai",
+            &json!({"usage": {"prompt_tokens": 100, "completion_tokens": 20,
+                "prompt_tokens_details": {"cached_tokens": 40}}}),
+        )
+        .unwrap();
+        assert_eq!((openai.input_tokens, openai.output_tokens), (100, 20));
+        assert_eq!(openai.cached_input_tokens, Some(40));
+        assert_eq!(openai.cached_output_tokens, None);
+
+        let anthropic = parse_provider_usage(
+            "anthropic",
+            &json!({"usage": {"input_tokens": 10, "output_tokens": 5,
+                "cache_read_input_tokens": 20, "cache_creation_input_tokens": 30}}),
+        )
+        .unwrap();
+        assert_eq!(anthropic.input_tokens, 60);
+        assert_eq!(anthropic.cached_input_tokens, Some(20));
+        assert_eq!(anthropic.cache_write_input_tokens, Some(30));
+
+        let deepseek = parse_provider_usage(
+            "deepseek",
+            &json!({"usage": {"prompt_tokens": 80, "completion_tokens": 10,
+                "prompt_cache_hit_tokens": 25}}),
+        )
+        .unwrap();
+        assert_eq!(deepseek.cached_input_tokens, Some(25));
+    }
 
     #[test]
     fn openai_builds_chat_completion_request_and_extracts_content() {
@@ -1055,6 +1264,43 @@ mod tests {
 
         assert_eq!(request.payload["max_completion_tokens"], 4096);
         assert!(request.payload.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn openai_gpt6_luna_uses_max_completion_tokens_in_chat_and_batch() {
+        let request = OpenAiClient::build_chat_request(
+            "https://api.openai.com/v1",
+            "sk-test",
+            "gpt-6-luna",
+            &[ProviderMessage::user("prompt")],
+        );
+        assert_eq!(request.payload["max_completion_tokens"], 4096);
+        assert!(request.payload.get("max_tokens").is_none());
+        assert!(request.payload.get("temperature").is_none());
+
+        let batch = OpenAiClient::build_batch_jsonl(
+            "gpt-6-luna",
+            &[OpenAiBatchJob {
+                custom_id: "sample.py".to_string(),
+                messages: vec![ProviderMessage::user("prompt")],
+            }],
+        );
+        assert!(batch.contains(r#""max_completion_tokens":4096"#));
+        assert!(!batch.contains(r#""max_tokens""#));
+        assert!(!batch.contains(r#""temperature""#));
+    }
+
+    #[test]
+    fn deepseek_flash_uses_short_non_thinking_chat_request() {
+        let request = OpenAiClient::build_chat_request(
+            "https://api.deepseek.com",
+            "test-key",
+            "deepseek-flash",
+            &[ProviderMessage::user("prompt")],
+        );
+        assert_eq!(request.url, "https://api.deepseek.com/chat/completions");
+        assert_eq!(request.payload["max_tokens"], 512);
+        assert_eq!(request.payload["reasoning_effort"], "none");
     }
 
     #[test]

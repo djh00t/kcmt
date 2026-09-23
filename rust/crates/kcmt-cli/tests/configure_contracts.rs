@@ -234,11 +234,14 @@ fn list_models_prints_supported_provider_defaults() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("openai"));
-    assert!(stdout.contains("gpt-5.4-mini"));
+    assert!(stdout.contains("gpt-6-luna"));
     assert!(stdout.contains("anthropic"));
-    assert!(stdout.contains("claude-3-5-haiku-latest"));
+    assert!(stdout.contains("claude-haiku-4-5-20251001"));
     assert!(stdout.contains("xai"));
-    assert!(stdout.contains("github"));
+    assert!(stdout.contains("grok-build-0.1"));
+    assert!(stdout.contains("deepseek"));
+    assert!(stdout.contains("deepseek-flash"));
+    assert!(!stdout.contains("github"));
 }
 
 #[test]
@@ -269,7 +272,7 @@ fn configure_writes_default_preferences_file() {
     assert!(preferences["provider_rules"]["openai"].is_object());
     assert!(preferences["provider_rules"]["anthropic"].is_object());
     assert!(preferences["provider_rules"]["xai"].is_object());
-    assert!(preferences["provider_rules"]["github"].is_object());
+    assert!(preferences["provider_rules"]["deepseek"].is_object());
 }
 
 #[test]
@@ -342,7 +345,7 @@ fn configure_preserves_existing_preferences_while_initializing_provider_rules() 
     assert_eq!(preferences["provider_rules"]["openai"]["strict"], true);
     assert!(preferences["provider_rules"]["anthropic"].is_object());
     assert!(preferences["provider_rules"]["xai"].is_object());
-    assert!(preferences["provider_rules"]["github"].is_object());
+    assert!(preferences["provider_rules"]["deepseek"].is_object());
 }
 
 #[test]
@@ -417,11 +420,11 @@ fn list_models_debug_prints_structured_provider_json() {
     assert_eq!(anthropic["source"], "static_fallback");
     assert_eq!(anthropic["models"][0]["family"], "haiku");
 
-    let github = providers
+    let deepseek = providers
         .iter()
-        .find(|provider| provider["provider"] == "github")
-        .expect("github provider");
-    assert_eq!(github["models"][0]["api_key_env"], "GITHUB_TOKEN");
+        .find(|provider| provider["provider"] == "deepseek")
+        .expect("deepseek provider");
+    assert_eq!(deepseek["models"][0]["api_key_env"], "DEEPSEEK_API_KEY");
 }
 
 #[test]
@@ -438,7 +441,7 @@ fn verify_keys_prints_provider_env_presence() {
     assert!(stdout.contains("openai\tOPENAI_API_KEY\tyes\tOPENAI_API_KEY"));
     assert!(stdout.contains("anthropic\tANTHROPIC_API_KEY\tno\t-"));
     assert!(stdout.contains("xai\tXAI_API_KEY\tno\t-"));
-    assert!(stdout.contains("github\tGITHUB_TOKEN\tno\t-"));
+    assert!(stdout.contains("deepseek\tDEEPSEEK_API_KEY\tno\t-"));
 }
 
 #[test]

@@ -970,7 +970,7 @@ def rust_kcmt_runs_in_default_xai_batch_mode(
             "--api-key-env",
             "XAI_TEST_KEY",
             "--model",
-            "grok-code-fast",
+            "grok-build-0.1",
             "--batch",
             "--batch-model",
             "grok-4.3",
@@ -1850,7 +1850,7 @@ def compact_workflow_output_includes_summary_and_commit_details(
 ) -> None:
     output = workflow_context["output"]
     assert "Run Summary" in output
-    assert "Commits 1  Failures 0" in output
+    assert "Commits: 1  Failures: 0" in output
     assert "Latest commit: chore(repo): update tracked" in output
     assert "✓ tracked.py" in output
 
@@ -2288,7 +2288,7 @@ def rust_configuration_file_contains_default_openai_provider_settings(
 ) -> None:
     config = json.loads((workflow_context["config_home"] / "config.json").read_text())
     assert config["provider"] == "openai"
-    assert config["model"] == "gpt-5.4-mini"
+    assert config["model"] == "gpt-6-luna"
     assert config["llm_endpoint"] == "https://api.openai.com/v1"
     assert config["api_key_env"] == "OPENAI_API_KEY"
     assert config["providers"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
@@ -2349,7 +2349,7 @@ def rust_preferences_file_contains_default_selector_preferences(
     assert preferences["provider_rules"]["openai"]["preset"] == "none"
     assert preferences["provider_rules"]["anthropic"]["preset"] == "none"
     assert preferences["provider_rules"]["xai"]["preset"] == "none"
-    assert preferences["provider_rules"]["github"]["preset"] == "none"
+    assert preferences["provider_rules"]["deepseek"]["preset"] == "none"
 
 
 @then("the keychain save response does not print the API key")
@@ -2390,7 +2390,7 @@ def anthropic_provider_receives_latest_haiku_model(
 ) -> None:
     requests = workflow_context["anthropic_handler"].requests
     assert requests
-    assert any("claude-3-5-haiku-latest" in body for _method, _path, body in requests)
+    assert any("claude-haiku-4-5-20251001" in body for _method, _path, body in requests)
 
 
 @then("the latest commit uses the Anthropic provider message")
@@ -2451,21 +2451,21 @@ def model_list_includes_all_supported_providers(
 ) -> None:
     output = workflow_context["output"]
     assert "openai" in output
-    assert "gpt-5.4-mini" in output
+    assert "gpt-6-luna" in output
     assert "anthropic" in output
-    assert "claude-3-5-haiku-latest" in output
+    assert "claude-haiku-4-5-20251001" in output
     assert "xai" in output
-    assert "github" in output
+    assert "deepseek-flash" in output
 
 
 @then("the debug model list is structured JSON")
 def debug_model_list_is_structured_json(workflow_context: dict[str, Any]) -> None:
     payload = json.loads(workflow_context["output"])
     providers = {entry["provider"]: entry for entry in payload}
-    assert providers["openai"]["models"][0]["id"] == "gpt-5.4-mini"
+    assert providers["openai"]["models"][0]["id"] == "gpt-6-luna"
     assert providers["openai"]["source"] == "static_fallback"
     assert providers["openai"]["error"]
-    assert providers["github"]["models"][0]["api_key_env"] == "GITHUB_TOKEN"
+    assert providers["deepseek"]["models"][0]["api_key_env"] == "DEEPSEEK_API_KEY"
     assert providers["anthropic"]["display_name"] == "Anthropic"
     anthropic_model = providers["anthropic"]["models"][0]
     assert anthropic_model["provider"] == "anthropic"
@@ -2483,7 +2483,7 @@ def key_verification_output_shows_present_and_missing_providers(
     assert "API Key Verification" in output
     assert "openai\tOPENAI_API_KEY\tyes\tOPENAI_API_KEY" in output
     assert "anthropic\tANTHROPIC_API_KEY\tno\t-" in output
-    assert "github\tGITHUB_TOKEN\tno\t-" in output
+    assert "deepseek\tDEEPSEEK_API_KEY\tno\t-" in output
 
 
 @then("the benchmark output includes leaderboard JSON and CSV sections")

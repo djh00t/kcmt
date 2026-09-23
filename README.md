@@ -60,7 +60,7 @@ kcmt --configure
 kcmt status --repo-path .
 kcmt --oneshot --verbose
 kcmt --file README.md
-kcmt --provider xai --model grok-code-fast --api-key-env XAI_API_KEY
+kcmt --provider xai --model grok-build-0.1 --api-key-env XAI_API_KEY
 ```
 
 ## Configuration
@@ -74,19 +74,34 @@ without changing files.
 `kcmt` keeps its settings in `~/.config/kcmt/config.json` and
 `~/.config/kcmt/preferences.json`.
 
+After a run, the CLI reports commits, provider-reported input/output and cached
+tokens, estimated cost, per-commit figures, and elapsed time. Missing provider
+usage or unknown pricing is shown as unavailable. The interactive workflow
+screen stays open on its summary until `q` or Esc; use `--no-tui` for plain
+terminal output. Batch requests are off unless enabled with `--batch`, config,
+or `KCMT_USE_BATCH=1`.
+Cost estimates use published standard short-context rates; provider discounts,
+regional pricing, and DeepSeek holiday pricing can change the billed amount.
+Rate sources: [OpenAI](https://developers.openai.com/api/docs/pricing),
+[Anthropic](https://platform.claude.com/docs/en/about-claude/pricing),
+[xAI](https://docs.x.ai/developers/models/grok-build-0.1), and
+[DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/).
+
 Provider defaults:
 
 | Provider  | Default model             | Default endpoint                      |
 |-----------|---------------------------|---------------------------------------|
-| OpenAI    | `gpt-5.4-mini`           | `https://api.openai.com/v1`           |
-| Anthropic | `claude-3-5-haiku-latest`| `https://api.anthropic.com`           |
-| xAI       | `grok-code-fast`         | `https://api.x.ai/v1`                 |
-| GitHub    | `openai/gpt-4.1-mini`    | `https://models.github.ai/inference`  |
+| OpenAI    | `gpt-6-luna`               | `https://api.openai.com/v1`           |
+| Anthropic | `claude-haiku-4-5-20251001` | `https://api.anthropic.com`        |
+| xAI       | `grok-build-0.1`           | `https://api.x.ai/v1`                 |
+| DeepSeek  | `deepseek-flash`           | `https://api.deepseek.com`           |
 
 Common config and provider commands:
 
 - `kcmt --configure-all` - pick which providers to configure and set the API
   key env var for each one.
+- `kcmt --provider deepseek --model deepseek-flash` - use DeepSeek Flash with
+  `DEEPSEEK_API_KEY`.
 - `kcmt --verify-keys` - show which env vars are in use and whether they are
   set.
 - `kcmt --list-models` - show a pricing-aware model board.

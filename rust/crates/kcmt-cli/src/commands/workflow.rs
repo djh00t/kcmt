@@ -29,7 +29,8 @@ use kcmt_core::preferences::{
 use kcmt_core::selector::{select_model, ModelSelection};
 use kcmt_core::telemetry::{load_usage_summary, record_usage, TelemetryRunRecord};
 use kcmt_provider::clients::{
-    AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderMessage, XaiClient,
+    AnthropicClient, GitHubModelsClient, OpenAiBatchJob, OpenAiClient, ProviderCompletion,
+    ProviderMessage, ProviderUsage, XaiClient,
 };
 use kcmt_provider::error_map::normalize_error;
 use kcmt_provider::transport::{AsyncTransport, RetryPolicy};
@@ -179,6 +180,161 @@ struct WorkflowProgress {
     completed: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
     tui_state: Option<Arc<Mutex<WorkflowTuiState>>>,
+    usage: Arc<Mutex<RunAccounting>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RunAccounting {
+    responses: usize,
+    missing_usage: bool,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    cached_output_tokens: u64,
+    cached_input_reported: bool,
+    cached_output_reported: bool,
+    cached_input_missing: bool,
+    cached_output_missing: bool,
+    estimated_cost_usd: Option<f64>,
+}
+
+impl RunAccounting {
+    fn record(&mut self, provider: &str, model: &str, usage: Option<ProviderUsage>, batch: bool) {
+        self.responses += 1;
+        let Some(usage) = usage else {
+            self.missing_usage = true;
+            self.estimated_cost_usd = None;
+            return;
+        };
+        self.input_tokens += usage.input_tokens;
+        self.output_tokens += usage.output_tokens;
+        self.cached_input_tokens += usage.cached_input_tokens.unwrap_or(0);
+        self.cached_output_tokens += usage.cached_output_tokens.unwrap_or(0);
+        self.cached_input_reported |= usage.cached_input_tokens.is_some();
+        self.cached_output_reported |= usage.cached_output_tokens.is_some();
+        self.cached_input_missing |= usage.cached_input_tokens.is_none();
+        self.cached_output_missing |= usage.cached_output_tokens.is_none();
+        if let Some(cost) = self.estimated_cost_usd.as_mut() {
+            if let Some(next) = estimated_request_cost(provider, model, &usage, batch) {
+                *cost += next;
+            } else {
+                self.estimated_cost_usd = None;
+            }
+        }
+    }
+
+    fn summary_lines(&self, commits: usize, failures: usize, elapsed: f64) -> Vec<String> {
+        let tokens_known = !self.missing_usage && (self.responses > 0 || commits > 0);
+        let total = self.input_tokens + self.output_tokens;
+        let token_value = |value: u64| {
+            if tokens_known {
+                value.to_string()
+            } else {
+                "unavailable".to_string()
+            }
+        };
+        let cost = if tokens_known {
+            self.estimated_cost_usd
+        } else {
+            None
+        };
+        vec![
+            format!("Commits: {commits}  Failures: {failures}"),
+            format!(
+                "Tokens: {}  Input: {}  Output: {}",
+                token_value(total),
+                token_value(self.input_tokens),
+                token_value(self.output_tokens)
+            ),
+            format!(
+                "Cached input: {}  Cached output: {}",
+                if self.cached_input_reported && !self.cached_input_missing && tokens_known {
+                    self.cached_input_tokens.to_string()
+                } else {
+                    "unavailable".to_string()
+                },
+                if self.cached_output_reported && !self.cached_output_missing && tokens_known {
+                    self.cached_output_tokens.to_string()
+                } else {
+                    "unavailable".to_string()
+                }
+            ),
+            format!(
+                "Estimated cost: {}",
+                cost.map(|value| format!("${value:.8}"))
+                    .unwrap_or_else(|| "unavailable".to_string())
+            ),
+            format!(
+                "Tokens/commit: {}  Cost/commit: {}",
+                if commits > 0 && tokens_known {
+                    format!("{:.1}", total as f64 / commits as f64)
+                } else {
+                    "unavailable".to_string()
+                },
+                if commits > 0 {
+                    cost.map(|value| format!("${:.8}", value / commits as f64))
+                        .unwrap_or_else(|| "unavailable".to_string())
+                } else {
+                    "unavailable".to_string()
+                }
+            ),
+            format!(
+                "Elapsed: {elapsed:.2}s  Latency/commit: {}",
+                if commits > 0 {
+                    format!("{:.2}s", elapsed / commits as f64)
+                } else {
+                    "unavailable".to_string()
+                }
+            ),
+        ]
+    }
+}
+
+fn estimated_request_cost(
+    provider: &str,
+    model: &str,
+    usage: &ProviderUsage,
+    batch: bool,
+) -> Option<f64> {
+    let (input, cached, output, write) = match (provider, model) {
+        ("openai", "gpt-6-luna") => {
+            if batch {
+                (0.05, 0.005, 0.25, 0.0625)
+            } else {
+                (0.10, 0.01, 0.50, 0.125)
+            }
+        }
+        ("anthropic", "claude-haiku-4-5-20251001" | "claude-haiku-4-5") => (1.0, 0.10, 5.0, 1.25),
+        ("xai", "grok-build-0.1") if !batch => (1.0, 0.20, 2.0, 1.0),
+        ("deepseek", "deepseek-flash") => {
+            let now = OffsetDateTime::now_utc();
+            let peak = !matches!(
+                now.weekday(),
+                time::Weekday::Saturday | time::Weekday::Sunday
+            ) && ((1..4).contains(&now.hour()) || (6..10).contains(&now.hour()));
+            if peak {
+                (0.30, 0.006, 1.20, 0.30)
+            } else {
+                (0.15, 0.003, 0.60, 0.15)
+            }
+        }
+        _ => return None,
+    };
+    let hit = usage
+        .cached_input_tokens
+        .unwrap_or(0)
+        .min(usage.input_tokens);
+    let written = usage
+        .cache_write_input_tokens
+        .unwrap_or(0)
+        .min(usage.input_tokens - hit);
+    Some(
+        ((usage.input_tokens - hit - written) as f64 * input
+            + hit as f64 * cached
+            + written as f64 * write
+            + usage.output_tokens as f64 * output)
+            / 1_000_000.0,
+    )
 }
 
 impl WorkflowProgress {
@@ -205,6 +361,10 @@ impl WorkflowProgress {
             completed: Arc::new(AtomicUsize::new(0)),
             failed: Arc::new(AtomicUsize::new(0)),
             tui_state,
+            usage: Arc::new(Mutex::new(RunAccounting {
+                estimated_cost_usd: Some(0.0),
+                ..RunAccounting::default()
+            })),
         };
         progress.summary("start");
         progress
@@ -294,6 +454,19 @@ impl WorkflowProgress {
     fn finished(&self) {
         self.apply_tui(WorkflowTuiEvent::Finished);
         self.summary("finished");
+    }
+
+    fn record_usage(&self, provider: &str, model: &str, usage: Option<ProviderUsage>, batch: bool) {
+        if let Ok(mut accounting) = self.usage.lock() {
+            accounting.record(provider, model, usage, batch);
+        }
+    }
+
+    fn run_summary(&self, commits: usize, failures: usize, elapsed: f64) -> Vec<String> {
+        self.usage
+            .lock()
+            .map(|accounting| accounting.summary_lines(commits, failures, elapsed))
+            .unwrap_or_default()
     }
 
     fn snapshot_json(&self) -> Option<String> {
@@ -634,7 +807,7 @@ fn run_entries_workflow(
             last_screen: preferences.tui.last_screen.clone(),
         },
     );
-    let _workflow_tui_session = progress.start_tui_session();
+    let workflow_tui_session = progress.start_tui_session();
     let wait_start = Instant::now();
     let preparation = prepare_messages_for_entries(
         &repo_path,
@@ -792,22 +965,43 @@ fn run_entries_workflow(
         },
     );
 
+    let run_summary = progress.run_summary(
+        commits.len(),
+        failures.len(),
+        workflow_start.elapsed().as_secs_f64(),
+    );
+    progress.apply_tui(WorkflowTuiEvent::RunSummary {
+        lines: run_summary.clone(),
+    });
     if commits.is_empty() && total_entries <= 1 {
         if let Some(failure) = failures.first() {
             progress.finished();
             emit_tui_model_to_stderr(&progress, &output_options);
-            return Err(KcmtError::Message(failure.error.clone()));
+            if let Some(session) = workflow_tui_session {
+                session.wait_for_exit();
+            }
+            return Err(KcmtError::Message(format!(
+                "{}\n\nRun Summary\n{}",
+                failure.error,
+                run_summary.join("\n")
+            )));
         }
     }
 
+    progress.finished();
+    let tui_model_json = output_options
+        .tui_model_export
+        .then(|| progress.snapshot_json())
+        .flatten();
+    if let Some(session) = workflow_tui_session {
+        session.wait_for_exit();
+    }
     if commits.is_empty() && total_entries <= 1 {
-        Ok("No changes to commit.\n".to_string())
+        Ok(format!(
+            "No changes to commit.\n\nRun Summary\n{}\n",
+            run_summary.join("\n")
+        ))
     } else {
-        progress.finished();
-        let tui_model_json = output_options
-            .tui_model_export
-            .then(|| progress.snapshot_json())
-            .flatten();
         Ok(render_workflow_output(
             config,
             &commits,
@@ -816,6 +1010,7 @@ fn run_entries_workflow(
             &telemetry,
             output_options,
             tui_model_json.as_deref(),
+            &run_summary,
         ))
     }
 }
@@ -873,6 +1068,7 @@ fn render_workflow_output(
     telemetry: &WorkflowTelemetry,
     options: WorkflowOutputOptions,
     tui_model_json: Option<&str>,
+    run_summary: &[String],
 ) -> String {
     let mut lines = Vec::new();
     if options.compact {
@@ -882,11 +1078,7 @@ fn render_workflow_output(
         ));
         lines.push(String::new());
         lines.push("Run Summary".to_string());
-        lines.push(format!(
-            "Commits {}  Failures {}",
-            commits.len(),
-            failures.len()
-        ));
+        lines.extend(run_summary.iter().cloned());
         lines.push(format!("Auto-push {}", push_outcome.state));
         if let Some(subject) = commits.last().map(|commit| commit.message.as_str()) {
             lines.push(format!("Latest commit: {subject}"));
@@ -900,6 +1092,9 @@ fn render_workflow_output(
     } else {
         append_commit_lines(&mut lines, commits);
         append_failure_lines(&mut lines, failures);
+        lines.push(String::new());
+        lines.push("Run Summary".to_string());
+        lines.extend(run_summary.iter().cloned());
         match push_outcome.state {
             "pushed" => lines.push("Auto-push: pushed".to_string()),
             "failed" => lines.push("Auto-push: failed".to_string()),
@@ -950,6 +1145,7 @@ fn commit_message_for_entry(
     config: &kcmt_core::model::WorkflowConfig,
     runtime: &WorkflowRuntime,
     max_attempts: usize,
+    progress: &WorkflowProgress,
 ) -> Result<String> {
     if entry.is_deletion() {
         Ok(deletion_commit_message(
@@ -970,7 +1166,7 @@ fn commit_message_for_entry(
             config.max_commit_length,
         ))
     } else if configured_api_key(config).is_some() {
-        invoke_provider_with_fallback(repo_path, entry, config, runtime, max_attempts)
+        invoke_provider_with_fallback(repo_path, entry, config, runtime, max_attempts, progress)
     } else if local_synthesis_enabled() {
         Ok(heuristic_commit_message(
             &entry.path,
@@ -1097,7 +1293,14 @@ fn prepare_messages_for_entries(
             .map(|entry| {
                 progress.queued("diff", &entry.path);
                 progress.event("llm", &entry.path);
-                match commit_message_for_entry(repo_path, &entry, config, runtime, max_attempts) {
+                match commit_message_for_entry(
+                    repo_path,
+                    &entry,
+                    config,
+                    runtime,
+                    max_attempts,
+                    &progress,
+                ) {
                     Ok(message) => {
                         progress.prepared(&entry.path, &message);
                         Ok(PreparedEntry { entry, message })
@@ -1168,6 +1371,7 @@ fn prepare_messages_in_workers(
                             &config,
                             &runtime,
                             max_attempts,
+                            &progress,
                         ) {
                             Ok(message) => {
                                 progress.prepared(&entry.path, &message);
@@ -1209,10 +1413,10 @@ fn commit_message_system_prompt(max_commit_length: usize) -> String {
 
 fn provider_default_model(provider: &str) -> &'static str {
     match provider {
-        "anthropic" => "claude-3-5-haiku-latest",
-        "xai" => "grok-code-fast",
-        "github" => "openai/gpt-4.1-mini",
-        _ => "gpt-5.4-mini",
+        "anthropic" => "claude-haiku-4-5-20251001",
+        "xai" => "grok-build-0.1",
+        "deepseek" => "deepseek-flash",
+        _ => "gpt-6-luna",
     }
 }
 
@@ -1406,6 +1610,7 @@ fn prepare_provider_batch_messages(
             if let Some(batch_wait) = batch_wait {
                 batch_wait.stop();
             }
+            progress.record_usage(&config.provider, batch_model, None, true);
             let error = provider_error_message("provider batch request failed", &err.to_string());
             outcomes.extend(batch_entries.into_iter().map(|entry| {
                 progress.prepare_failed(&entry.path, &error);
@@ -1421,6 +1626,7 @@ fn prepare_provider_batch_messages(
     let mut messages_by_id = std::collections::BTreeMap::new();
     let mut errors_by_id = std::collections::BTreeMap::new();
     for result in batch_output.results {
+        progress.record_usage(&config.provider, batch_model, result.usage.clone(), true);
         let result_path = result.custom_id.clone();
         match sanitize_commit_output(&result.content) {
             Ok(message) => {
@@ -1438,6 +1644,7 @@ fn prepare_provider_batch_messages(
         }
     }
     for failure in batch_output.failures {
+        progress.record_usage(&config.provider, batch_model, None, true);
         errors_by_id.insert(
             failure.custom_id,
             provider_error_message("provider batch response failed", &failure.error),
@@ -1530,6 +1737,7 @@ fn default_provider_endpoint(provider: &str) -> &'static str {
     match provider {
         "anthropic" => "https://api.anthropic.com",
         "xai" => "https://api.x.ai/v1",
+        "deepseek" => "https://api.deepseek.com",
         "github" => "https://models.github.ai/inference",
         _ => "https://api.openai.com/v1",
     }
@@ -1539,6 +1747,7 @@ fn default_provider_api_key_env(provider: &str) -> &'static str {
     match provider {
         "anthropic" => "ANTHROPIC_API_KEY",
         "xai" => "XAI_API_KEY",
+        "deepseek" => "DEEPSEEK_API_KEY",
         "github" => "GITHUB_TOKEN",
         _ => "OPENAI_API_KEY",
     }
@@ -1607,7 +1816,7 @@ fn selected_workflow_config(
 
 fn default_provider_batch_model(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("gpt-5.4-mini"),
+        "openai" => Some("gpt-6-luna"),
         "xai" => Some("grok-4.3"),
         _ => None,
     }
@@ -1619,6 +1828,7 @@ fn invoke_provider_with_fallback(
     config: &kcmt_core::model::WorkflowConfig,
     runtime_context: &WorkflowRuntime,
     max_attempts: usize,
+    progress: &WorkflowProgress,
 ) -> Result<String> {
     let mut last_error = None;
     for candidate in provider_candidates(config) {
@@ -1633,9 +1843,13 @@ fn invoke_provider_with_fallback(
             runtime_context,
             max_attempts,
             config.max_commit_length,
+            progress,
         ) {
             Ok(message) => return Ok(message),
-            Err(err) => last_error = Some(err),
+            Err(err) => {
+                progress.record_usage(&candidate.provider, &candidate.model, None, false);
+                last_error = Some(err);
+            }
         }
     }
     Err(last_error.unwrap_or_else(|| {
@@ -1651,6 +1865,7 @@ fn invoke_provider_candidate(
     runtime_context: &WorkflowRuntime,
     max_attempts: usize,
     max_commit_length: usize,
+    progress: &WorkflowProgress,
 ) -> Result<String> {
     let diff = diff_for_entry(repo_path, entry)?;
     let context = format!("File: {}", entry.path);
@@ -1680,7 +1895,8 @@ fn invoke_provider_candidate(
         &system,
         "conventional",
     )?;
-    match sanitize_commit_output(&raw) {
+    progress.record_usage(&candidate.provider, &candidate.model, raw.usage, false);
+    match sanitize_commit_output(&raw.content) {
         Ok(message) => Ok(limit_subject(message, max_commit_length)),
         Err(first_error) => {
             let retry_raw = invoke_provider_candidate_with_style(
@@ -1694,7 +1910,13 @@ fn invoke_provider_candidate(
                 &system,
                 "simple",
             )?;
-            match sanitize_commit_output(&retry_raw) {
+            progress.record_usage(
+                &candidate.provider,
+                &candidate.model,
+                retry_raw.usage,
+                false,
+            );
+            match sanitize_commit_output(&retry_raw.content) {
                 Ok(message) => Ok(limit_subject(message, max_commit_length)),
                 Err(retry_error) => {
                     let fallback = heuristic_commit_message(&entry.path, max_commit_length);
@@ -1721,18 +1943,18 @@ fn invoke_provider_candidate_with_style(
     context: &str,
     system: &str,
     style: &str,
-) -> Result<String> {
+) -> Result<ProviderCompletion> {
     let prompt =
         build_prompt_with_profile_style(diff, context, style, &runtime_context.prompt_profile);
     runtime
         .block_on(async {
             match candidate.provider.as_str() {
-                "openai" => {
+                "openai" | "deepseek" => {
                     let messages = vec![
                         ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
-                    OpenAiClient::invoke_model(
+                    OpenAiClient::invoke_model_with_usage(
                         transport,
                         &candidate.endpoint,
                         api_key,
@@ -1746,7 +1968,7 @@ fn invoke_provider_candidate_with_style(
                         ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
-                    XaiClient::invoke_chat(
+                    XaiClient::invoke_chat_with_usage(
                         transport,
                         &candidate.endpoint,
                         api_key,
@@ -1760,7 +1982,7 @@ fn invoke_provider_candidate_with_style(
                         ProviderMessage::system(system),
                         ProviderMessage::user(prompt),
                     ];
-                    GitHubModelsClient::invoke_chat(
+                    GitHubModelsClient::invoke_chat_with_usage(
                         transport,
                         &candidate.endpoint,
                         api_key,
@@ -1770,7 +1992,7 @@ fn invoke_provider_candidate_with_style(
                     .await
                 }
                 "anthropic" => {
-                    AnthropicClient::invoke_messages(
+                    AnthropicClient::invoke_messages_with_usage(
                         transport,
                         &candidate.endpoint,
                         api_key,
@@ -2439,17 +2661,49 @@ mod tests {
         default_provider_batch_model, deletion_commit_message, diff_for_entry,
         git_common_config_path, git_config_has_include, git_config_value, heuristic_commit_message,
         local_origin_remote_probe, parse_status_entries, select_prepare_workers,
-        selected_workflow_config, OriginRemoteProbe, StatusEntry, WorkflowOutputOptions,
-        WorkflowProgress,
+        selected_workflow_config, OriginRemoteProbe, RunAccounting, StatusEntry,
+        WorkflowOutputOptions, WorkflowProgress,
     };
     use kcmt_core::git::commit_file::CommitStaging;
     use kcmt_core::model::{ModelPreference, ProviderConfigEntry, WorkflowConfig};
     use kcmt_core::selector::ModelSelection;
+    use kcmt_provider::clients::ProviderUsage;
     use kcmt_tui::WorkflowTuiContext;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn run_accounting_reports_tokens_cache_cost_and_latency() {
+        let mut accounting = RunAccounting {
+            estimated_cost_usd: Some(0.0),
+            ..RunAccounting::default()
+        };
+        accounting.record(
+            "openai",
+            "gpt-6-luna",
+            Some(ProviderUsage {
+                input_tokens: 100,
+                output_tokens: 20,
+                cached_input_tokens: Some(40),
+                cached_output_tokens: None,
+                cache_write_input_tokens: None,
+            }),
+            false,
+        );
+        let lines = accounting.summary_lines(1, 0, 2.0).join("\n");
+        assert!(lines.contains("Tokens: 120  Input: 100  Output: 20"));
+        assert!(lines.contains("Cached input: 40  Cached output: unavailable"));
+        assert!(lines.contains("Estimated cost: $0.00001640"));
+        assert!(lines.contains("Tokens/commit: 120.0  Cost/commit: $0.00001640"));
+        assert!(lines.contains("Elapsed: 2.00s  Latency/commit: 2.00s"));
+        accounting.record("openai", "gpt-6-luna", None, false);
+        assert!(accounting
+            .summary_lines(1, 0, 2.0)
+            .join("\n")
+            .contains("Tokens: unavailable"));
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
