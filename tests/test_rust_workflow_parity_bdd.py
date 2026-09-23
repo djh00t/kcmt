@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -1088,7 +1089,7 @@ def python_kcmt_entrypoint_commits_file_in_auto_runtime_mode(
     env["KCMT_RUNTIME_TRACE"] = "1"
     result = subprocess.run(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             "-m",
             "kcmt_python.main",
             "--file",
@@ -1120,7 +1121,7 @@ def python_kcmt_entrypoint_runs_default_workflow_in_auto_runtime_mode(
     env["KCMT_RUNTIME_TRACE"] = "1"
     result = subprocess.run(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             "-m",
             "kcmt_python.main",
             "--no-auto-push",
@@ -1175,7 +1176,7 @@ def python_kcmt_entrypoint_configures_anthropic_in_auto_runtime_mode(
     env["KCMT_RUNTIME_TRACE"] = "1"
     result = subprocess.run(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             "-m",
             "kcmt_python.main",
             "--configure",
@@ -1212,7 +1213,7 @@ def python_kcmt_entrypoint_runs_bare_configure_in_auto_runtime_mode(
     env["KCMT_RUNTIME_TRACE"] = "1"
     result = subprocess.run(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             "-m",
             "kcmt_python.main",
             "--configure",
@@ -1240,7 +1241,7 @@ def python_kcmt_entrypoint_configures_all_providers_in_auto_runtime_mode(
     env["KCMT_RUNTIME_TRACE"] = "1"
     result = subprocess.run(
         [
-            os.environ.get("PYTHON", "python"),
+            sys.executable,
             "-m",
             "kcmt_python.main",
             "--configure-all",
