@@ -22,27 +22,27 @@ use crate::commands::history::state_dir;
 const PROVIDER_DEFAULTS: &[(&str, &str, &str, &str)] = &[
     (
         "openai",
-        "gpt-5.4-mini",
+        "gpt-6-luna",
         "https://api.openai.com/v1",
         "OPENAI_API_KEY",
     ),
     (
         "anthropic",
-        "claude-sonnet-4-20250514",
+        "claude-haiku-4-5-20251001",
         "https://api.anthropic.com",
         "ANTHROPIC_API_KEY",
     ),
     (
         "xai",
-        "grok-code-fast",
+        "grok-build-0.1",
         "https://api.x.ai/v1",
         "XAI_API_KEY",
     ),
     (
-        "github",
-        "openai/gpt-4.1-mini",
-        "https://models.github.ai/inference",
-        "GITHUB_TOKEN",
+        "deepseek",
+        "deepseek-flash",
+        "https://api.deepseek.com",
+        "DEEPSEEK_API_KEY",
     ),
 ];
 
@@ -301,7 +301,7 @@ fn invoke_benchmark_provider(
     let system = "You generate strictly valid Conventional Commit messages.";
     runtime.block_on(async {
         match candidate.provider.as_str() {
-            "openai" => {
+            "openai" | "deepseek" => {
                 let messages = vec![
                     ProviderMessage::system(system),
                     ProviderMessage::user(prompt.to_string()),

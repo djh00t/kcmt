@@ -183,10 +183,10 @@ pub fn apply_provider_rule(
 
 pub fn default_models_for_provider(provider: &str) -> Vec<ModelCandidate> {
     let id = match provider {
-        "anthropic" => "claude-3-5-haiku-latest",
-        "xai" => "grok-code-fast",
-        "github" => "openai/gpt-4.1-mini",
-        _ => "gpt-5.4-mini",
+        "anthropic" => "claude-haiku-4-5-20251001",
+        "xai" => "grok-build-0.1",
+        "deepseek" => "deepseek-flash",
+        _ => "gpt-6-luna",
     };
     vec![ModelCandidate {
         provider: provider.to_string(),

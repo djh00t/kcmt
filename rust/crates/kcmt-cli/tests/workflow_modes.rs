@@ -170,7 +170,7 @@ fn explicit_tui_workflow_exports_model_and_persists_screen() {
     let model = tui_model_from_stdout(&output.stdout);
     assert_eq!(model["screen"], "workflow");
     assert_eq!(model["provider"], "openai");
-    assert_eq!(model["model"], "gpt-5.4-mini");
+    assert_eq!(model["model"], "gpt-6-luna");
     assert_eq!(model["current_phase"], "complete");
     assert_eq!(model["total_files"], 1);
     assert_eq!(model["committed"], 1);
@@ -863,7 +863,7 @@ fn compact_verbose_and_profile_flags_control_workflow_output() {
     );
     let compact_stdout = String::from_utf8_lossy(&compact.stdout);
     assert!(compact_stdout.contains("Run Summary"));
-    assert!(compact_stdout.contains("Commits 1  Failures 0"));
+    assert!(compact_stdout.contains("Commits: 1  Failures: 0"));
     assert!(!compact_stdout.contains("✓ tracked.py"));
 
     fs::write(repo.join("tracked.py"), "print('changed again')\n").expect("tracked change");
@@ -1417,6 +1417,56 @@ fn file_mode_invokes_openai_compatible_provider_when_api_key_is_available() {
     );
     let log = git(&repo, &["log", "--pretty=%s", "-1"]);
     assert_eq!(log, "fix(core): use provider message");
+}
+
+#[test]
+fn file_mode_invokes_deepseek_flash_with_its_api_key() {
+    let repo = init_repo();
+    let (endpoint, request_rx) = spawn_provider_response(
+        r#"{"choices":[{"message":{"content":"fix(core): use deepseek flash"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":40}}"#,
+    );
+    fs::write(repo.join("tracked.py"), "print('seed')\n").unwrap();
+    git(&repo, &["add", "tracked.py"]);
+    git(&repo, &["commit", "-m", "chore(repo): seed"]);
+    fs::write(repo.join("tracked.py"), "print('changed')\n").unwrap();
+
+    let output = kcmt_command(env!("CARGO_BIN_EXE_kcmt"))
+        .env("DEEPSEEK_API_KEY", "test-key")
+        .args([
+            "--file",
+            "tracked.py",
+            "--provider",
+            "deepseek",
+            "--endpoint",
+            &endpoint,
+            "--no-auto-push",
+            "--repo-path",
+        ])
+        .arg(&repo)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = request_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.starts_with("POST /chat/completions HTTP/1.1"));
+    assert!(request.contains("deepseek-flash"));
+    assert!(request.contains("reasoning_effort"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Tokens: 120  Input: 100  Output: 20"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Cached input: 40"), "{stdout}");
+    assert!(stdout.contains("Estimated cost: $"), "{stdout}");
+    assert!(stdout.contains("Tokens/commit: 120.0"), "{stdout}");
+    assert_eq!(
+        git(&repo, &["log", "--pretty=%s", "-1"]),
+        "fix(core): use deepseek flash"
+    );
 }
 
 #[test]

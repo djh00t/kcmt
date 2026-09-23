@@ -88,6 +88,8 @@ pub struct WorkflowTuiState {
     pub push_state: String,
     pub active_file: Option<String>,
     pub files: BTreeMap<String, WorkflowTuiFileState>,
+    #[serde(default)]
+    pub run_summary: Vec<String>,
     #[serde(skip, default)]
     next_sequence: usize,
 }
@@ -115,6 +117,7 @@ impl WorkflowTuiState {
             push_state: "not triggered".to_string(),
             active_file: None,
             files: BTreeMap::new(),
+            run_summary: Vec::new(),
             next_sequence: 0,
         }
     }
@@ -208,6 +211,7 @@ impl WorkflowTuiState {
                 };
                 self.active_file = None;
             }
+            WorkflowTuiEvent::RunSummary { lines } => self.run_summary = lines,
         }
     }
 
@@ -461,6 +465,9 @@ pub enum WorkflowTuiEvent {
         state: String,
     },
     Finished,
+    RunSummary {
+        lines: Vec<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -472,6 +479,14 @@ pub struct WorkflowTuiSession {
 impl Drop for WorkflowTuiSession {
     fn drop(&mut self) {
         self.stop.store(true, AtomicOrdering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl WorkflowTuiSession {
+    pub fn wait_for_exit(mut self) {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -533,8 +548,9 @@ fn run_workflow_tui_loop_inner(
             .lock()
             .map_err(|err| anyhow::anyhow!("workflow TUI state lock poisoned: {err}"))?
             .clone();
-        let terminal_rows = terminal.size()?.height as usize;
-        let visible_count = workflow_visible_file_count(terminal_rows);
+        let terminal_size = terminal.size()?;
+        let visible_count =
+            workflow_visible_file_count(terminal_size.height as usize, terminal_size.width);
         let files = snapshot.ordered_files();
         let max_scroll = files.len().saturating_sub(visible_count);
         scroll_offset = scroll_offset.min(max_scroll);
@@ -542,9 +558,6 @@ fn run_workflow_tui_loop_inner(
             render_workflow_screen(frame, &snapshot, &files, scroll_offset, visible_count)
         })?;
 
-        if snapshot.current_phase.starts_with("complete") {
-            return Ok(());
-        }
         if stop.load(AtomicOrdering::SeqCst) {
             return Ok(());
         }
@@ -594,8 +607,19 @@ fn run_workflow_tui_loop_inner(
     }
 }
 
-fn workflow_visible_file_count(terminal_rows: usize) -> usize {
-    let used_rows = 6 + 5 + 4 + 2;
+fn workflow_counter_columns(width: u16) -> usize {
+    if width >= 100 {
+        3
+    } else if width >= 70 {
+        2
+    } else {
+        1
+    }
+}
+
+fn workflow_visible_file_count(terminal_rows: usize, width: u16) -> usize {
+    let counter_rows = 9usize.div_ceil(workflow_counter_columns(width)) + 2;
+    let used_rows = 6 + counter_rows + 4 + 2;
     (terminal_rows.saturating_sub(used_rows) / 2).max(1)
 }
 
@@ -606,11 +630,18 @@ fn render_workflow_screen(
     scroll_offset: usize,
     visible_count: usize,
 ) {
+    let counter_columns = workflow_counter_columns(frame.area().width);
+    let completed = state.current_phase.starts_with("complete") && !state.run_summary.is_empty();
+    let counter_rows = if completed {
+        0
+    } else {
+        9usize.div_ceil(counter_columns) as u16 + 2
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6),
-            Constraint::Length(5),
+            Constraint::Length(counter_rows),
             Constraint::Min(10),
             Constraint::Length(4),
         ])
@@ -668,7 +699,7 @@ fn render_workflow_screen(
 
     let counters = state.stage_counters();
     let counter_lines = counters
-        .chunks(3)
+        .chunks(counter_columns)
         .map(|group| {
             let mut spans = Vec::new();
             for (index, counter) in group.iter().enumerate() {
@@ -741,7 +772,14 @@ fn render_workflow_screen(
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::Green)),
     );
-    frame.render_widget(file_list, list_area);
+    if state.current_phase.starts_with("complete") && !state.run_summary.is_empty() {
+        let summary = Paragraph::new(state.run_summary.join("\n"))
+            .wrap(Wrap { trim: false })
+            .block(Block::default().title("Run Summary").borders(Borders::ALL));
+        frame.render_widget(summary, list_area);
+    } else {
+        frame.render_widget(file_list, list_area);
+    }
 
     let progress_bar = workflow_progress_bar(state.overall_progress_pct(), list_area.width.into());
     let footer = Paragraph::new(vec![
@@ -758,7 +796,11 @@ fn render_workflow_screen(
             ),
         ]),
         Line::from(vec![Span::styled(
-            "j/k, arrows, PgUp/PgDn, g/G to scroll | q or Esc to exit",
+            if frame.area().width < 70 {
+                "j/k scroll | q exit"
+            } else {
+                "j/k, arrows, PgUp/PgDn, g/G to scroll | q or Esc to exit"
+            },
             Style::default().fg(Color::DarkGray),
         )]),
     ])
@@ -1203,10 +1245,58 @@ fn kv_line(label: &str, value: &str, value_color: Color) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::{backend::TestBackend, Terminal};
+
     use super::{
-        ConfigureTuiOutcome, ConfigureTuiState, WorkflowTuiContext, WorkflowTuiEvent,
-        WorkflowTuiState,
+        render_workflow_screen, ConfigureTuiOutcome, ConfigureTuiState, WorkflowTuiContext,
+        WorkflowTuiEvent, WorkflowTuiState,
     };
+
+    #[test]
+    fn workflow_counters_remain_visible_when_terminal_is_narrow() {
+        let state = WorkflowTuiState::new(context(1));
+        for width in [50, 80] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal
+                .draw(|frame| render_workflow_screen(frame, &state, &[], 0, 1))
+                .unwrap();
+            let screen = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(screen.contains("LLM responses received"), "width={width}");
+            assert!(screen.contains("Commits completed"), "width={width}");
+            assert!(screen.contains("Failures"), "width={width}");
+        }
+    }
+
+    #[test]
+    fn completed_screen_shows_run_summary() {
+        let mut state = WorkflowTuiState::new(context(1));
+        state.apply(WorkflowTuiEvent::RunSummary {
+            lines: vec![
+                "Tokens: 120".to_string(),
+                "Estimated cost: $0.000016".to_string(),
+            ],
+        });
+        state.apply(WorkflowTuiEvent::Finished);
+        let mut terminal = Terminal::new(TestBackend::new(50, 24)).unwrap();
+        terminal
+            .draw(|frame| render_workflow_screen(frame, &state, &[], 0, 1))
+            .unwrap();
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(screen.contains("Tokens: 120"));
+        assert!(screen.contains("Estimated cost: $0.000016"));
+    }
 
     fn context(total_files: usize) -> WorkflowTuiContext {
         WorkflowTuiContext {

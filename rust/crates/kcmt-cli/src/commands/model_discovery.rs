@@ -51,30 +51,30 @@ pub fn default_provider_definitions() -> Vec<ProviderDefinition> {
         ProviderDefinition::new(
             "openai",
             "OpenAI",
-            "gpt-5.4-mini",
+            "gpt-6-luna",
             "https://api.openai.com/v1",
             "OPENAI_API_KEY",
         ),
         ProviderDefinition::new(
             "anthropic",
             "Anthropic",
-            "claude-3-5-haiku-latest",
+            "claude-haiku-4-5-20251001",
             "https://api.anthropic.com",
             "ANTHROPIC_API_KEY",
         ),
         ProviderDefinition::new(
             "xai",
             "X.AI",
-            "grok-code-fast",
+            "grok-build-0.1",
             "https://api.x.ai/v1",
             "XAI_API_KEY",
         ),
         ProviderDefinition::new(
-            "github",
-            "GitHub Models",
-            "openai/gpt-4.1-mini",
-            "https://models.github.ai/inference",
-            "GITHUB_TOKEN",
+            "deepseek",
+            "DeepSeek",
+            "deepseek-flash",
+            "https://api.deepseek.com",
+            "DEEPSEEK_API_KEY",
         ),
     ]
 }
@@ -452,6 +452,8 @@ fn infer_family(model_id: &str) -> Option<String> {
         "grok-code"
     } else if id.contains("grok") {
         "grok"
+    } else if id.contains("gpt-6") {
+        "gpt-6"
     } else if id.contains("gpt-5") {
         "gpt-5"
     } else if id.contains("gpt-4.1") {
@@ -507,12 +509,14 @@ mod tests {
         let definition = ProviderDefinition {
             provider: "anthropic".to_string(),
             display_name: "Anthropic".to_string(),
-            default_model: "claude-3-5-haiku-latest".to_string(),
+            default_model: "claude-haiku-4-5-20251001".to_string(),
             endpoint: "https://api.anthropic.com".to_string(),
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
 
-        let catalog = fallback_catalog(&definition, &Preferences::default(), Some("offline"));
+        let mut preferences = Preferences::default();
+        preferences.model_cache.ttl_seconds = 0;
+        let catalog = fallback_catalog(&definition, &preferences, Some("offline"));
 
         assert_eq!(catalog.source, DiscoverySource::StaticFallback);
         assert_eq!(catalog.error.as_deref(), Some("offline"));
@@ -624,7 +628,7 @@ mod tests {
         let static_models = super::static_models(&definition);
 
         assert!(cached.is_none());
-        assert_eq!(static_models[0].id, "gpt-5.4-mini");
+        assert_eq!(static_models[0].id, "gpt-6-luna");
     }
 
     #[test]
@@ -661,12 +665,14 @@ mod tests {
         let definition = ProviderDefinition {
             provider: "anthropic".to_string(),
             display_name: "Anthropic".to_string(),
-            default_model: "claude-sonnet-4-20250514".to_string(),
+            default_model: "claude-sonnet-5".to_string(),
             endpoint: "https://api.anthropic.com".to_string(),
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
 
-        let catalog = fallback_catalog(&definition, &Preferences::default(), Some("offline"));
+        let mut preferences = Preferences::default();
+        preferences.model_cache.ttl_seconds = 0;
+        let catalog = fallback_catalog(&definition, &preferences, Some("offline"));
         let model_ids = catalog
             .models
             .iter()
@@ -674,8 +680,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(catalog.source, DiscoverySource::StaticFallback);
-        assert!(model_ids.contains(&"claude-sonnet-4-20250514"));
-        assert!(model_ids.contains(&"claude-3-5-haiku-latest"));
+        assert!(model_ids.contains(&"claude-sonnet-5"));
+        assert!(model_ids.contains(&"claude-haiku-4-5-20251001"));
     }
 
     #[test]

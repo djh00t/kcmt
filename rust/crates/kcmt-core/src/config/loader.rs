@@ -78,27 +78,27 @@ struct ProviderDefaults {
 const PROVIDER_DEFAULTS: &[ProviderDefaults] = &[
     ProviderDefaults {
         provider: "openai",
-        model: "gpt-5.4-mini",
+        model: "gpt-6-luna",
         endpoint: "https://api.openai.com/v1",
         api_key_env: "OPENAI_API_KEY",
     },
     ProviderDefaults {
         provider: "anthropic",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-haiku-4-5-20251001",
         endpoint: "https://api.anthropic.com",
         api_key_env: "ANTHROPIC_API_KEY",
     },
     ProviderDefaults {
         provider: "xai",
-        model: "grok-code-fast",
+        model: "grok-build-0.1",
         endpoint: "https://api.x.ai/v1",
         api_key_env: "XAI_API_KEY",
     },
     ProviderDefaults {
-        provider: "github",
-        model: "openai/gpt-4.1-mini",
-        endpoint: "https://models.github.ai/inference",
-        api_key_env: "GITHUB_TOKEN",
+        provider: "deepseek",
+        model: "deepseek-flash",
+        endpoint: "https://api.deepseek.com",
+        api_key_env: "DEEPSEEK_API_KEY",
     },
 ];
 
@@ -106,7 +106,7 @@ const PROVIDER_HINTS: &[(&str, &[&str])] = &[
     ("openai", &["OPENAI", "OPENAI_API", "OA_KEY"]),
     ("anthropic", &["ANTHROPIC", "CLAUDE"]),
     ("xai", &["XAI", "GROK"]),
-    ("github", &["GITHUB_TOKEN", "GH_TOKEN", "GH_MODELS"]),
+    ("deepseek", &["DEEPSEEK"]),
 ];
 
 const DEFAULT_BATCH_TIMEOUT_SECONDS: u64 = 300;
@@ -350,7 +350,7 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
 
 fn default_batch_model(provider: &str) -> Option<&'static str> {
     match provider {
-        "openai" => Some("gpt-5.4-mini"),
+        "openai" => Some("gpt-6-luna"),
         "xai" => Some("grok-4.3"),
         _ => None,
     }
@@ -415,7 +415,7 @@ fn selected_api_key_env<'a>(provider: &str, detected: &'a HashMap<String, Vec<St
 }
 
 fn auto_select_provider(detected: &HashMap<String, Vec<String>>) -> String {
-    for provider in ["openai", "anthropic", "xai", "github"] {
+    for provider in ["openai", "anthropic", "xai", "deepseek"] {
         if detected
             .get(provider)
             .is_some_and(|values| !values.is_empty())
